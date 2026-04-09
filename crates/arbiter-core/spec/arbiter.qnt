@@ -3,7 +3,7 @@ module arbiter {
 
   import model.*
 
-  pure val userDids: Set[UserDid] = Set("Alice", "Bob", "Charlie", "Daffodil", "Eve", "Fred", "Greg")
+  pure val userDids: Set[UserDid] = Set("Alice", "Bob", "Charlie", "Daffodil", "Eve")
   pure val arbiterDids: Set[UserDid] = Set("arb1", "arb2")
   pure val spaceKeys: Set[UserDid] = Set("space1", "space2")
   pure val roleIds: Set[RoleId] = Set("members", "team", "collaborators")
@@ -23,81 +23,68 @@ module arbiter {
 
   action createArbiterAny = all {
     nondet userDid = userDids.oneOf()
-    nondet arbiterDid = arbiterDids.exclude(arbiters.keys()).oneOf()
+    nondet arbiterDid = arbiterDids.oneOf()
     create(userDid, arbiterDid)
   }
 
   action addArbiterAdminAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
-    nondet newAdminDid = userDids.exclude(Set(userDid)).oneOf()
+    nondet arbiterDid = arbiterDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet newAdminDid = userDids.oneOf()
     addAdmin(userDid, arbiterDid, newAdminDid)
   }
 
   action removeArbiterAdminAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    def arbiter = arbiters.get(arbiterDid)
-    all {
-      arbiter.admins.size() >= 2,
-      nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
-      nondet removedAdmin = arbiter.admins.exclude(Set(userDid)).oneOf()
-      removeAdmin(userDid, arbiterDid, removedAdmin)
-    }
+    nondet arbiterDid = arbiterDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet removedAdmin = userDids.oneOf()
+    removeAdmin(userDid, arbiterDid, removedAdmin)
   }
 
   action createSpaceAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    def arbiter = arbiters.get(arbiterDid)
-    nondet userDid = arbiter.admins.oneOf()
-    nondet spaceKey = spaceKeys.exclude(arbiter.spaces.keys()).oneOf()
+    nondet arbiterDid = arbiterDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet spaceKey = spaceKeys.oneOf()
     createSpace(userDid, arbiterDid, spaceKey)
   }
 
   action setSpaceMemberAccessAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    def arbiter = arbiters.get(arbiterDid)
-    nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
-    nondet spaceKey = arbiter.spaces.keys().oneOf()
-    nondet member = userDids.map(x => User(x)).union(arbiter.roles.keys().map(x => Role(x))).oneOf()
+    nondet arbiterDid = arbiterDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet spaceKey = spaceKeys.oneOf()
+    nondet member = userDids.map(x => User(x)).union(roleIds.map(x => Role(x))).oneOf()
     nondet access = Set(Read, Write).oneOf()
     setSpaceMemberAccess(userDid, arbiterDid, spaceKey, member, access)
   }
 
   action removeSpaceMemberAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    def arbiter = arbiters.get(arbiterDid)
-    nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
-    nondet spaceKey = arbiter.spaces.keys().oneOf()
-    def space = arbiter.spaces.get(spaceKey)
-    nondet member = space.members.keys().oneOf()
+    nondet arbiterDid = arbiterDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet spaceKey = spaceKeys.oneOf()
+    nondet member = userDids.map(x => User(x)).union(roleIds.map(x => Role(x))).oneOf()
     removeSpaceMember(userDid, arbiterDid, spaceKey, member)
   }
 
   action createRoleAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    def arbiter = arbiters.get(arbiterDid)
-    nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
+    nondet arbiterDid = userDids.oneOf()
+    nondet userDid = userDids.oneOf()
     nondet roleId = roleIds.oneOf()
     createRole(userDid, arbiterDid, roleId)
   }
 
   action addRoleMemberAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    def arbiter = arbiters.get(arbiterDid)
-    nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
-    nondet roleId = arbiter.roles.keys().oneOf()
-    nondet memberOrRole = 0.to(1).oneOf()
+    nondet arbiterDid = arbiterDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet roleId = roleIds.oneOf()
     nondet member = userDids.oneOf()
     addRoleMember(userDid, arbiterDid, roleId, member)
   }
 
   action removeRoleMemberAny = all {
-    nondet arbiterDid = arbiters.keys().oneOf()
-    def arbiter = arbiters.get(arbiterDid)
-    nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
-    nondet roleId = arbiter.roles.keys().oneOf()
-    def role = arbiter.roles.get(roleId)
-    nondet member = role.oneOf()
+    nondet arbiterDid = userDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet roleId = roleIds.oneOf()
+    nondet member = userDids.oneOf()
     removeRoleMember(userDid, arbiterDid, roleId, member)
   }
 }
@@ -298,6 +285,11 @@ module model {
       userDid.in(arbiter.admins),
       // Space exists
       spaceKey.in(arbiter.spaces.keys()),
+      // Role exists, if member is a role
+      match member {
+        | Role(r) => r.in(arbiter.roles.keys())
+        | User(u) => true
+      },
       def space = arbiter.spaces.get(spaceKey)
       arbiters' = arbiters.set(arbiterDid,
         arbiter.with("spaces", arbiter.spaces.set(spaceKey,

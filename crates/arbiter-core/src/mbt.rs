@@ -29,7 +29,7 @@ impl Driver for super::ArbiterService {
 }
 
 // Run multiple traces in simulation mode
-#[quint_run(spec = "./spec/arbiter.qnt", max_samples = 500)]
+#[quint_run(spec = "./spec/arbiter.qnt")]
 fn simulation() -> impl Driver {
   ArbiterService::default()
 }

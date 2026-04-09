@@ -136,6 +136,11 @@ impl ArbiterService {
     let Some(space) = arbiter.spaces.get_mut(&space_key) else {
       anyhow::bail!("Space does not exist");
     };
+    if let Member::Role(r) = &member
+      && !arbiter.roles.contains_key(r)
+    {
+      anyhow::bail!("Role `{r}` does not exist");
+    }
     space.members.insert(member, access);
     Ok(())
   }
