@@ -59,8 +59,8 @@ module arbiter {
     nondet userDid = arbiters.get(arbiterDid).admins.oneOf()
     nondet spaceKey = arbiter.spaces.keys().oneOf()
     nondet member = userDids.map(x => User(x)).union(arbiter.roles.keys().map(x => Role(x))).oneOf()
-    nondet access = 0.to(1).oneOf()
-    setSpaceMemberAccess(userDid, arbiterDid, spaceKey, member, if (access == 0) Read else Write)
+    nondet access = Set(Read, Write).oneOf()
+    setSpaceMemberAccess(userDid, arbiterDid, spaceKey, member, access)
   }
 
   action removeSpaceMemberAny = all {
@@ -187,19 +187,20 @@ module model {
     def members = space.members.keys().fold(
       admins,
       (members, member) =>
+        def access = space.members.get(member)
         match member {
           | User(userDid) => 
             if (members.keys().contains(userDid) and members.get(userDid) == Write)
               members // If the member already has write access, just leave it
             else 
-              members.put(userDid, space.members.get(member))
+              members.put(userDid, access)
           | Role(roleId) =>
             def userDids = arbiter.roles.get(roleId)
             userDids.fold(members, (m, userDid) =>
               if (m.keys().contains(userDid) and m.get(userDid) == Write)
                 m // If the member already has write access, just leave it
               else
-                m.put(userDid, space.members.get(member))
+                m.put(userDid, access)
             )
         }
     )
