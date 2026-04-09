@@ -94,12 +94,11 @@ module model {
 
   /// Counter for creating unique IDs
   var arbiters: ArbiterDid -> Arbiter
+  var error: bool
   
   action initArbiter = all {
-    arbiters' = Map()
-  }
-  action stutterArbiter = all {
-    arbiters' = arbiters
+    arbiters' = Map(),
+    error' = false
   }
 
   /// Arbiter invariants
@@ -195,9 +194,10 @@ module model {
 
   /// Create a new arbiter
   action create(userDid: UserDid, arbiterDid: ArbiterDid): bool = 
-    all {
+    def valid = not(arbiterDid.in(arbiters.keys()))
+
+    if (valid) all {
       // Arbiter doesn't already exist
-      not(arbiterDid.in(arbiters.keys())),
       // Add arbiter
       arbiters' = arbiters.put(arbiterDid, {
         did: arbiterDid,
@@ -206,16 +206,22 @@ module model {
         roles: Map(),
         spaces: Map()
       }),
-    } 
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true
+    }
 
   /// Add an admin to the arbiter
-  action addAdmin(userDid: UserDid, arbiterDid: ArbiterDid, newAdmin: UserDid): bool = all {
-    // Arbiter exists
-    arbiterDid.in(arbiters.keys()),
+  action addAdmin(userDid: UserDid, arbiterDid: ArbiterDid, newAdmin: UserDid): bool =
     def arbiter = arbiters.get(arbiterDid)
-    all {
+    def valid = 
+      // Arbiter exists
+      arbiterDid.in(arbiters.keys()) and
       // user is admin
-      userDid.in(arbiter.admins),
+      userDid.in(arbiter.admins)
+
+    if (valid) all {
       // Add new admin
       def updAdmins = arbiter.admins.union(Set(newAdmin))
       def updArbiter = arbiter.with("admins", updAdmins)
@@ -223,50 +229,60 @@ module model {
         arbiterDid,
         updArbiter
       ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true
     }
-  }
 
   /// Remove an admin from the arbiter
-  action removeAdmin(userDid: UserDid, arbiterDid: ArbiterDid, removedAdminDid: UserDid): bool = all {
-    // Arbiter exists
-    arbiterDid.in(arbiters.keys()),
+  action removeAdmin(userDid: UserDid, arbiterDid: ArbiterDid, removedAdminDid: UserDid): bool =
     def arbiter = arbiters.get(arbiterDid)
-    all {
+    def valid =
+      // Arbiter exists
+      arbiterDid.in(arbiters.keys()) and
       // There is more than one admin ( we can't remove the last admin )
-      arbiter.admins.size() > 1,
+      arbiter.admins.size() > 1 and
       // user is admin
-      userDid.in(arbiter.admins),
+      userDid.in(arbiter.admins) and
       // The user to remove is an admin
-      removedAdminDid.in(arbiter.admins),
+      removedAdminDid.in(arbiter.admins)
+
+    if (valid) all {
       // Remove the admin
       def admins = arbiter.admins.exclude(Set(removedAdminDid))
       def updated = arbiter.with("admins", admins)
       arbiters' = arbiters.set(
         arbiterDid,
         updated
-      )
+      ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true
     }
-  }
 
   /// Create a new space, managed by an arbiter
   action createSpace(userDid: UserDid, arbiterDid: ArbiterDid, spaceKey: SpaceKey): bool =
-    all {
+    def arbiter = arbiters.get(arbiterDid)
+    def valid = 
       // Arbiter exists
-      arbiterDid.in(arbiters.keys()),
-      def arbiter = arbiters.get(arbiterDid)
-      all {
-        // The user is an admin
-        userDid.in(arbiter.admins),
-        // Space key does not exist
-        not(spaceKey.in(arbiter.spaces.keys())),
-        // Add space key
-        def spaces = arbiter.spaces.put(spaceKey, { members: Map() })
-        def updatedArbiter = arbiter.with("spaces", spaces)
-        arbiters' = arbiters.set(
-          arbiterDid,
-          updatedArbiter
-        )
-      }
+      arbiterDid.in(arbiters.keys()) and
+      // The user is an admin
+      userDid.in(arbiter.admins) and 
+      // Space key does not exist
+      not(spaceKey.in(arbiter.spaces.keys()))
+
+    if (valid) all {
+      // Add space key
+      arbiters' = arbiters.set(
+        arbiterDid,
+        arbiter.with("spaces", arbiter.spaces.put(spaceKey, { members: Map() }))
+      ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true,
     }
 
   /// Set the access that a member has to a space
@@ -276,28 +292,34 @@ module model {
     spaceKey: SpaceKey,
     member: Member,
     access: Access
-  ): bool = all {
-    // Arbiter exists
-    arbiterDid.in(arbiters.keys()),
+  ): bool = 
     def arbiter = arbiters.get(arbiterDid)
-    all {
+    def space = arbiter.spaces.get(spaceKey)
+    def valid = 
+      // Arbiter exists
+      arbiterDid.in(arbiters.keys()) and
       // The user is an admin
-      userDid.in(arbiter.admins),
+      userDid.in(arbiter.admins) and
       // Space exists
-      spaceKey.in(arbiter.spaces.keys()),
+      spaceKey.in(arbiter.spaces.keys()) and
+
       // Role exists, if member is a role
       match member {
         | Role(r) => r.in(arbiter.roles.keys())
         | User(u) => true
-      },
-      def space = arbiter.spaces.get(spaceKey)
+      }
+
+    if (valid) all {
       arbiters' = arbiters.set(arbiterDid,
         arbiter.with("spaces", arbiter.spaces.set(spaceKey,
           space.with("members", space.members.put(member, access)) 
         ))
-      )
+      ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true,
     }
-  }
 
   /// Remove a member's access to a space
   action removeSpaceMember(
@@ -305,16 +327,18 @@ module model {
     arbiterDid: ArbiterDid,
     spaceKey: SpaceKey,
     member: Member,
-  ): bool = all {
-    // Arbiter exists
-    arbiterDid.in(arbiters.keys()),
+  ): bool =
     def arbiter = arbiters.get(arbiterDid)
-    all {
+    def space = arbiter.spaces.get(spaceKey)
+    def valid = 
+      // Arbiter exists
+      arbiterDid.in(arbiters.keys()) and
       // The user is an admin
-      userDid.in(arbiter.admins),
+      userDid.in(arbiter.admins) and
       // Space exists
-      spaceKey.in(arbiter.spaces.keys()),
-      def space = arbiter.spaces.get(spaceKey)
+      spaceKey.in(arbiter.spaces.keys())
+
+    if (valid) all {
       arbiters' = arbiters.set(
         arbiterDid,
         arbiter
@@ -322,31 +346,39 @@ module model {
             space.with("members", space.members.mapRemove(member))  
           )
         )
-      )
+      ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true,
     }
-  }
 
   /// Add a new role to the arbiter
   action createRole(
     userDid: UserDid,
     arbiterDid: ArbiterDid,
     roleId: RoleId,
-  ): bool = all {
-    // Arbiter exists
-    arbiterDid.in(arbiters.keys()),
+  ): bool =
     def arbiter = arbiters.get(arbiterDid)
-    all {
+    def valid = 
+      // Arbiter exists
+      arbiterDid.in(arbiters.keys()) and 
       // The user is an admin
-      userDid.in(arbiter.admins),
+      userDid.in(arbiter.admins) and
       // Role does not already exist
-      not(roleId.in(arbiter.roles.keys())),
+      not(roleId.in(arbiter.roles.keys()))
+
+    if (valid) all {
       // Update roles list
       arbiters' = arbiters.set(
         arbiterDid,
         arbiter.with("roles", arbiter.roles.put(roleId, Set()))
-      )
+      ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true,
     }
-  }
 
   /// Add a new member to a role
   action addRoleMember(
@@ -354,24 +386,29 @@ module model {
     arbiterDid: ArbiterDid,
     roleId: RoleId,
     member: UserDid
-  ): bool = all {
-    // Arbiter exists
-    arbiterDid.in(arbiters.keys()),
+  ): bool =
     def arbiter = arbiters.get(arbiterDid)
-    all {
+    def valid = 
+      // Arbiter exists
+      arbiterDid.in(arbiters.keys()) and
       // The user is an admin
-      userDid.in(arbiter.admins),
+      userDid.in(arbiter.admins) and
       // Role already exist
-      roleId.in(arbiter.roles.keys()),
+      roleId.in(arbiter.roles.keys()) and
       // Member not already in role
-      not(member.in(arbiter.roles.get(roleId))),
+      not(member.in(arbiter.roles.get(roleId)))
+
+    if (valid) all {
       // Update roles list
       arbiters' = arbiters.set(
         arbiterDid,
         arbiter.with("roles", arbiter.roles.setBy(roleId, role => role.union(Set(member))))
-      )
+      ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true,
     }
-  }
 
   /// Remove a member from a role
   action removeRoleMember(
@@ -379,25 +416,29 @@ module model {
     arbiterDid: ArbiterDid,
     roleId: RoleId,
     member: UserDid
-  ): bool = all {
-    // Arbiter exists
-    arbiterDid.in(arbiters.keys()),
+  ): bool =
     def arbiter = arbiters.get(arbiterDid)
-    all {
+    def valid =
+      // Arbiter exists
+      arbiterDid.in(arbiters.keys()) and
       // The user is an admin
-      userDid.in(arbiter.admins),
+      userDid.in(arbiter.admins) and
       // Role already exist
-      roleId.in(arbiter.roles.keys()),
+      roleId.in(arbiter.roles.keys()) and
       // Member is in role
-      member.in(arbiter.roles.get(roleId)),
-      // Update roles list
+      member.in(arbiter.roles.get(roleId))
+
+    if (valid) all {
       arbiters' = arbiters.set(
         arbiterDid,
         arbiter.with("roles", arbiter.roles.setBy(roleId, role => role.exclude(Set(member))))
-      )
+      ),
+      error' = false
+    } else all {
+      arbiters' = arbiters,
+      error' = true,
     }
   }
-}
 
 module types {
   import basicSpells.* from "./basicSpells"

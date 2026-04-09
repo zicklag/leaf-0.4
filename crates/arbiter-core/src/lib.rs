@@ -94,6 +94,9 @@ impl ArbiterService {
     if !arbiter.admins.contains(&user_did) {
       anyhow::bail!("User must be admin to add admin");
     }
+    if arbiter.admins.len() <= 1 {
+      anyhow::bail!("Cannot remove the last admin");
+    }
     if !arbiter.admins.remove(&admin) {
       anyhow::bail!("User is not an admin");
     }
