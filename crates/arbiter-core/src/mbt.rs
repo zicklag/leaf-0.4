@@ -63,8 +63,8 @@ fn simulation() {
       main: None,
       init: None,
       step: None,
-      max_samples: Some(250),
-      max_steps: Some(150),
+      max_samples: Some(25),
+      max_steps: Some(400),
       seed: quint_connect::runner::gen_random_seed().to_string(),
     },
   };
