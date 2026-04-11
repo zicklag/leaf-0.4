@@ -17,7 +17,7 @@ module arbiter {
     removeArbiterAdminAny,
     createSpaceAny,
     configureSpaceAny,
-    setSpaceMemberAccessAny,
+    // setSpaceMemberAccessAny,
   }
 
   action createArbiterAny = all {
@@ -56,24 +56,24 @@ module arbiter {
     configureSpace(userDid, arbiterDid, spaceKey, { publicRecords: publicRecords, publicMembers: publicMembers })
   }
 
-  action setSpaceMemberAccessAny = all {
-    nondet arbiterDid = arbiterDids.oneOf()
-    nondet userDid = userDids.oneOf()
-    nondet spaceKey = spaceKeys.oneOf()
-    def possibleSpaces = arbiterDids.map(a => roleIds.map(r => { arbiterDid: a, spaceKey: r })).flatten()
-    nondet member = userDids.map(x => MemberUser(x)).union(possibleSpaces.map(x => MemberSpace(x))).oneOf()
-    nondet access = Accesses.oneOf()
-    setSpaceMemberAccess(userDid, arbiterDid, spaceKey, member, access)
-  }
+  // action setSpaceMemberAccessAny = all {
+  //   nondet arbiterDid = arbiterDids.oneOf()
+  //   nondet userDid = userDids.oneOf()
+  //   nondet spaceKey = spaceKeys.oneOf()
+  //   def possibleSpaces = arbiterDids.map(a => roleIds.map(r => { arbiterDid: a, spaceKey: r })).flatten()
+  //   nondet member = userDids.map(x => MemberUser(x)).union(possibleSpaces.map(x => MemberSpace(x))).oneOf()
+  //   nondet access = Accesses.oneOf()
+  //   setSpaceMemberAccess(userDid, arbiterDid, spaceKey, member, access)
+  // }
 
-  action removeSpaceMemberAny = all {
-    nondet arbiterDid = arbiterDids.oneOf()
-    nondet userDid = userDids.oneOf()
-    nondet spaceKey = spaceKeys.oneOf()
-    def possibleSpaces = arbiterDids.map(a => roleIds.map(r => { arbiterDid: a, spaceKey: r })).flatten()
-    nondet member = userDids.map(x => MemberUser(x)).union(possibleSpaces.map(x => MemberSpace(x))).oneOf()
-    removeSpaceMember(userDid, arbiterDid, spaceKey, member)
-  }
+  // action removeSpaceMemberAny = all {
+  //   nondet arbiterDid = arbiterDids.oneOf()
+  //   nondet userDid = userDids.oneOf()
+  //   nondet spaceKey = spaceKeys.oneOf()
+  //   def possibleSpaces = arbiterDids.map(a => roleIds.map(r => { arbiterDid: a, spaceKey: r })).flatten()
+  //   nondet member = userDids.map(x => MemberUser(x)).union(possibleSpaces.map(x => MemberSpace(x))).oneOf()
+  //   removeSpaceMember(userDid, arbiterDid, spaceKey, member)
+  // }
 }
 
 module model {
@@ -102,83 +102,6 @@ module model {
       def arbiter = arbiters.get(arbiterDid)
       arbiter.admins.size() >= 1
     )
-
-  // /// Invariant: all admins can write to every space managed by the arbiter they are an admin of.
-  // val InvAllAdminsCanWrite =
-  //   arbiters.keys().forall(arbiterDid =>
-  //     def arbiter = arbiters.get(arbiterDid)
-  //     arbiter.spaces.keys().forall(spaceKey =>
-  //       def space = arbiter.spaces.get(spaceKey) 
-  //       match getSpaceMemberList(arbiterDid, spaceKey) {
-  //         | Some(flatUserAccessList) =>
-  //           arbiter.admins.forall(adminDid =>
-  //             flatUserAccessList.get(adminDid) == Write 
-  //           )
-  //         | None => false
-  //       }
-  //     )
-  //   )
-  
-  // /// Invariant: If you have direct write access, then that means the flat access list should have reported
-  // /// your access as Write, not allowing the read access inherited from a role to squash your write
-  // /// access.
-  // val InvRoleDoesNotSquashIndividualWrite =
-  //   arbiters.keys().forall(arbiterDid =>
-  //     def arbiter = arbiters.get(arbiterDid)
-  //     arbiter.spaces.keys().forall(spaceKey =>
-  //       def space = arbiter.spaces.get(spaceKey) 
-  //       match getSpaceMemberList(arbiterDid, spaceKey) {
-  //         | Some(flatUserAccessList) =>
-  //           space.members.keys()
-  //           .exclude(arbiter.admins.map(x => User(x))).forall(member =>
-  //             match member {
-  //               | User(userDid) =>
-  //                 if (space.members.keys().contains(User(userDid)))
-  //                   def flatAccess = flatUserAccessList.get(userDid)
-  //                   def directAccess = space.members.get(User(userDid))
-  //                   (directAccess == Write).implies(flatAccess == Write)
-  //                 else true
-  //               | Role(roleId) => true
-  //             } 
-  //           )
-  //         | None => false
-  //       }
-  //     )
-  //   )
-
-  // /// Get the flattened member list for a space, evaluating roles
-  // def getSpaceMemberList(arbiterDid: ArbiterDid, spaceKey: SpaceKey): Option[UserDid -> Access] =
-  //   // Get the arbiter
-  //   if (not(arbiterDid.in(arbiters.keys()))) None
-  //   else def arbiter = arbiters.get(arbiterDid)
-
-  //   // Get the space
-  //   if (not(spaceKey.in(arbiter.spaces.keys()))) None
-  //   else def space = arbiter.spaces.get(spaceKey)
-
-  //   // Calculate the member access list, resolving roles as necessary
-  //   def admins = arbiter.admins.fold(Map(), (members, adminDid) => members.put(adminDid, Write))
-  //   def members = space.members.keys().fold(
-  //     admins,
-  //     (members, member) =>
-  //       def access = space.members.get(member)
-  //       match member {
-  //         | User(userDid) => 
-  //           if (members.keys().contains(userDid) and members.get(userDid) == Write)
-  //             members // If the member already has write access, just leave it
-  //           else 
-  //             members.put(userDid, access)
-  //         | Role(roleId) =>
-  //           def userDids = arbiter.roles.get(roleId)
-  //           userDids.fold(members, (m, userDid) =>
-  //             if (m.keys().contains(userDid) and m.get(userDid) == Write)
-  //               m // If the member already has write access, just leave it
-  //             else
-  //               m.put(userDid, access)
-  //           )
-  //       }
-  //   )
-  //   Some(members)
 
   /// Create a new arbiter
   action create(userDid: UserDid, arbiterDid: ArbiterDid): bool = 
@@ -281,10 +204,10 @@ module model {
     def valid = 
       // Arbiter exists
       arbiterDid.in(arbiters.keys()) and
-      // The user is an admin
-      userDid.in(arbiter.admins) and
       // Space exists
-      spaceKey.in(arbiter.spaces.keys())
+      spaceKey.in(arbiter.spaces.keys()) and 
+      // User can manage space
+      false
 
     if (valid) all {
       arbiters' = arbiters.set(arbiterDid,
@@ -360,6 +283,103 @@ module model {
       arbiters' = arbiters,
       writeError' = true,
     }
+
+  /// Calculate the local member list synchronously.
+  ///
+  /// This is distinct from asynchronously calculating the total member list, which may
+  /// require making remote network calls to other arbiters.
+  pure def flatMemberList(arbiter: Arbiter, spaceKey: SpaceKey): UserDid -> Access =
+    // Admins are always in the member list
+    def admins = arbiter.admins.map(x => (x, ManageSpace)).setToMap()
+
+    // Define the initial fold state
+    def initState: {
+      users: UserDid -> Access,
+      visited: Set[{ spaceKey: SpaceKey, access: Access }],
+      queue: Set[{ spaceKey: SpaceKey, access: Access }]
+    } = {
+      // We start with the admin list for the members
+      users: admins,
+      // We keep track of the spaces that we have visited to break cycles
+      visited: Set(),
+      // We keep track of a queue of spaces that we need to visit to add to the members list.
+      queue: Set({ spaceKey: spaceKey, access: ManageSpace }),
+    }
+
+    // Since we must avoid recursion we fold over the number of spaces that there are essentially
+    // acting as the max "recursion" depth.
+    //
+    // NOTE: I think it's possible in remote circumstances that you could fail to fully expand the
+    // membership list in cases where we end up needing to visit a space multiple times because it
+    // was added with multiple different accesses throughout the tree.
+    //
+    // This might be acceptable.
+    def outputState = 0.to(arbiter.spaces.keys().size()).fold(initState, (state, i) =>
+      // Then we visit every space in the queue
+      state.queue.fold(state, (state, queuedSpace) =>
+        def spaceKey = queuedSpace.spaceKey
+        def spaceAccess = queuedSpace.access
+        def space = arbiter.spaces.get(spaceKey)
+
+        // Get the list of local users that have been directly a
+        def localUsers = space.members.keys().localUsersFromMembers()
+
+        // Get the list of local child spaces
+        def localSpaces = space.members.keys().localSpacesFromMembers().map(k =>
+          def childSpaceAccess = space.members.get(MemberLocalSpace(k))
+          {
+            spaceKey: k,
+            // Important: we can't give the child space any more access than we have in this queued
+            // space. We must choose whichever access is weaker out of the access that this space
+            // has been given, and the access that this space gives the child space.
+            access: minAccess(childSpaceAccess, spaceAccess)
+          }
+        )
+
+        // Add the current space to the list of visited spaces
+        def visited = state.visited.union(Set(queuedSpace))
+
+        // Add the local spaces to the queue
+        def queue = state.queue.union(localSpaces).filter(q =>
+          // Exclude any space that we have already visited, if we visited it with an access level
+          // greater than or equal to the queued access level, since in that case, visiting it again
+          // would not grant any more permissions.
+          not(visited.exists(v => v.spaceKey == q.spaceKey and accessLevel(v.access) >= accessLevel(q.access))) 
+        )
+
+        // Add users in this space to the user list
+        def users = localUsers.fold(state.users, (users, user) =>
+          def userAccessInSpace = space.members.get(MemberUser(user))
+
+          // Get the access of the user, limited by the access of the space. i.e. even if the user
+          // has write access in the space, if the space is only granted read access, then the user
+          // can only have read access.
+          def spaceLimitedAccess = minAccess(queuedSpace.access, userAccessInSpace)
+          
+          // If this user is already in the user list
+          if (user.in(users.keys()))
+            // Then we assign them the greater of the access that they already had or that they were
+            // granted here.
+            users.put(user, maxAccess(users.get(user), spaceLimitedAccess))
+
+          // If the user is not already in the list
+          else
+            // Add them to the list with the access from this space
+            users.put(user, spaceLimitedAccess)
+        )
+
+        // Update the state
+        state
+          .with("queue", queue)
+          // Update the visited list
+          .with("visited", visited)
+          // Update the users list
+          .with("users", users)
+      )
+    )
+
+    // Return the flat user list
+    outputState.users
 }
 
 module types {
@@ -399,13 +419,33 @@ module types {
       | ManageSpace => 4
     }
 
-  /// Check whether the access `a` is greater ( more power ) than the access `b`
-  pure def accessGreaterThan(a: Access, b: Access): bool =
-    accessLevel(a) > accessLevel(b)
+  /// Get the smaller of the provided accesses
+  pure def minAccess(a: Access, b: Access): Access =
+    if (a.accessLevel() < b.accessLevel()) a else b
+  
+  /// Get the larger of the provided accesses
+  pure def maxAccess(a: Access, b: Access): Access =
+    if (a.accessLevel() > b.accessLevel()) a else b
 
   /// A member in a space may either be a user with a DID or another space, in which all the members
   /// of that space extend the members of this space.
-  type Member = MemberSpace(SpaceId) | MemberUser(UserDid)
+  type Member = MemberUser(UserDid) | MemberLocalSpace(SpaceKey) | MemberRemoteSpace(SpaceId)
+
+  /// Filter out the users from a member list
+  pure def localUsersFromMembers(s: Set[Member]): Set[UserDid] =
+    s.fold(Set(), (users, m) => match m {
+      | MemberLocalSpace(s) => users
+      | MemberUser(u) => users.union(Set(u))
+      | MemberRemoteSpace(s) => users
+    })
+
+  /// Filter out the local spaces from a member list
+  pure def localSpacesFromMembers(s: Set[Member]): Set[SpaceKey] =
+    s.fold(Set(), (spaces, m) => match m {
+      | MemberLocalSpace(s) => spaces.union(Set(s))
+      | MemberUser(u) => spaces
+      | MemberRemoteSpace(s) => spaces
+    })
 
   /// Extra configuration associated to a space
   type SpaceConfig = {
@@ -432,4 +472,251 @@ module types {
     admins: Set[UserDid],
     spaces: SpaceKey -> Space,
   }
+}
+
+module test {
+  import types.*
+  import model.*
+
+  pure val arbiter1 = {
+    did: "arbiter1",
+    admins: Set("zicklag", "erlend", "meri"),
+    spaces: Map(
+      "members" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("charlie") -> ManageSpace,
+          MemberUser("eve") -> WriteRecords,
+        )
+      },
+      "team" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("zicklag") -> ManageSpace,
+          MemberUser("erlend") -> ManageSpace,
+          MemberUser("meri") -> ManageSpace,
+          MemberUser("alice") -> ManageSpace,
+          MemberLocalSpace("designers") -> WriteRecords,
+        )
+      },
+      "designers" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("fish") -> ManageSpace,
+        )
+      },
+      "#general" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("team") -> ManageSpace,
+          MemberLocalSpace("members") -> WriteRecords,
+          MemberUser("bob") -> ReadRecords,
+        )
+      },
+      "#internal" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("team") -> ManageSpace,
+        )
+      },
+      "#design" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("team") -> ManageSpace,
+          MemberLocalSpace("designers") -> ManageSpace,
+          MemberLocalSpace("members") -> ReadRecords,
+        )
+      }
+    )
+  }
+
+  /// Run some test cases to validate the flat local member list output
+  run memberListArbiter1Test = all {
+    all {
+      assert(
+        flatMemberList(arbiter1, "#general") ==
+        Map(
+          // Can manage because she's in the team
+          "alice" -> ManageSpace,
+          // Can read because he's directly added to general channel
+          "bob" -> ReadRecords,
+          // Can write because he's a member
+          "charlie" -> WriteRecords,
+          // Can write because she's a member
+          "eve" -> WriteRecords,
+          // Can write because he's in designers which is in the team
+          "fish" -> WriteRecords,
+          // Can manage because she's an admin
+          "meri" -> ManageSpace,
+          // Can manage because he's an admin
+          "erlend" -> ManageSpace,
+          // Can manage because he's an admin
+          "zicklag" -> ManageSpace,
+        )
+      ),
+      assert(
+        flatMemberList(arbiter1, "#internal") ==
+        Map(
+          // Can manage because she's in the team
+          "alice" -> ManageSpace,
+          // Can write because he's in designers which is in the team
+          "fish" -> WriteRecords,
+          // Can manage because she's an admin
+          "meri" -> ManageSpace,
+          // Can manage because he's an admin
+          "erlend" -> ManageSpace,
+          // Can manage because he's an admin
+          "zicklag" -> ManageSpace,
+        )
+      ),
+      assert(
+        flatMemberList(arbiter1, "#design") ==
+        Map(
+          // Can manage because she's in the team
+          "alice" -> ManageSpace,
+          // Charlie can read 'cause he's in members
+          "charlie" -> ReadRecords,
+          // Eve can read 'cause she's in members
+          "eve" -> ReadRecords,
+          // Can manage 'cause he's in designers
+          "fish" -> ManageSpace,
+          // Can manage because she's an admin
+          "meri" -> ManageSpace,
+          // Can manage because he's an admin
+          "erlend" -> ManageSpace,
+          // Can manage because he's an admin
+          "zicklag" -> ManageSpace,
+        )
+      )
+    }
+  }
+
+  pure val arbiter2 = {
+    did: "arbiter2",
+    admins: Set("zicklag"),
+    spaces: Map(
+      "managers" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("meri") -> ManageSpace,
+        )
+      },
+      "team" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("erlend") -> WriteRecords,
+        )
+      },
+      "strange" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("managers") -> ManageSpace,
+        )
+      },
+      "#test" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("managers") -> ReadRecords,
+          MemberLocalSpace("team") -> ManageSpace,
+        )
+      },
+      "#off-topic" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("managers") -> ReadRecords,
+          MemberLocalSpace("strange") -> ManageSpace,
+        )
+      },
+      "#on-topic" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("managers") -> ReadRecords,
+        )
+      },
+    )
+  }
+
+  /// Run some test cases to validate the flat local member list output
+  run memberListArbiter2Test = all {
+    all {
+      assert(
+        flatMemberList(arbiter2, "#test") ==
+        Map(
+          "meri" -> ReadRecords,
+          "erlend" -> WriteRecords,
+          "zicklag" -> ManageSpace,
+        )
+      ),
+      assert(
+        flatMemberList(arbiter2, "#off-topic") ==
+        Map(
+          "meri" -> ManageSpace,
+          "zicklag" -> ManageSpace,
+        )
+      ),
+      assert(
+        flatMemberList(arbiter2, "#on-topic") ==
+        Map(
+          "meri" -> ReadRecords,
+          "zicklag" -> ManageSpace,
+        )
+      ),
+    }
+  }
+
+  pure val arbiter3 = {
+    did: "arbiter2",
+    admins: Set("admin"),
+    spaces: Map(
+      "role1" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("user1") -> ManageSpace,
+          MemberLocalSpace("role2") -> ReadRecords,
+        )
+      },
+      "role2" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("user2") -> WriteRecords,
+          MemberLocalSpace("role3") -> WriteRecords,
+        )
+      },
+      "role3" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("user3") -> ManageSpace,
+          MemberUser("user4") -> ReadRecords,
+          MemberLocalSpace("role1") -> ManageSpace,
+        )
+      },
+      "#channel1" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("role2") -> ManageSpace,
+        )
+      },
+    )
+  }
+
+   /// Run some test cases to validate the flat local member list output
+  run memberListArbiter3Test = all {
+    all {
+      assert(
+        flatMemberList(arbiter3, "#channel1") ==
+        Map(
+          "admin" -> ManageSpace,
+          "user2" -> WriteRecords,
+          "user3" -> WriteRecords,
+          "user4" -> ReadRecords,
+          // User one has write because they were granted manage in role1,
+          // which was granted manage in role 3,
+          // which was granted write in role 2,
+          // which was granted manage in channel 1
+          "user1" -> WriteRecords,
+        )
+      ),
+    }
+  }
+
 }
