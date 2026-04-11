@@ -444,36 +444,11 @@ module types {
   import basicSpells.* from "./basicSpells"
   export basicSpells.*
 
-  //
-  // PDS
-  //
-
   type ArbiterDid = str
   type UserDid = str
   type SpaceKey = str
   type Record = str
   type RoleId = str
-
-  /// The PDS data associated to an individual user
-  type UserPds = {
-    // The DID of the user that this PDS data is for
-    did: UserDid,
-    // The permissioned repos that the user has on the PDS
-    permRepos: SpaceKey -> PermRepo
-  }
-
-  /// A permissioned repo
-  type PermRepo = {
-    arbiterDid: ArbiterDid,
-    // The space that the permissioned repo is a part of
-    spaceKey: SpaceKey,
-    // The records in the repo
-    records: Set[Record]
-  }
-
-  //
-  // Arbiter
-  //
 
   /// The access a member may have to a permissioned space
   type Access = Read | Write
