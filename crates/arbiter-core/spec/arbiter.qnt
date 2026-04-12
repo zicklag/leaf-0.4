@@ -288,18 +288,18 @@ module model {
   ///
   /// This is distinct from asynchronously calculating the total member list, which may
   /// require making remote network calls to other arbiters.
-  pure def flatMemberList(arbiter: Arbiter, spaceKey: SpaceKey): UserDid -> Access =
+  pure def flatMemberList(arbiter: Arbiter, spaceKey: SpaceKey): MemberListItem -> Access =
     // Admins are always in the member list
-    def admins = arbiter.admins.map(x => (x, ManageSpace)).setToMap()
+    def admins = arbiter.admins.map(x => (MLUser(x), ManageSpace)).setToMap()
 
     // Define the initial fold state
     def initState: {
-      users: UserDid -> Access,
+      memberList: MemberListItem -> Access,
       visited: Set[{ spaceKey: SpaceKey, access: Access }],
       queue: Set[{ spaceKey: SpaceKey, access: Access }]
     } = {
       // We start with the admin list for the members
-      users: admins,
+      memberList: admins,
       // We keep track of the spaces that we have visited to break cycles
       visited: Set(),
       // We keep track of a queue of spaces that we need to visit to add to the members list.
@@ -336,6 +336,21 @@ module model {
           }
         )
 
+        // Get the list or remote spaces that have been added as a child to this space
+        def remoteSpaces = space.members.keys().remoteSpacesFromMembers().map(spaceId =>
+          def childSpaceAccess = space.members.get(MemberRemoteSpace(spaceId))
+          (
+            spaceId,
+            // Important: we have to limit the access of the child space according to the access of
+            // the current space.
+            //
+            // We additionally limit remote spaces so they can only have up to WriteRecords. We
+            // don't want to depend on responses from remote spaces to calculate who can change
+            // ACLs.
+            minAccess(minAccess(childSpaceAccess, spaceAccess), WriteRecords)
+          )
+        ).setToMap()
+
         // Add the current space to the list of visited spaces
         def visited = state.visited.union(Set(queuedSpace))
 
@@ -347,8 +362,8 @@ module model {
           not(visited.exists(v => v.spaceKey == q.spaceKey and accessLevel(v.access) >= accessLevel(q.access))) 
         )
 
-        // Add users in this space to the user list
-        def users = localUsers.fold(state.users, (users, user) =>
+        // Add users in this space to the member list
+        def memberListWithUsers = localUsers.fold(state.memberList, (memberList, user) =>
           def userAccessInSpace = space.members.get(MemberUser(user))
 
           // Get the access of the user, limited by the access of the space. i.e. even if the user
@@ -357,15 +372,31 @@ module model {
           def spaceLimitedAccess = minAccess(queuedSpace.access, userAccessInSpace)
           
           // If this user is already in the user list
-          if (user.in(users.keys()))
+          if (MLUser(user).in(memberList.keys()))
             // Then we assign them the greater of the access that they already had or that they were
             // granted here.
-            users.put(user, maxAccess(users.get(user), spaceLimitedAccess))
+            memberList.put(MLUser(user), maxAccess(memberList.get(MLUser(user)), spaceLimitedAccess))
 
           // If the user is not already in the list
           else
             // Add them to the list with the access from this space
-            users.put(user, spaceLimitedAccess)
+            memberList.put(MLUser(user), spaceLimitedAccess)
+        )
+
+        // Add the remote spaces to the member list
+        def memberList = remoteSpaces.keys().fold(memberListWithUsers, (memberList, spaceId) =>
+          def access = remoteSpaces.get(spaceId) 
+          def alreadyGrantedAccess = memberList.get(MLSpace(spaceId))
+
+          // If the space is already in the member list
+          if (MLSpace(spaceId).in(memberList.keys()))
+            // Add whatever access is greater out of the access they already had and the access
+            // granted here
+            memberList.put(MLSpace(spaceId), maxAccess(alreadyGrantedAccess, access))
+          // If the space hasn't been added to the member list
+          else
+            // Add it
+            memberList.put(MLSpace(spaceId), access)
         )
 
         // Update the state
@@ -373,13 +404,13 @@ module model {
           .with("queue", queue)
           // Update the visited list
           .with("visited", visited)
-          // Update the users list
-          .with("users", users)
+          // Update the member list
+          .with("memberList", memberList)
       )
     )
 
     // Return the flat user list
-    outputState.users
+    outputState.memberList
 }
 
 module types {
@@ -430,6 +461,16 @@ module types {
   /// A member in a space may either be a user with a DID or another space, in which all the members
   /// of that space extend the members of this space.
   type Member = MemberUser(UserDid) | MemberLocalSpace(SpaceKey) | MemberRemoteSpace(SpaceId)
+
+  type MemberListItem = MLUser(UserDid) | MLSpace(SpaceId)
+
+  /// Filter out the remote spaces from a member list
+  pure def remoteSpacesFromMembers(s: Set[Member]): Set[SpaceId] =
+    s.fold(Set(), (spaces, m) => match m {
+      | MemberLocalSpace(s) => spaces
+      | MemberUser(u) => spaces
+      | MemberRemoteSpace(s) => spaces.union(Set(s))
+    })
 
   /// Filter out the users from a member list
   pure def localUsersFromMembers(s: Set[Member]): Set[UserDid] =
@@ -537,55 +578,55 @@ module test {
         flatMemberList(arbiter1, "#general") ==
         Map(
           // Can manage because she's in the team
-          "alice" -> ManageSpace,
+          MLUser("alice") -> ManageSpace,
           // Can read because he's directly added to general channel
-          "bob" -> ReadRecords,
+          MLUser("bob") -> ReadRecords,
           // Can write because he's a member
-          "charlie" -> WriteRecords,
+          MLUser("charlie") -> WriteRecords,
           // Can write because she's a member
-          "eve" -> WriteRecords,
+          MLUser("eve") -> WriteRecords,
           // Can write because he's in designers which is in the team
-          "fish" -> WriteRecords,
+          MLUser("fish") -> WriteRecords,
           // Can manage because she's an admin
-          "meri" -> ManageSpace,
+          MLUser("meri") -> ManageSpace,
           // Can manage because he's an admin
-          "erlend" -> ManageSpace,
+          MLUser("erlend") -> ManageSpace,
           // Can manage because he's an admin
-          "zicklag" -> ManageSpace,
+          MLUser("zicklag") -> ManageSpace,
         )
       ),
       assert(
         flatMemberList(arbiter1, "#internal") ==
         Map(
           // Can manage because she's in the team
-          "alice" -> ManageSpace,
+          MLUser("alice") -> ManageSpace,
           // Can write because he's in designers which is in the team
-          "fish" -> WriteRecords,
+          MLUser("fish") -> WriteRecords,
           // Can manage because she's an admin
-          "meri" -> ManageSpace,
+          MLUser("meri") -> ManageSpace,
           // Can manage because he's an admin
-          "erlend" -> ManageSpace,
+          MLUser("erlend") -> ManageSpace,
           // Can manage because he's an admin
-          "zicklag" -> ManageSpace,
+          MLUser("zicklag") -> ManageSpace,
         )
       ),
       assert(
         flatMemberList(arbiter1, "#design") ==
         Map(
           // Can manage because she's in the team
-          "alice" -> ManageSpace,
+          MLUser("alice") -> ManageSpace,
           // Charlie can read 'cause he's in members
-          "charlie" -> ReadRecords,
+          MLUser("charlie") -> ReadRecords,
           // Eve can read 'cause she's in members
-          "eve" -> ReadRecords,
+          MLUser("eve") -> ReadRecords,
           // Can manage 'cause he's in designers
-          "fish" -> ManageSpace,
+          MLUser("fish") -> ManageSpace,
           // Can manage because she's an admin
-          "meri" -> ManageSpace,
+          MLUser("meri") -> ManageSpace,
           // Can manage because he's an admin
-          "erlend" -> ManageSpace,
+          MLUser("erlend") -> ManageSpace,
           // Can manage because he's an admin
-          "zicklag" -> ManageSpace,
+          MLUser("zicklag") -> ManageSpace,
         )
       )
     }
@@ -642,23 +683,23 @@ module test {
       assert(
         flatMemberList(arbiter2, "#test") ==
         Map(
-          "meri" -> ReadRecords,
-          "erlend" -> WriteRecords,
-          "zicklag" -> ManageSpace,
+          MLUser("meri") -> ReadRecords,
+          MLUser("erlend") -> WriteRecords,
+          MLUser("zicklag") -> ManageSpace,
         )
       ),
       assert(
         flatMemberList(arbiter2, "#off-topic") ==
         Map(
-          "meri" -> ManageSpace,
-          "zicklag" -> ManageSpace,
+          MLUser("meri") -> ManageSpace,
+          MLUser("zicklag") -> ManageSpace,
         )
       ),
       assert(
         flatMemberList(arbiter2, "#on-topic") ==
         Map(
-          "meri" -> ReadRecords,
-          "zicklag" -> ManageSpace,
+          MLUser("meri") -> ReadRecords,
+          MLUser("zicklag") -> ManageSpace,
         )
       ),
     }
@@ -673,6 +714,7 @@ module test {
         members: Map(
           MemberUser("user1") -> ManageSpace,
           MemberLocalSpace("role2") -> ReadRecords,
+          MemberRemoteSpace({ arbiterDid: "arbiter4", spaceKey: "example" }) -> AddWriters,
         )
       },
       "role2" -> {
@@ -705,15 +747,18 @@ module test {
       assert(
         flatMemberList(arbiter3, "#channel1") ==
         Map(
-          "admin" -> ManageSpace,
-          "user2" -> WriteRecords,
-          "user3" -> WriteRecords,
-          "user4" -> ReadRecords,
+          MLUser("admin") -> ManageSpace,
+          MLUser("user2") -> WriteRecords,
+          MLUser("user3") -> WriteRecords,
+          MLUser("user4") -> ReadRecords,
           // User one has write because they were granted manage in role1,
           // which was granted manage in role 3,
           // which was granted write in role 2,
           // which was granted manage in channel 1
-          "user1" -> WriteRecords,
+          MLUser("user1") -> WriteRecords,
+          // Note how the remote space's access is limited to write because we don't allow members
+          // from remote spaces to manage members.
+          MLSpace({ arbiterDid: "arbiter4", spaceKey: "example" }) -> WriteRecords
         )
       ),
     }
