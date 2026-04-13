@@ -19,7 +19,7 @@ module arbiter {
     removeArbiterAdminAny,
     createSpaceAny,
     configureSpaceAny,
-    // setSpaceMemberAccessAny,
+    // setSpaceMemberSpaceAccessAny,
   }
 
   action createArbiterAny = all {
@@ -58,14 +58,14 @@ module arbiter {
     configureSpace(userDid, arbiterDid, spaceKey, { publicRecords: publicRecords, publicMembers: publicMembers })
   }
 
-  // action setSpaceMemberAccessAny = all {
+  // action setSpaceMemberSpaceAccessAny = all {
   //   nondet arbiterDid = arbiterDids.oneOf()
   //   nondet userDid = userDids.oneOf()
   //   nondet spaceKey = spaceKeys.oneOf()
   //   def possibleSpaces = arbiterDids.map(a => roleIds.map(r => { arbiterDid: a, spaceKey: r })).flatten()
   //   nondet member = userDids.map(x => MemberUser(x)).union(possibleSpaces.map(x => MemberSpace(x))).oneOf()
-  //   nondet access = Accesses.oneOf()
-  //   setSpaceMemberAccess(userDid, arbiterDid, spaceKey, member, access)
+  //   nondet access = SpaceAccesses.oneOf()
+  //   setSpaceMemberSpaceAccess(userDid, arbiterDid, spaceKey, member, access)
   // }
 
   // action removeSpaceMemberAny = all {
@@ -236,12 +236,12 @@ module model {
     }
 
   /// Set the access that a member has to a space
-  action setSpaceMemberAccess(
+  action setSpaceMemberSpaceAccess(
     userDid: UserDid,
     arbiterDid: ArbiterDid,
     spaceKey: SpaceKey,
     member: Member,
-    access: Access
+    access: SpaceAccess
   ): bool = 
     def arbiter = arbiters.get(arbiterDid)
     def space = arbiter.spaces.get(spaceKey)
@@ -301,15 +301,15 @@ module model {
   ///
   /// This is distinct from asynchronously calculating the total member list, which may
   /// require making remote network calls to other arbiters.
-  pure def flatMemberList(arbiter: Arbiter, spaceKey: SpaceKey): MemberListItem -> Access =
+  pure def flatMemberList(arbiter: Arbiter, spaceKey: SpaceKey): MemberListItem -> SpaceAccess =
     // Admins are always in the member list
     def admins = arbiter.admins.map(x => (MLUser(x), RemoveMembers)).setToMap()
 
     // Define the initial fold state
     def initState: {
-      memberList: MemberListItem -> Access,
-      visited: Set[{ spaceKey: SpaceKey, access: Access }],
-      queue: Set[{ spaceKey: SpaceKey, access: Access }]
+      memberList: MemberListItem -> SpaceAccess,
+      visited: Set[{ spaceKey: SpaceKey, access: SpaceAccess }],
+      queue: Set[{ spaceKey: SpaceKey, access: SpaceAccess }]
     } = {
       // We start with the admin list for the members
       memberList: admins,
@@ -331,7 +331,7 @@ module model {
       // Then we visit every space in the queue
       state.queue.fold(state, (state, queuedSpace) =>
         def spaceKey = queuedSpace.spaceKey
-        def spaceAccess = queuedSpace.access
+        def spaceSpaceAccess = queuedSpace.access
         def space = arbiter.spaces.get(spaceKey)
 
         // If this role does not exist
@@ -347,19 +347,19 @@ module model {
 
         // Get the list of local child spaces
         def localSpaces = space.members.keys().localSpacesFromMembers().map(k =>
-          def childSpaceAccess = space.members.get(MemberLocalSpace(k))
+          def childSpaceSpaceAccess = space.members.get(MemberLocalSpace(k))
           {
             spaceKey: k,
             // Important: we can't give the child space any more access than we have in this queued
             // space. We must choose whichever access is weaker out of the access that this space
             // has been given, and the access that this space gives the child space.
-            access: minAccess(childSpaceAccess, spaceAccess)
+            access: minSpaceAccess(childSpaceSpaceAccess, spaceSpaceAccess)
           }
         )
 
         // Get the list or remote spaces that have been added as a child to this space
         def remoteSpaces = space.members.keys().remoteSpacesFromMembers().map(spaceId =>
-          def childSpaceAccess = space.members.get(MemberRemoteSpace(spaceId))
+          def childSpaceSpaceAccess = space.members.get(MemberRemoteSpace(spaceId))
           (
             spaceId,
             // Important: we have to limit the access of the child space according to the access of
@@ -368,7 +368,7 @@ module model {
             // We additionally limit remote spaces so they can only have up to WriteRecords. We
             // don't want to depend on responses from remote spaces to calculate who can change
             // ACLs.
-            minAccess(minAccess(childSpaceAccess, spaceAccess), WriteRecords)
+            minSpaceAccess(minSpaceAccess(childSpaceSpaceAccess, spaceSpaceAccess), WriteRecords)
           )
         ).setToMap()
 
@@ -380,40 +380,40 @@ module model {
           // Exclude any space that we have already visited, if we visited it with an access level
           // greater than or equal to the queued access level, since in that case, visiting it again
           // would not grant any more permissions.
-          not(visited.exists(v => v.spaceKey == q.spaceKey and accessLevel(v.access) >= accessLevel(q.access))) 
+          not(visited.exists(v => v.spaceKey == q.spaceKey and spaceAccessLevel(v.access) >= spaceAccessLevel(q.access))) 
         )
 
         // Add users in this space to the member list
         def memberListWithUsers = localUsers.fold(state.memberList, (memberList, user) =>
-          def userAccessInSpace = space.members.get(MemberUser(user))
+          def userSpaceAccessInSpace = space.members.get(MemberUser(user))
 
           // Get the access of the user, limited by the access of the space. i.e. even if the user
           // has write access in the space, if the space is only granted read access, then the user
           // can only have read access.
-          def spaceLimitedAccess = minAccess(queuedSpace.access, userAccessInSpace)
+          def spaceLimitedSpaceAccess = minSpaceAccess(queuedSpace.access, userSpaceAccessInSpace)
           
           // If this user is already in the user list
           if (MLUser(user).in(memberList.keys()))
             // Then we assign them the greater of the access that they already had or that they were
             // granted here.
-            memberList.put(MLUser(user), maxAccess(memberList.get(MLUser(user)), spaceLimitedAccess))
+            memberList.put(MLUser(user), maxSpaceAccess(memberList.get(MLUser(user)), spaceLimitedSpaceAccess))
 
           // If the user is not already in the list
           else
             // Add them to the list with the access from this space
-            memberList.put(MLUser(user), spaceLimitedAccess)
+            memberList.put(MLUser(user), spaceLimitedSpaceAccess)
         )
 
         // Add the remote spaces to the member list
         def memberList = remoteSpaces.keys().fold(memberListWithUsers, (memberList, spaceId) =>
           def access = remoteSpaces.get(spaceId) 
-          def alreadyGrantedAccess = memberList.get(MLSpace(spaceId))
+          def alreadyGrantedSpaceAccess = memberList.get(MLSpace(spaceId))
 
           // If the space is already in the member list
           if (MLSpace(spaceId).in(memberList.keys()))
             // Add whatever access is greater out of the access they already had and the access
             // granted here
-            memberList.put(MLSpace(spaceId), maxAccess(alreadyGrantedAccess, access))
+            memberList.put(MLSpace(spaceId), maxSpaceAccess(alreadyGrantedSpaceAccess, access))
           // If the space hasn't been added to the member list
           else
             // Add it
@@ -435,7 +435,7 @@ module model {
 }
 
 module types {
-  import basicSpells.* from "./basicSpells"
+  import basicSpells.* from "./lib/basicSpells"
   export basicSpells.*
 
   type ArbiterDid = str
@@ -447,7 +447,7 @@ module types {
 
   /// The access a member may have to a permissioned space.
   /// All later permissions include the ones before
-  type Access =
+  type SpaceAccess =
     // Member can read records in the space
     | ReadRecords
     // Member can write records in the space
@@ -459,10 +459,10 @@ module types {
     // Member can and and remove members with any access to/from the space
     | RemoveMembers
 
-  pure val Accesses = Set(ReadRecords, WriteRecords, AddReaders, AddWriters, RemoveMembers)
+  pure val SpaceAccesses = Set(ReadRecords, WriteRecords, AddReaders, AddWriters, RemoveMembers)
 
-  /// Get the numeric access level from `Access`.
-  pure def accessLevel(a: Access): int =
+  /// Get the numeric access level from `SpaceAccess`.
+  pure def spaceAccessLevel(a: SpaceAccess): int =
     match a {
       | ReadRecords => 0
       | WriteRecords => 1
@@ -472,12 +472,12 @@ module types {
     }
 
   /// Get the smaller of the provided accesses
-  pure def minAccess(a: Access, b: Access): Access =
-    if (a.accessLevel() < b.accessLevel()) a else b
+  pure def minSpaceAccess(a: SpaceAccess, b: SpaceAccess): SpaceAccess =
+    if (a.spaceAccessLevel() < b.spaceAccessLevel()) a else b
   
   /// Get the larger of the provided accesses
-  pure def maxAccess(a: Access, b: Access): Access =
-    if (a.accessLevel() > b.accessLevel()) a else b
+  pure def maxSpaceAccess(a: SpaceAccess, b: SpaceAccess): SpaceAccess =
+    if (a.spaceAccessLevel() > b.spaceAccessLevel()) a else b
 
   /// A member in a space may either be a user with a DID or another space, in which all the members
   /// of that space extend the members of this space.
@@ -525,7 +525,7 @@ module types {
   type Space = {
     config: SpaceConfig,
     // The access level for each member in the space
-    members: Member -> Access
+    members: Member -> SpaceAccess
   }
 
   /// Data for an arbiter
