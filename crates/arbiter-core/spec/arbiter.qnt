@@ -1,4 +1,6 @@
 module arbiter {
+  import test
+
   import types.*
 
   import model.*
@@ -92,8 +94,7 @@ module model {
   /// Arbiter invariants
   val Inv = all {
     InvAtLeastOneAdmin,
-    // InvRoleDoesNotSquashIndividualWrite,
-    // InvAllAdminsCanWrite,
+    InvAllAdminsCanManageSpace,
   }
 
   /// There is always at least one admin for any given arbiter
@@ -101,6 +102,18 @@ module model {
     arbiters.keys().forall(arbiterDid =>
       def arbiter = arbiters.get(arbiterDid)
       arbiter.admins.size() >= 1
+    )
+
+  /// Admins are always given manage space permissions for each space
+  val InvAllAdminsCanManageSpace =
+    arbiters.keys().forall(arbiterDid =>
+      def arbiter = arbiters.get(arbiterDid)
+      arbiter.spaces.keys().forall(spaceKey =>
+        def spaceMembers = flatMemberList(arbiter, spaceKey)
+        arbiter.admins.forall(adminDid =>
+          spaceMembers.get(MLUser(adminDid)) == ManageSpace
+        )
+      )
     )
 
   /// Create a new arbiter
@@ -320,6 +333,14 @@ module model {
         def spaceKey = queuedSpace.spaceKey
         def spaceAccess = queuedSpace.access
         def space = arbiter.spaces.get(spaceKey)
+
+        // If this role does not exist
+        if (not(spaceKey.in(arbiter.spaces.keys())))
+          // ignore it remove it from the queue
+          state
+            .with("visited", state.visited.union(Set(queuedSpace)))
+            .with("queue", state.queue.exclude(Set(queuedSpace)))
+        else 
 
         // Get the list of local users that have been directly a
         def localUsers = space.members.keys().localUsersFromMembers()
@@ -736,6 +757,8 @@ module test {
         config: SpaceConfig::default,
         members: Map(
           MemberLocalSpace("role2") -> ManageSpace,
+          // This should be safely ignored
+          MemberLocalSpace("doesn't exist") -> ManageSpace,
         )
       },
     )
