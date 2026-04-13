@@ -94,7 +94,7 @@ module model {
   /// Arbiter invariants
   val Inv = all {
     InvAtLeastOneAdmin,
-    InvAllAdminsCanManageSpace,
+    InvAllAdminsCanRemoveMembers,
   }
 
   /// There is always at least one admin for any given arbiter
@@ -105,13 +105,13 @@ module model {
     )
 
   /// Admins are always given manage space permissions for each space
-  val InvAllAdminsCanManageSpace =
+  val InvAllAdminsCanRemoveMembers =
     arbiters.keys().forall(arbiterDid =>
       def arbiter = arbiters.get(arbiterDid)
       arbiter.spaces.keys().forall(spaceKey =>
         def spaceMembers = flatMemberList(arbiter, spaceKey)
         arbiter.admins.forall(adminDid =>
-          spaceMembers.get(MLUser(adminDid)) == ManageSpace
+          spaceMembers.get(MLUser(adminDid)) == RemoveMembers
         )
       )
     )
@@ -303,7 +303,7 @@ module model {
   /// require making remote network calls to other arbiters.
   pure def flatMemberList(arbiter: Arbiter, spaceKey: SpaceKey): MemberListItem -> Access =
     // Admins are always in the member list
-    def admins = arbiter.admins.map(x => (MLUser(x), ManageSpace)).setToMap()
+    def admins = arbiter.admins.map(x => (MLUser(x), RemoveMembers)).setToMap()
 
     // Define the initial fold state
     def initState: {
@@ -316,7 +316,7 @@ module model {
       // We keep track of the spaces that we have visited to break cycles
       visited: Set(),
       // We keep track of a queue of spaces that we need to visit to add to the members list.
-      queue: Set({ spaceKey: spaceKey, access: ManageSpace }),
+      queue: Set({ spaceKey: spaceKey, access: RemoveMembers }),
     }
 
     // Since we must avoid recursion we fold over the number of spaces that there are essentially
@@ -446,7 +446,7 @@ module types {
   type SpaceId = { arbiterDid: ArbiterDid, spaceKey: SpaceKey }
 
   /// The access a member may have to a permissioned space.
-  /// All higher later permissions include the ones before
+  /// All later permissions include the ones before
   type Access =
     // Member can read records in the space
     | ReadRecords
@@ -457,9 +457,9 @@ module types {
     // Member can add new writers to the space
     | AddWriters
     // Member can and and remove members with any access to/from the space
-    | ManageSpace
+    | RemoveMembers
 
-  pure val Accesses = Set(ReadRecords, WriteRecords, AddReaders, AddWriters, ManageSpace)
+  pure val Accesses = Set(ReadRecords, WriteRecords, AddReaders, AddWriters, RemoveMembers)
 
   /// Get the numeric access level from `Access`.
   pure def accessLevel(a: Access): int =
@@ -468,7 +468,7 @@ module types {
       | WriteRecords => 1
       | AddReaders => 2
       | AddWriters => 3
-      | ManageSpace => 4
+      | RemoveMembers => 4
     }
 
   /// Get the smaller of the provided accesses
@@ -547,30 +547,30 @@ module test {
       "members" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberUser("charlie") -> ManageSpace,
+          MemberUser("charlie") -> RemoveMembers,
           MemberUser("eve") -> WriteRecords,
         )
       },
       "team" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberUser("zicklag") -> ManageSpace,
-          MemberUser("erlend") -> ManageSpace,
-          MemberUser("meri") -> ManageSpace,
-          MemberUser("alice") -> ManageSpace,
+          MemberUser("zicklag") -> RemoveMembers,
+          MemberUser("erlend") -> RemoveMembers,
+          MemberUser("meri") -> RemoveMembers,
+          MemberUser("alice") -> RemoveMembers,
           MemberLocalSpace("designers") -> WriteRecords,
         )
       },
       "designers" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberUser("fish") -> ManageSpace,
+          MemberUser("fish") -> RemoveMembers,
         )
       },
       "#general" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberLocalSpace("team") -> ManageSpace,
+          MemberLocalSpace("team") -> RemoveMembers,
           MemberLocalSpace("members") -> WriteRecords,
           MemberUser("bob") -> ReadRecords,
         )
@@ -578,14 +578,14 @@ module test {
       "#internal" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberLocalSpace("team") -> ManageSpace,
+          MemberLocalSpace("team") -> RemoveMembers,
         )
       },
       "#design" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberLocalSpace("team") -> ManageSpace,
-          MemberLocalSpace("designers") -> ManageSpace,
+          MemberLocalSpace("team") -> RemoveMembers,
+          MemberLocalSpace("designers") -> RemoveMembers,
           MemberLocalSpace("members") -> ReadRecords,
         )
       }
@@ -599,7 +599,7 @@ module test {
         flatMemberList(arbiter1, "#general") ==
         Map(
           // Can manage because she's in the team
-          MLUser("alice") -> ManageSpace,
+          MLUser("alice") -> RemoveMembers,
           // Can read because he's directly added to general channel
           MLUser("bob") -> ReadRecords,
           // Can write because he's a member
@@ -609,45 +609,45 @@ module test {
           // Can write because he's in designers which is in the team
           MLUser("fish") -> WriteRecords,
           // Can manage because she's an admin
-          MLUser("meri") -> ManageSpace,
+          MLUser("meri") -> RemoveMembers,
           // Can manage because he's an admin
-          MLUser("erlend") -> ManageSpace,
+          MLUser("erlend") -> RemoveMembers,
           // Can manage because he's an admin
-          MLUser("zicklag") -> ManageSpace,
+          MLUser("zicklag") -> RemoveMembers,
         )
       ),
       assert(
         flatMemberList(arbiter1, "#internal") ==
         Map(
           // Can manage because she's in the team
-          MLUser("alice") -> ManageSpace,
+          MLUser("alice") -> RemoveMembers,
           // Can write because he's in designers which is in the team
           MLUser("fish") -> WriteRecords,
           // Can manage because she's an admin
-          MLUser("meri") -> ManageSpace,
+          MLUser("meri") -> RemoveMembers,
           // Can manage because he's an admin
-          MLUser("erlend") -> ManageSpace,
+          MLUser("erlend") -> RemoveMembers,
           // Can manage because he's an admin
-          MLUser("zicklag") -> ManageSpace,
+          MLUser("zicklag") -> RemoveMembers,
         )
       ),
       assert(
         flatMemberList(arbiter1, "#design") ==
         Map(
           // Can manage because she's in the team
-          MLUser("alice") -> ManageSpace,
+          MLUser("alice") -> RemoveMembers,
           // Charlie can read 'cause he's in members
           MLUser("charlie") -> ReadRecords,
           // Eve can read 'cause she's in members
           MLUser("eve") -> ReadRecords,
           // Can manage 'cause he's in designers
-          MLUser("fish") -> ManageSpace,
+          MLUser("fish") -> RemoveMembers,
           // Can manage because she's an admin
-          MLUser("meri") -> ManageSpace,
+          MLUser("meri") -> RemoveMembers,
           // Can manage because he's an admin
-          MLUser("erlend") -> ManageSpace,
+          MLUser("erlend") -> RemoveMembers,
           // Can manage because he's an admin
-          MLUser("zicklag") -> ManageSpace,
+          MLUser("zicklag") -> RemoveMembers,
         )
       )
     }
@@ -660,7 +660,7 @@ module test {
       "managers" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberUser("meri") -> ManageSpace,
+          MemberUser("meri") -> RemoveMembers,
         )
       },
       "team" -> {
@@ -672,21 +672,21 @@ module test {
       "strange" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberLocalSpace("managers") -> ManageSpace,
+          MemberLocalSpace("managers") -> RemoveMembers,
         )
       },
       "#test" -> {
         config: SpaceConfig::default,
         members: Map(
           MemberLocalSpace("managers") -> ReadRecords,
-          MemberLocalSpace("team") -> ManageSpace,
+          MemberLocalSpace("team") -> RemoveMembers,
         )
       },
       "#off-topic" -> {
         config: SpaceConfig::default,
         members: Map(
           MemberLocalSpace("managers") -> ReadRecords,
-          MemberLocalSpace("strange") -> ManageSpace,
+          MemberLocalSpace("strange") -> RemoveMembers,
         )
       },
       "#on-topic" -> {
@@ -706,21 +706,21 @@ module test {
         Map(
           MLUser("meri") -> ReadRecords,
           MLUser("erlend") -> WriteRecords,
-          MLUser("zicklag") -> ManageSpace,
+          MLUser("zicklag") -> RemoveMembers,
         )
       ),
       assert(
         flatMemberList(arbiter2, "#off-topic") ==
         Map(
-          MLUser("meri") -> ManageSpace,
-          MLUser("zicklag") -> ManageSpace,
+          MLUser("meri") -> RemoveMembers,
+          MLUser("zicklag") -> RemoveMembers,
         )
       ),
       assert(
         flatMemberList(arbiter2, "#on-topic") ==
         Map(
           MLUser("meri") -> ReadRecords,
-          MLUser("zicklag") -> ManageSpace,
+          MLUser("zicklag") -> RemoveMembers,
         )
       ),
     }
@@ -733,7 +733,7 @@ module test {
       "role1" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberUser("user1") -> ManageSpace,
+          MemberUser("user1") -> RemoveMembers,
           MemberLocalSpace("role2") -> ReadRecords,
           MemberRemoteSpace({ arbiterDid: "arbiter4", spaceKey: "example" }) -> AddWriters,
         )
@@ -748,17 +748,17 @@ module test {
       "role3" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberUser("user3") -> ManageSpace,
+          MemberUser("user3") -> RemoveMembers,
           MemberUser("user4") -> ReadRecords,
-          MemberLocalSpace("role1") -> ManageSpace,
+          MemberLocalSpace("role1") -> RemoveMembers,
         )
       },
       "#channel1" -> {
         config: SpaceConfig::default,
         members: Map(
-          MemberLocalSpace("role2") -> ManageSpace,
+          MemberLocalSpace("role2") -> RemoveMembers,
           // This should be safely ignored
-          MemberLocalSpace("doesn't exist") -> ManageSpace,
+          MemberLocalSpace("doesn't exist") -> RemoveMembers,
         )
       },
     )
@@ -770,7 +770,7 @@ module test {
       assert(
         flatMemberList(arbiter3, "#channel1") ==
         Map(
-          MLUser("admin") -> ManageSpace,
+          MLUser("admin") -> RemoveMembers,
           MLUser("user2") -> WriteRecords,
           MLUser("user3") -> WriteRecords,
           MLUser("user4") -> ReadRecords,
