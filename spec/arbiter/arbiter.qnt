@@ -854,5 +854,411 @@ module tests {
   //     ),
   //   }
   // }
+
+  //
+  // PROPERTY-BASED INVARIANT TESTS
+  //
+
+  // -- Helper defs --
+
+  pure def allDirectUsersInArbiter(arbiter: Arbiter): Set[UserDid] =
+    arbiter.spaces.values().map(space =>
+      space.members.keys().map(m => match m {
+        | MemberUser(u) => Set(u)
+        | _ => Set()
+      }).flatten()
+    ).flatten()
+
+  pure def allRemoteSpacesInArbiter(arbiter: Arbiter): Set[SpaceId] =
+    arbiter.spaces.values().map(space =>
+      space.members.keys().map(m => match m {
+        | MemberRemoteSpace(sid) => Set(sid)
+        | _ => Set()
+      }).flatten()
+    ).flatten()
+
+  pure def allGrantsForUser(arbiter: Arbiter, userDid: UserDid): Set[Access] =
+    arbiter.spaces.values().map(space =>
+      space.members.keys().map(m => match m {
+        | MemberUser(u) => if (u == userDid) Set(space.members.get(m)) else Set()
+        | _ => Set()
+      }).flatten()
+    ).flatten()
+
+  pure def adminUsersInArbiter(arbiter: Arbiter): Set[UserDid] =
+    if (arbiter.spaces.has(SpaceKey::ADMIN))
+      arbiter.spaces.get(SpaceKey::ADMIN).members.keys().map(m => match m {
+        | MemberUser(u) => Set(u)
+        | _ => Set()
+      }).flatten()
+    else
+      Set()
+
+  pure def directUsersInUnresolved(unresolved: UnresolvedMemberList): Set[UserDid] =
+    unresolved.keys().map(k => match k {
+      | UMLUser(u) => Set(u)
+      | _ => Set()
+    }).flatten()
+
+  pure def spaceIdsInUnresolved(unresolved: UnresolvedMemberList): Set[SpaceId] =
+    unresolved.keys().map(k => match k {
+      | UMLSpace(sid) => Set(sid)
+      | _ => Set()
+    }).flatten()
+
+  pure def directAccessForUser(unresolved: UnresolvedMemberList, userDid: UserDid): Set[Access] =
+    unresolved.keys().filter(k => match k {
+      | UMLUser(u) => u == userDid
+      | _ => false
+    }).map(k => unresolved.get(k))
+
+  pure def directAccessForSpace(unresolved: UnresolvedMemberList, sid: SpaceId): Set[Access] =
+    unresolved.keys().filter(k => match k {
+      | UMLSpace(s) => s == sid
+      | _ => false
+    }).map(k => unresolved.get(k))
+
+  pure def resolvedUserDids(resolvedSpaces: SpaceId -> ResolvedMemberList): Set[UserDid] =
+    resolvedSpaces.values().map(r => r.memberList.keys()).flatten()
+
+  pure def transitivelyMissingSpaces(resolvedSpaces: SpaceId -> ResolvedMemberList): Set[SpaceId] =
+    resolvedSpaces.values().map(r => r.missingSpaces.keys()).flatten()
+
+  pure def maxAccessInSet(accesses: Set[Access]): Access =
+    accesses.fold(AccessRecords, (a, b) => maxAccess(a, b))
+
+  // -- Well-formed test arbiters of varying structure --
+
+  pure val invArbiterMinimal: Arbiter = {
+    did: "inv_arb1",
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("alice") -> Owner)
+      }
+    )
+  }
+
+  pure val invArbiterBasic: Arbiter = {
+    did: "inv_arb2",
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("alice") -> Owner, MemberUser("bob") -> AddAdmins)
+      },
+      "team" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("charlie") -> RemoveMembers,
+          MemberUser("dave") -> AccessRecords,
+        )
+      }
+    )
+  }
+
+  pure val invArbiterNested: Arbiter = {
+    did: "inv_arb3",
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("alice") -> Owner)
+      },
+      "team" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("bob") -> RemoveMembers,
+          MemberLocalSpace("subteam") -> AddMembers,
+        )
+      },
+      "subteam" -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("carol") -> RemoveMembers)
+      },
+      "project" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("team") -> RemoveMembers,
+          MemberUser("dave") -> AccessRecords,
+        )
+      }
+    )
+  }
+
+  pure val invArbiterWithRemote: Arbiter = {
+    did: "inv_arb4",
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("alice") -> Owner)
+      },
+      "shared" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("bob") -> RemoveMembers,
+          MemberRemoteSpace({ arbiterDid: "other_arb", spaceKey: "ext_space" }) -> AddMembers,
+        )
+      }
+    )
+  }
+
+  pure val invArbiterCycle: Arbiter = {
+    did: "inv_arb5",
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("alice") -> Owner)
+      },
+      "a" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("bob") -> RemoveMembers,
+          MemberLocalSpace("b") -> AddMembers,
+        )
+      },
+      "b" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberUser("carol") -> RemoveMembers,
+          MemberLocalSpace("a") -> AddMembers,
+        )
+      }
+    )
+  }
+
+  pure val invArbiterEmptyMembers: Arbiter = {
+    did: "inv_arb6",
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("alice") -> Owner)
+      },
+      "empty" -> {
+        config: SpaceConfig::default,
+        members: Map()
+      }
+    )
+  }
+
+  pure val invArbiterNonExistentRef: Arbiter = {
+    did: "inv_arb7",
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: SpaceConfig::default,
+        members: Map(MemberUser("alice") -> Owner)
+      },
+      "channel" -> {
+        config: SpaceConfig::default,
+        members: Map(
+          MemberLocalSpace("does_not_exist") -> RemoveMembers,
+          MemberUser("bob") -> AccessRecords,
+        )
+      }
+    )
+  }
+
+  pure val testArbiters: Set[Arbiter] = Set(
+    invArbiterMinimal,
+    invArbiterBasic,
+    invArbiterNested,
+    invArbiterWithRemote,
+    invArbiterCycle,
+    invArbiterEmptyMembers,
+    invArbiterNonExistentRef,
+    arbiter1,
+  )
+
+  // -- Small universes for joinResolvedSpaces() tests --
+
+  pure val invSid1: SpaceId = { arbiterDid: "arb_a", spaceKey: "space_x" }
+  pure val invSid2: SpaceId = { arbiterDid: "arb_b", spaceKey: "space_y" }
+  pure val invUmlItems: Set[UnresolvedMemberListItem] = Set(
+    UMLUser("u1"), UMLUser("u2"), UMLSpace(invSid1)
+  )
+  pure val invAccesses3: Set[Access] = Set(AccessRecords, RemoveMembers, Owner)
+  pure val invItemSubsets: Set[Set[UnresolvedMemberListItem]] = invUmlItems.powerset()
+  pure val allSmallUnresolved: Set[UnresolvedMemberList] =
+    invItemSubsets.map(subset => subset.setOfMaps(invAccesses3)).flatten()
+
+  //
+  // members() invariants
+  //
+
+  /// Every access in the output is a valid Access
+  run membersOutputsValidAccessesTest = all {
+    nondet arb = testArbiters.oneOf()
+    nondet spaceKey = arb.spaces.keys().oneOf()
+    def result = arb.members(spaceKey)
+    assert(
+      result.keys().forall(k => result.get(k).in(Accesses))
+    )
+  }
+
+  /// Every UMLUser in the output is a direct member of some space in the arbiter
+  run membersUsersAreReachableTest = all {
+    nondet arb = testArbiters.oneOf()
+    nondet spaceKey = arb.spaces.keys().oneOf()
+    def result = arb.members(spaceKey)
+    def allDirectUsers = allDirectUsersInArbiter(arb)
+    assert(
+      result.keys().forall(k => match k {
+        | UMLUser(u) => u.in(allDirectUsers)
+        | UMLSpace(_) => true
+      })
+    )
+  }
+
+  /// Every user's output access never exceeds the max of all accesses they
+  /// were directly granted across spaces.
+  run membersInvUserAccessCappedTest = all {
+    nondet arb = testArbiters.oneOf()
+    nondet spaceKey = arb.spaces.keys().oneOf()
+    def result = arb.members(spaceKey)
+    assert(
+      result.keys().forall(k => match k {
+        | UMLUser(userDid) =>
+          def outputAccess = result.get(k)
+          def grants = allGrantsForUser(arb, userDid)
+          (grants.size() == 0)
+            or accessLevel(outputAccess) <= accessLevel(maxAccessInSet(grants))
+        | UMLSpace(_) => true
+      })
+    )
+  }
+
+  /// Every UMLSpace in the output corresponds to a MemberRemoteSpace in some space
+  run membersRemoteSpacesAreReachableTest = all {
+    nondet arb = testArbiters.oneOf()
+    nondet spaceKey = arb.spaces.keys().oneOf()
+    def result = arb.members(spaceKey)
+    def allRemote = allRemoteSpacesInArbiter(arb)
+    assert(
+      result.keys().forall(k => match k {
+        | UMLUser(_) => true
+        | UMLSpace(spaceId) => spaceId.in(allRemote)
+      })
+    )
+  }
+
+  /// Admin space members always appear in the output
+  run membersAdminsAlwaysPresentTest = all {
+    nondet arb = testArbiters.oneOf()
+    nondet spaceKey = arb.spaces.keys().oneOf()
+    def result = arb.members(spaceKey)
+    def adminUsers = adminUsersInArbiter(arb)
+    assert(
+      adminUsers.forall(u => result.has(UMLUser(u)))
+    )
+  }
+
+  /// The output only contains UMLUser and UMLSpace (never local space keys)
+  run membersNoLocalSpacesInOutputTest = all {
+    nondet arb = testArbiters.oneOf()
+    nondet spaceKey = arb.spaces.keys().oneOf()
+    def result = arb.members(spaceKey)
+    assert(
+      result.keys().forall(k => match k {
+        | UMLUser(_) => true
+        | UMLSpace(_) => true
+      })
+    )
+  }
+
+  //
+  // joinResolvedSpaces() invariants
+  //
+
+  /// Every access in the output memberList and missingSpaces is valid
+  run joinResolvedValidAccessesTest = all {
+    nondet unresolved = allSmallUnresolved.oneOf()
+    def result = joinResolvedSpaces(unresolved, Map())
+    assert(
+      result.memberList.keys().forall(u => result.memberList.get(u).in(Accesses))
+      and result.missingSpaces.keys().forall(s => result.missingSpaces.get(s).in(Accesses))
+    )
+  }
+
+  /// Every user in the output memberList is either a direct UMLUser in the input
+  /// or appears in a resolved space's memberList
+  run joinResolvedUsersAreFromInputTest = all {
+    nondet unresolved = allSmallUnresolved.oneOf()
+    nondet resolvedUser = Set("u1", "u2").oneOf()
+    nondet resolvedAccess = invAccesses3.oneOf()
+    def resolvedSpaces = Map(invSid1 -> {
+      memberList: Map(resolvedUser -> resolvedAccess),
+      missingSpaces: Map()
+    })
+    def result = joinResolvedSpaces(unresolved, resolvedSpaces)
+    def directUsers = directUsersInUnresolved(unresolved)
+    def resolvedUsers = resolvedUserDids(resolvedSpaces)
+    assert(
+      result.memberList.keys().forall(u =>
+        u.in(directUsers.union(resolvedUsers))
+      )
+    )
+  }
+
+  /// No user's output access exceeds the max of their direct input access and
+  /// the access from any resolved space.
+  run joinResolvedInvUserAccessCappedTest = all {
+    nondet unresolved = allSmallUnresolved.oneOf()
+    nondet resolvedAccess = invAccesses3.oneOf()
+    def resolvedSpaces = Map(invSid1 -> {
+      memberList: Map("u1" -> resolvedAccess),
+      missingSpaces: Map()
+    })
+    def result = joinResolvedSpaces(unresolved, resolvedSpaces)
+    assert(
+      result.memberList.keys().forall(userDid =>
+        def outputAccess = result.memberList.get(userDid)
+        def directAccess = directAccessForUser(unresolved, userDid)
+        def fromResolved = resolvedSpaces.has(invSid1) and resolvedSpaces.get(invSid1).memberList.has(userDid)
+        def maxSource = if (directAccess.size() > 0 and fromResolved)
+          maxAccess(
+            maxAccessInSet(directAccess),
+            resolvedSpaces.get(invSid1).memberList.get(userDid)
+          )
+        else if (directAccess.size() > 0)
+          maxAccessInSet(directAccess)
+        else if (fromResolved)
+          resolvedSpaces.get(invSid1).memberList.get(userDid)
+        else
+          outputAccess
+        accessLevel(outputAccess) <= accessLevel(maxSource)
+      )
+    )
+  }
+
+  /// Every space in missingSpaces is either an unresolved UMLSpace or was
+  /// transitively missing from a resolved space
+  run joinResolvedMissingSpacesAreUnresolvedTest = all {
+    nondet unresolved = allSmallUnresolved.oneOf()
+    nondet transitiveAccess = invAccesses3.oneOf()
+    def resolvedSpaces = Map(invSid1 -> {
+      memberList: Map("u1" -> transitiveAccess),
+      missingSpaces: Map(invSid2 -> transitiveAccess)
+    })
+    def result = joinResolvedSpaces(unresolved, resolvedSpaces)
+    def unresolvedIds = spaceIdsInUnresolved(unresolved)
+    def transitiveMissing = transitivelyMissingSpaces(resolvedSpaces)
+    assert(
+      result.missingSpaces.keys().forall(sid =>
+        sid.in(unresolvedIds.union(transitiveMissing))
+      )
+    )
+  }
+
+  /// No missing space's access exceeds its access in the input unresolved list
+  run joinResolvedMissingAccessCappedTest = all {
+    nondet unresolved = allSmallUnresolved.oneOf()
+    def result = joinResolvedSpaces(unresolved, Map())
+    assert(
+      result.missingSpaces.keys().forall(sid =>
+        def outputAccess = result.missingSpaces.get(sid)
+        def directAccess = directAccessForSpace(unresolved, sid)
+        (directAccess.size() == 0)
+          or directAccess.forall(a => accessLevel(outputAccess) <= accessLevel(a))
+      )
+    )
+  }
 }
 
