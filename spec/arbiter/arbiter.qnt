@@ -2,37 +2,53 @@
 module model {
   import types.*
 
+  type Error =
+    | ErrArbiterAlreadyExists
+    | ErrJobIdAlreadyUsed
+    | ErrJobNotExists
+    | ErrSpaceNotNeeded
+    | ErrSpaceAlreadyResolved
+
   /// The list of arbiters.
   ///
   /// It is assumed that each arbiter could be hosted on a separate server, so we assume that it's
   /// impossible to make updates atomically across multiple arbiters.
   var arbiters: ArbiterDid -> Arbiter
 
-  /// Whether the last arbiter write operation failed with an error.
-  var writeError: bool
+  var error: Option[Error]
   
   /// Initial state
   action initArbiter = all {
     arbiters' = Map(),
-    writeError' = false
   }
 
   //
   // ACTIONS
   //
+
+  action throw(e: Error): bool = all {
+    arbiters' = arbiters,
+    error' = Some(e),
+  }
+
+  action ok: bool = all {
+    arbiters' = arbiters,
+    error' = None,
+  }
   
   /// Create a new arbiter.
   ///
   /// The user the authenticated user carrying out the action.
   action create(userDid: UserDid, arbiterDid: ArbiterDid): bool = 
-    def valid = 
-      // Arbiter doesn't already exist
-      not(arbiters.has(arbiterDid))
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
 
-    if (valid) all {
+    all {
       // Add arbiter
       arbiters' = arbiters.put(arbiterDid, {
         did: arbiterDid,
+        jobQueue: Map(),
+        jobResults: Map(),
         spaces: Map(
           // Create the special $admin space
           SpaceKey::ADMIN -> {
@@ -40,31 +56,175 @@ module model {
             members: Map(
               // Add the creator of the arbiter as an owner
               MemberUser(userDid) -> Owner
-            )
+            ),
           }
         )
       }),
-      writeError' = false
-    } else all {
-      arbiters' = arbiters,
-      writeError' = true
+      error' = None,
     }
 
-  /// Create a new space
-  action createSpace(userDid: UserDid, arbiterDid: ArbiterDid, spaceKey: SpaceKey): bool =
+  /// Receive a new job to process 
+  action startJob(userDid: UserDid, arbiterDid: ArbiterDid, spaceKey: SpaceKey, jobId: JobId, args: JobArgs): bool =
     def arbiter = arbiters.get(arbiterDid)
-    def valid =
-      // Arbiter exists
-      arbiters.has(arbiterDid) and
-      // Space does not already exist
-      not(arbiter.spaces.has(spaceKey))
 
-    if (valid) all {
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
+    // Check Job ID not already used
+    if (arbiter.jobQueue.has(jobId) or arbiter.jobResults.has(jobId)) throw(ErrJobIdAlreadyUsed) else
+
+    // Get the local member list
+    def unresolvedMembers = arbiter.members(spaceKey)
+
+    // Try to resolve it, which will succeed if there's no access delegated to remote spaces
+    def attemptedResolve = unresolvedMembers.resolveSync()
+
+    match (attemptedResolve) {
+      // If we successfully resolved the member list, execute the job immediately
+      | Some(resolved) => executeJob(arbiterDid, resolved, {
+          id: jobId,
+          userDid: userDid,
+          spaceKey: spaceKey,
+          args: args,
+          unresolvedMembers: unresolvedMembers,
+          resolvedSpaces: Map()
+        })
+
+      // If we cannot resolve synchronously, then we need to queue the job
+      | None => all {
+        arbiters' = arbiters.put(arbiterDid,
+          arbiter.with("jobQueue", arbiter.jobQueue.put(jobId, {
+            id: jobId,
+            userDid: userDid,
+            spaceKey: spaceKey,
+            args: args,
+            unresolvedMembers: unresolvedMembers,
+            resolvedSpaces: Map(),
+          }))
+        ),
+        error' = None,
+      }
+    }
+
+  /// Provide the resolved space member list for a job that was waiting on a member list to be resolved.
+  action provideRemoteSpaceMembers(arbiterDid: ArbiterDid, jobId: JobId, spaceId: SpaceId, members: ResolvedMemberList): bool =
+    def arbiter = arbiters.get(arbiterDid)
+    def job = arbiter.jobQueue.get(jobId)
+
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
+    // Check job exists
+    if (not(arbiter.jobQueue.has(jobId))) throw(ErrJobNotExists) else
+    // Check that this job actually needs the space to be resolved
+    if (not(job.unresolvedMembers.has(UMLSpace(spaceId)))) throw(ErrSpaceNotNeeded) else
+    // Check that we haven't already resolved the space
+    if (job.resolvedSpaces.has(spaceId)) throw(ErrSpaceAlreadyResolved) else
+
+    // Create an updated list of the resolved spaces
+    def resolvedSpaces = job.resolvedSpaces.put(spaceId, members)
+
+    // Check whether the job has all of it's spaces resolved and is ready to be executed
+    def jobIsReady = job
+      .unresolvedMembers
+      .spacesToResolve()
+      .exclude(job.resolvedSpaces.keys()).size() == 0
+
+    // If the job is ready to be executed
+    if (jobIsReady)
+      // Execute it immediately
+      def resolved = joinResolvedSpaces(job.unresolvedMembers, resolvedSpaces)
+      executeJob(arbiterDid, resolved, job)
+
+    // If the job is not ready
+    else
+      all {
+        // Just updated the queued job's resolved spaces
+        arbiters' = arbiters.put(arbiterDid,
+          arbiter.with("jobQueue",
+            arbiter.jobQueue.put(jobId,
+              job.with("resolvedSpaces", resolvedSpaces) 
+            )
+          )
+        ),
+        error' = None,
+      }
+
+  /// Timeout a job that is in the queue and waiting for space member lists to be resolved.
+  ///
+  /// This will execute the job without waiting for the remote member lists to finish resolving.
+  action timeoutJob(arbiterDid: ArbiterDid, jobId: JobId): bool =
+    def arbiter = arbiters.get(arbiterDid)
+    def job = arbiter.jobQueue.get(jobId)
+
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
+    // Check job exists
+    if (not(arbiter.jobQueue.has(jobId))) throw(ErrJobNotExists) else
+
+    // Resolve the member list with whatever spaces it has right now
+    def resolved = joinResolvedSpaces(job.unresolvedMembers, job.resolvedSpaces)
+
+    // Execute the job
+    executeJob(arbiterDid, resolved, job)
+
+
+  //
+  // HELPER ACTIONS
+  //
+
+  action executeJob(
+    arbiterDid: ArbiterDid, 
+    members: ResolvedMemberList,
+    job: Job,
+  ): bool =
+    match (job.args) {
+      | CreateSpace => createSpace(arbiterDid, members, job)
+      | DeleteSpace => deleteSpace(arbiterDid, members, job)
+      | SetMemberAccess(m) => setMemberAccess(arbiterDid, members, job, m.member, m.access)
+      | RemoveMember(args) => removeMember(arbiterDid, members, job, args.member)
+    }
+
+  action createSpace(
+    arbiterDid: ArbiterDid, 
+    members: ResolvedMemberList,
+    job: Job,
+  ): bool = 
+    all {
       arbiters' = arbiters,
-      writeError' = false,
-    } else all {
+      error' = None,
+    }
+
+  action deleteSpace(
+    arbiterDid: ArbiterDid, 
+    members: ResolvedMemberList,
+    job: Job,
+  ): bool =
+
+    all {
       arbiters' = arbiters,
-      writeError' = true
+      error' = None,
+    }
+
+  action setMemberAccess(
+    arbiterDid: ArbiterDid, 
+    members: ResolvedMemberList,
+    job: Job,
+    member: UserDid,
+    access: Access
+  ): bool =
+    all {
+      arbiters' = arbiters,
+      error' = None,
+    }
+
+  action removeMember(
+    arbiterDid: ArbiterDid, 
+    members: ResolvedMemberList,
+    job: Job,
+    member: UserDid,
+  ): bool =
+    all {
+      arbiters' = arbiters,
+      error' = None,
     }
 
   //
@@ -431,6 +591,34 @@ module types {
   type UnresolvedMemberList = UnresolvedMemberListItem -> Access
   type ResolvedMemberList = { memberList: UserDid -> Access, missingSpaces: SpaceId -> Access }
 
+  /// Synchronously returns a resolved member list if it is possible to do so without making any 
+  /// resolutions for remote spaces.
+  pure def resolveSync(unresolved: UnresolvedMemberList): Option[ResolvedMemberList] =
+    if (unresolved.keys().forall(member =>
+      match member {
+        | UMLUser(u) => true
+        | UMLSpace(s) => false
+      }
+    ))
+      Some({
+        memberList: unresolved.keys().map(member => match member {
+          | UMLUser(u) => Set((u, unresolved.get(member)))
+          | UMLSpace(s) => Set()
+        }).flatten().setToMap(),
+        missingSpaces: Map(),
+      })
+    else
+      None
+
+  /// Get the list of spaces that need to be resolved
+  pure def spacesToResolve(unresolved: UnresolvedMemberList): Set[SpaceId] =
+    unresolved.keys().fold(Set(), (ids, id) =>
+      match (id) {
+        | UMLUser(u) => ids
+        | UMLSpace(spaceId) => ids.union(Set(spaceId))
+      }
+    )
+
   /// Extra configuration associated to a space
   type SpaceConfig = {
     // Whether or not records in the space can be read without being a member of the space.
@@ -452,12 +640,49 @@ module types {
     members: Member -> Access
   }
 
+  /// This represents a call to perform some action on the arbiter.
+  type JobArgs = 
+    | CreateSpace
+    | DeleteSpace
+    | SetMemberAccess({
+        member: UserDid,
+        access: Access,
+      })
+    | RemoveMember({
+      member: UserDid
+    })
+
+  type JobId = int
+  
+  /// A job is a work-in-progress action such as adding or removing a member.
+  type Job = {
+    // Unique ID for the job, used to respond to set the job finish status
+    id: JobId,
+    // The user performing the actions
+    userDid: UserDid,
+    // The space that is being operated on
+    spaceKey: SpaceKey,
+    // The arguments to the job to perform
+    args: JobArgs,
+    // The unresolved member list calculated at the time the job was received
+    unresolvedMembers: UnresolvedMemberList,
+    // The list of external space member lists that have been resolved.
+    //
+    // Once all of the external spaces in the unresolvedList have been resolved
+    // we can produce the final member list and then actually perform the operation.
+    resolvedSpaces: SpaceId -> ResolvedMemberList, 
+  }
+
   /// Data for an arbiter
   type Arbiter = {
     // The arbiter's DID
     did: ArbiterDid,
     // The spaces managed by the arbiter
     spaces: SpaceKey -> Space,
+    // Space resolution jobs that are work-in-progress
+    jobQueue: JobId -> Job,
+    // The results from finished jobs. Will be true if the job succeeded
+    jobResults: JobId -> bool
   }
 }
 
@@ -482,7 +707,6 @@ module arbiter {
     nondet arbiterDid = arbiterDids.oneOf()
     create(userDid, arbiterDid)
   }
-
 }
 
 
