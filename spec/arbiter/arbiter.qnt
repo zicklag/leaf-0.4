@@ -87,11 +87,12 @@ module model {
       // We keep track of the spaces that we have visited to break cycles
       visited: Set(),
       // We keep track of a queue of spaces that we need to visit to add to the members list.
+      // Note we allow up to the full owner access at the top-level.
       queue: Set(
         // As well as any members from the admin space
         { spaceKey: SpaceKey::ADMIN, access: Owner },
         // We need to add the members from the space itself
-        { spaceKey: spaceKey, access: RemoveMembers }
+        { spaceKey: spaceKey, access: Owner }
       ),
     }
 
@@ -465,8 +466,8 @@ module arbiter {
   import model.*
 
   pure val userDids: Set[UserDid] = Set("Alice", "Bob", "Charlie", "Daffodil", "Eve")
-  pure val arbiterDids: Set[UserDid] = Set("arb1", "arb2")
-  pure val spaceKeys: Set[UserDid] = Set("space1", "space2")
+  pure val arbiterDids: Set[ArbiterDid] = Set("arb1", "arb2")
+  pure val spaceKeys: Set[SpaceKey] = Set("space1", "space2")
   pure val roleIds: Set[SpaceKey] = Set("members", "team", "collaborators")
 
 
