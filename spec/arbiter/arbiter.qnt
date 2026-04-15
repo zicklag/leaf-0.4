@@ -4,10 +4,15 @@ module model {
 
   type Error =
     | ErrArbiterAlreadyExists
+    | ErrArbiterNotExists
     | ErrJobIdAlreadyUsed
     | ErrJobNotExists
     | ErrSpaceNotNeeded
     | ErrSpaceAlreadyResolved
+    | ErrSpaceAlreadyExists
+    | ErrSpaceNotExists
+    | ErrPermissionDenied
+    | ErrMemberNotExist
 
   /// The list of arbiters.
   ///
@@ -68,9 +73,12 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
 
     // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check Job ID not already used
     if (arbiter.jobQueue.has(jobId) or arbiter.jobResults.has(jobId)) throw(ErrJobIdAlreadyUsed) else
+
+    // Do some validation on the job
+    match (jobValidationError(arbiter, spaceKey, args)) { | Some(err) => throw(err) | None =>
 
     // Get the local member list
     def unresolvedMembers = arbiter.members(spaceKey)
@@ -103,7 +111,7 @@ module model {
         ),
         error' = None,
       }
-    }
+    }}
 
   /// Provide the resolved space member list for a job that was waiting on a member list to be resolved.
   action provideRemoteSpaceMembers(arbiterDid: ArbiterDid, jobId: JobId, spaceId: SpaceId, members: ResolvedMemberList): bool =
@@ -111,7 +119,7 @@ module model {
     def job = arbiter.jobQueue.get(jobId)
 
     // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check job exists
     if (not(arbiter.jobQueue.has(jobId))) throw(ErrJobNotExists) else
     // Check that this job actually needs the space to be resolved
@@ -156,7 +164,7 @@ module model {
     def job = arbiter.jobQueue.get(jobId)
 
     // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check job exists
     if (not(arbiter.jobQueue.has(jobId))) throw(ErrJobNotExists) else
 
@@ -170,6 +178,30 @@ module model {
   //
   // HELPER ACTIONS
   //
+  
+  /// Return any validation errors for the job if there are issues
+  pure def jobValidationError(arbiter: Arbiter, spaceKey: SpaceKey, args: JobArgs): Option[Error] =
+    match (args) {
+      | CreateSpace =>
+        // Make sure the space doesn't already exist
+        if (arbiter.spaces.has(spaceKey)) Some(ErrSpaceAlreadyExists)
+        else None
+      | DeleteSpace =>
+        // Make sure the space exists
+        if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
+        else None
+      | SetMemberAccess(x) =>
+        // Make sure the space exists
+        if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
+        else None
+      | RemoveMember(x) => 
+        def space = arbiter.spaces.get(spaceKey)
+        // Make sure the space exists
+        if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
+        // Make sure the member is in the space
+        else if (not(space.members.has(x.member))) Some(ErrMemberNotExist)
+        else None
+    }
 
   action executeJob(
     arbiterDid: ArbiterDid, 
@@ -185,9 +217,24 @@ module model {
 
   action createSpace(
     arbiterDid: ArbiterDid, 
-    members: ResolvedMemberList,
+    resolved: ResolvedMemberList,
     job: Job,
   ): bool = 
+    def arbiter = arbiters.get(arbiterDid)
+    def memberAccess = resolved.memberList.get(job.userDid)
+
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
+    // Check space doesn't exist
+    if (arbiter.spaces.has(job.spaceKey)) throw(ErrSpaceAlreadyExists) else
+
+    // Check that the user has access to create spaces
+
+    // NOTE: If the space did not exist at the time the job was started, the only members in the
+    // list will be those in the admin group which is delegated to by every space and included in
+    // the member list even if a space does not exist.
+    if (not(memberAccess.includesAccess(CreateSpaces))) throw(ErrPermissionDenied) else
+
     all {
       arbiters' = arbiters,
       error' = None,
@@ -208,7 +255,7 @@ module model {
     arbiterDid: ArbiterDid, 
     members: ResolvedMemberList,
     job: Job,
-    member: UserDid,
+    member: Member,
     access: Access
   ): bool =
     all {
@@ -220,7 +267,7 @@ module model {
     arbiterDid: ArbiterDid, 
     members: ResolvedMemberList,
     job: Job,
-    member: UserDid,
+    member: Member,
   ): bool =
     all {
       arbiters' = arbiters,
@@ -557,6 +604,9 @@ module types {
   pure def maxAccess(a: Access, b: Access): Access =
     if (a.accessLevel() > b.accessLevel()) a else b
 
+  /// Returns whether access `b` is included in access `a`
+  pure def includesAccess(a: Access, b: Access): bool =
+    accessLevel(a) >= accessLevel(b)
 
   /// Filter out the remote spaces from a member list
   pure def remoteSpacesFromMembers(s: Set[Member]): Set[SpaceId] =
@@ -645,11 +695,11 @@ module types {
     | CreateSpace
     | DeleteSpace
     | SetMemberAccess({
-        member: UserDid,
+        member: Member,
         access: Access,
       })
     | RemoveMember({
-      member: UserDid
+      member: Member
     })
 
   type JobId = int
@@ -684,6 +734,12 @@ module types {
     // The results from finished jobs. Will be true if the job succeeded
     jobResults: JobId -> bool
   }
+
+  pure def isSome(opt: Option): bool =
+    match (opt) { | Some => true | None => false }
+
+  pure def unwrapOr(opt: Option[a], default: a): a =
+    match (opt) { | Some(u) => u | None => default }
 }
 
 module arbiter {
