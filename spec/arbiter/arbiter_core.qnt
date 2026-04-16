@@ -17,6 +17,7 @@ module model {
     | ErrPermissionChanged
     | ErrArbiterDeletionMustSpecifyAdminSpace
     | ErrOnlyLastOwnerCanDeleteArbiter
+    | ErrOperationAlreadyInProgress
 
   /// The list of arbiters.
   ///
@@ -104,21 +105,30 @@ module model {
         })
 
       // If we cannot resolve synchronously, then we need to queue the job
-      | None => all {
-        arbiters' = arbiters.put(arbiterDid, arbiter
-          .nextVersion()
-          .with("jobQueue", arbiter.jobQueue.put(jobId, {
-            id: jobId,
-            userDid: userDid,
-            spaceKey: spaceKey,
-            args: args,
-            unresolvedMembers: unresolvedMembers,
-            resolvedSpaces: Map(),
-            arbiterVersion: arbiter.version,
-          }))
-        ),
-        error' = None,
-      }
+      | None => 
+        // Get the list of existing jobs queued for this user
+        def usersJobs = arbiter.jobQueue.keys().filter(jobId => arbiter.jobQueue.get(jobId).userDid == userDid)
+
+        // Make sure they don't have more than 1 in-progress job. This is a basic rate-limit to help
+        // prevent DoS and isn't bad anyway because concurrent mutations will be rejected by the
+        // compare-and-swap step anyway.
+        if (usersJobs.size() > 0) throw(ErrOperationAlreadyInProgress) else
+
+        all {
+          arbiters' = arbiters.put(arbiterDid, arbiter
+            .nextVersion()
+            .with("jobQueue", arbiter.jobQueue.put(jobId, {
+              id: jobId,
+              userDid: userDid,
+              spaceKey: spaceKey,
+              args: args,
+              unresolvedMembers: unresolvedMembers,
+              resolvedSpaces: Map(),
+              arbiterVersion: arbiter.version,
+            }))
+          ),
+          error' = None,
+        }
     }}
 
   /// Provide the resolved space member list for a job that was waiting on a member list to be resolved.
