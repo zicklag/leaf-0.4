@@ -41,6 +41,14 @@ module model {
     error' = Some(e),
   }
 
+  /// Throw an error and remove a job from the job queue
+  action throwJobErr(e: Error, arbiterDid: ArbiterDid, jobId: JobId): bool =
+    def arbiter = arbiters.get(arbiterDid)
+    all {
+      arbiters' = arbiters.put(arbiterDid, arbiter.removeJob(jobId)),
+      error' = Some(e),
+    }
+
   action ok: bool = all {
     arbiters' = arbiters,
     error' = None,
@@ -48,7 +56,8 @@ module model {
   
   /// Create a new arbiter.
   ///
-  /// The user the authenticated user carrying out the action.
+  /// NOTE: the `userDid` is required to be authenticated by the wrapper around the arbiter state
+  /// machine.
   action create(userDid: UserDid, arbiterDid: ArbiterDid): bool = 
     // Check arbiter exists
     if (arbiters.has(arbiterDid)) throw(ErrArbiterAlreadyExists) else
@@ -74,7 +83,10 @@ module model {
       error' = None,
     }
 
-  /// Receive a new job to process 
+  /// Receive a new job to process.
+  ///
+  /// NOTE: the `userDid` is required to be authenticated by the wrapper around the arbiter state
+  /// machine as having actually come from the did.
   action startJob(userDid: UserDid, arbiterDid: ArbiterDid, spaceKey: SpaceKey, jobId: JobId, args: JobArgs): bool =
     def arbiter = arbiters.get(arbiterDid)
 
@@ -112,6 +124,13 @@ module model {
         // Make sure they don't have more than 1 in-progress job. This is a basic rate-limit to help
         // prevent DoS and isn't bad anyway because concurrent mutations will be rejected by the
         // compare-and-swap step anyway.
+        //
+        // NOTE: this doesn't prevent exhaustion of resources by many _different_ DIDs submitting jobs at the
+        // same time. We leave that concern to the wrapper, because if we blocked it here, it would allow
+        // attackers to overwhelm the service preventing a legit user from actually getting in.
+        //
+        // The wrapper is the best place to handle this because it can take into account things like IP
+        // addresses and limit based on that.
         if (usersJobs.size() > 0) throw(ErrOperationAlreadyInProgress) else
 
         all {
@@ -131,7 +150,12 @@ module model {
         }
     }}
 
-  /// Provide the resolved space member list for a job that was waiting on a member list to be resolved.
+  /// Provide the resolved space member list for a job that was waiting on a member list to be
+  /// resolved.
+  ///
+  /// NOTE: This action is assumed to be called by a trusted wrapper around the arbiter core. The
+  /// resolved member list / must be validated using mechanisms like HTTPs to ensure it actually came
+  /// from the remote arbiter with the given DID.
   action provideRemoteSpaceMembers(arbiterDid: ArbiterDid, jobId: JobId, spaceId: SpaceId, members: ResolvedMemberList): bool =
     def arbiter = arbiters.get(arbiterDid)
     def job = arbiter.jobQueue.get(jobId)
@@ -246,13 +270,13 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
 
     // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
+    if (not(arbiters.has(arbiterDid))) throwJobErr(ErrArbiterNotExists, arbiterDid, job.id) else
 
     // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
-    if (arbiter.version != job.arbiterVersion) throw(ErrPermissionChanged) else
+    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
 
     // Check that the user is in the member list
-    if (not(resolved.memberList.has(job.userDid))) throw(ErrPermissionDenied) else
+    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     match (job.args) {
       | JobCreateSpace => createSpace(arbiterDid, resolved, job)
@@ -272,17 +296,18 @@ module model {
     def memberAccess = resolved.memberList.get(job.userDid)
 
     // Check space doesn't exist
-    if (arbiter.spaces.has(job.spaceKey)) throw(ErrSpaceAlreadyExists) else
+    if (arbiter.spaces.has(job.spaceKey)) throwJobErr(ErrSpaceAlreadyExists, arbiterDid, job.id) else
 
     // Check that the user has access to create spaces
     // NOTE: The space did not exist at the time the job was started, so the member list will only
     // include those in the admin role, which is appropriate for us to check who can create a space.
-    if (not(memberAccess.includesAccess(CreateSpaces))) throw(ErrPermissionDenied) else
+    if (not(memberAccess.includesAccess(CreateSpaces))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     all {
       // Create the new space
       arbiters' = arbiters.put(arbiterDid, arbiter
         .nextVersion()
+        .removeJob(job.id)
         .with("spaces", arbiter.spaces.put(job.spaceKey, {
           config: SpaceConfig::default,
           members: Map(),
@@ -301,15 +326,16 @@ module model {
     def space = arbiter.spaces.get(job.spaceKey)
 
     // Check space exists
-    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
 
     // Check that the user has access to configure the space
-    if (userAccess.includesAccess(ConfigureSpace)) throw(ErrPermissionDenied) else
+    if (not(userAccess.includesAccess(ConfigureSpace))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     all {
       // Configure the space
       arbiters' = arbiters.put(arbiterDid, arbiter
         .nextVersion()
+        .removeJob(job.id)
         .with("spaces",
           arbiter.spaces.put(job.spaceKey, space.with("config", config)))),
       error' = None,
@@ -325,19 +351,20 @@ module model {
     def space = arbiter.spaces.get(job.spaceKey)
 
     // Check space exists
-    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
 
     // Make sure we don't delete the $admin space
     // ( we already checked this earlier in jobValidationError but just to be sure... )
-    if (job.spaceKey == SpaceKey::ADMIN) throw(ErrCannotDeleteAdminSpace) else
+    if (job.spaceKey == SpaceKey::ADMIN) throwJobErr(ErrCannotDeleteAdminSpace, arbiterDid, job.id) else
 
     // Check that the user has access to delete the space
-    if (not(userAccess.includesAccess(RemoveSpace))) throw(ErrPermissionDenied) else
+    if (not(userAccess.includesAccess(RemoveSpace))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     all {
       // Remove the space from the arbiter
       arbiters' = arbiters.put(arbiterDid, arbiter
         .nextVersion()
+        .removeJob(job.id)
         .with("spaces", arbiter.spaces.mapRemove(job.spaceKey))),
       error' = None,
     }
@@ -354,27 +381,28 @@ module model {
     def space = arbiter.spaces.get(job.spaceKey)
 
     // Check space exists
-    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
 
     // Check that the user has access to add members
-    if (not(userAccess.includesAccess(AddMembers))) throw(ErrPermissionDenied) else
+    if (not(userAccess.includesAccess(AddMembers))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     // Check that the access the user is trying to grant the member is less than or equal to their own
-    if (not(userAccess.includesAccess(updatedMemberAccess))) throw(ErrPermissionDenied) else
+    if (not(userAccess.includesAccess(updatedMemberAccess))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     def updatedMemberExists = space.members.has(updatedMember)
     def updatedMemberExistingAccess = space.members.get(updatedMember)
 
     // Check that the user isn't modifying the access of a member that already exists, if they don't have RemoveMember permission
-    if (updatedMemberExists and not(userAccess.includesAccess(RemoveMembers))) throw(ErrPermissionDenied) else
+    if (updatedMemberExists and not(userAccess.includesAccess(RemoveMembers))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     // Check that the user isn't modifying the access of a member that already exists, if the updated member has more access than the user
-    if (updatedMemberExists and updatedMemberExistingAccess.accessLevel() > userAccess.accessLevel()) throw(ErrPermissionDenied) else
+    if (updatedMemberExists and updatedMemberExistingAccess.accessLevel() > userAccess.accessLevel()) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     all {
       // Update the member's access
       arbiters' = arbiters.put(arbiterDid, arbiter
         .nextVersion()
+        .removeJob(job.id)
         .with("spaces", arbiter.spaces.put(job.spaceKey, space
           .with("members", space.members.put(updatedMember, updatedMemberAccess))
         ))
@@ -394,18 +422,19 @@ module model {
     def removedMemberAccess = space.members.get(removedMember)
 
     // Check space exists
-    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
 
     // Check that the user has access to remove members
-    if (not(userAccess.includesAccess(RemoveMembers))) throw(ErrPermissionDenied) else
+    if (not(userAccess.includesAccess(RemoveMembers))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     // Check that the user isn't removing a member that has more access than they do
-    if (removedMemberAccess.accessLevel() > userAccess.accessLevel()) throw(ErrPermissionDenied) else
+    if (removedMemberAccess.accessLevel() > userAccess.accessLevel()) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     all {
       // Remove the member
       arbiters' = arbiters.put(arbiterDid, arbiter
         .nextVersion()
+        .removeJob(job.id)
         .with("spaces", arbiter.spaces.put(job.spaceKey, space
           .with("members", space.members.mapRemove(removedMember))
         ))
@@ -423,14 +452,14 @@ module model {
     def space = arbiter.spaces.get(job.spaceKey)
 
     // Check that the space is the admin one
-    if (not(job.spaceKey == SpaceKey::ADMIN)) throw(ErrArbiterDeletionMustSpecifyAdminSpace) else
+    if (not(job.spaceKey == SpaceKey::ADMIN)) throwJobErr(ErrArbiterDeletionMustSpecifyAdminSpace, arbiterDid, job.id) else
 
     // Check that the user has `Owner` access
-    if (not(userAccess.includesAccess(Owner))) throw(ErrPermissionDenied) else
+    if (not(userAccess.includesAccess(Owner))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     // Check that space only has one member.
     // We don't want to allow you to delete an arbiter unless you're the last admin delegation.
-    if (space.members.keys().size() > 1) throw(ErrOnlyLastOwnerCanDeleteArbiter) else
+    if (space.members.keys().size() > 1) throwJobErr(ErrOnlyLastOwnerCanDeleteArbiter, arbiterDid, job.id) else
 
     all {
       // Remove the arbiter
@@ -472,6 +501,7 @@ module model {
     // types we have since each space might be visited up to once per access state.
     def spaceCount = arbiter.spaces.keys().size()
     def accessCount = Accesses.size()
+    // TODO: maybe we should limit the recursion depth to prevent a DoS attack vector.
     def recursionDepth = spaceCount * accessCount
     def outputState = 0.to(recursionDepth).fold(initState, (state, i) =>
       // Then we visit every space in the queue
@@ -669,13 +699,24 @@ module model {
 
   /// Arbiter invariants
   val Inv = all {
-    InvArbiterSpaceAlwaysExists
+    InvArbiterSpaceAlwaysExists,
+    InvArbiterHasAtLeastOneOwner,
   }
 
   /// The special `$admin` space always exists in every arbiter
   val InvArbiterSpaceAlwaysExists =
     arbiters.keys().forall(arbiterDid =>
       SpaceKey::ADMIN.in(arbiters.get(arbiterDid).spaces.keys())
+    )
+
+  val InvArbiterHasAtLeastOneOwner =
+    arbiters.keys().forall(arbiterDid =>
+      def arbiter = arbiters.get(arbiterDid)
+      def space = arbiter.spaces.get(SpaceKey::ADMIN)
+      space.members.keys().exists(member =>
+        def access = space.members.get(member)
+        access == Owner
+      )
     )
 }
 
@@ -897,8 +938,19 @@ module types {
     jobResults: JobId -> bool
   }
 
-  /// Increment the version number on the arbiter
-  pure def nextVersion(a: Arbiter): Arbiter = a.with("version", a.version + 1)
+  /// Increment the version number on the arbiter with a u32 wrapping add.
+  ///
+  /// This doesn't make it _impossible_ for a version collision due to wrapping, but it
+  /// would take a little over an hour with 1 million modifications per second, for the
+  /// u32 to wrap, so it is a requirement that the wrapper call `timeout` on a job before
+  /// it gets that old.
+  /// 
+  /// FIXME: Can we enforce that by forcing a timeout on old jobs?
+  pure def nextVersion(a: Arbiter): Arbiter = a.with("version", a.version + 1 % 2^32)
+
+  /// Remove a job from the job queue
+  pure def removeJob(arbiter: Arbiter, jobId: JobId): Arbiter =
+    arbiter.with("jobQueue", arbiter.jobQueue.mapRemove(jobId))
 
   pure def isSome(opt: Option): bool =
     match (opt) { | Some => true | None => false }
