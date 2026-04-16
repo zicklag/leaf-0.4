@@ -15,7 +15,7 @@ module model {
     | ErrOnlyLastOwnerCanDeleteArbiter
     | ErrCannotDeleteAdminSpace
     | ErrMemberNotExist
-    | ErrMembership
+    | ErrPermissionChanged
 
   /// The list of arbiters.
   ///
@@ -98,19 +98,22 @@ module model {
           spaceKey: spaceKey,
           args: args,
           unresolvedMembers: unresolvedMembers,
-          resolvedSpaces: Map()
+          resolvedSpaces: Map(),
+          arbiterVersion: arbiter.version,
         })
 
       // If we cannot resolve synchronously, then we need to queue the job
       | None => all {
-        arbiters' = arbiters.put(arbiterDid,
-          arbiter.with("jobQueue", arbiter.jobQueue.put(jobId, {
+        arbiters' = arbiters.put(arbiterDid, arbiter
+          .nextVersion()
+          .with("jobQueue", arbiter.jobQueue.put(jobId, {
             id: jobId,
             userDid: userDid,
             spaceKey: spaceKey,
             args: args,
             unresolvedMembers: unresolvedMembers,
             resolvedSpaces: Map(),
+            arbiterVersion: arbiter.version,
           }))
         ),
         error' = None,
@@ -149,9 +152,10 @@ module model {
     // If the job is not ready
     else
       all {
-        // Just updated the queued job's resolved spaces
-        arbiters' = arbiters.put(arbiterDid,
-          arbiter.with("jobQueue",
+        // Just update the queued job's resolved spaces
+        arbiters' = arbiters.put(arbiterDid, arbiter
+          .nextVersion()
+          .with("jobQueue",
             arbiter.jobQueue.put(jobId,
               job.with("resolvedSpaces", resolvedSpaces) 
             )
@@ -218,6 +222,14 @@ module model {
     members: ResolvedMemberList,
     job: Job,
   ): bool =
+    def arbiter = arbiters.get(arbiterDid)
+
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
+
+    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
+    if (arbiter.version != job.arbiterVersion) throw(ErrPermissionChanged) else
+
     match (job.args) {
       | JobCreateSpace => createSpace(arbiterDid, members, job)
       | JobConfigureSpace(config) => configureSpace(arbiterDid, members, job, config)
@@ -234,8 +246,6 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
     def memberAccess = resolved.memberList.get(job.userDid)
 
-    // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check space doesn't exist
     if (arbiter.spaces.has(job.spaceKey)) throw(ErrSpaceAlreadyExists) else
 
@@ -248,10 +258,12 @@ module model {
 
     all {
       // Create the new space
-      arbiters' = arbiters.put(arbiterDid, arbiter.with("spaces", arbiter.spaces.put(job.spaceKey, {
-        config: SpaceConfig::default,
-        members: Map(),
-      }))),
+      arbiters' = arbiters.put(arbiterDid, arbiter
+        .nextVersion()
+        .with("spaces", arbiter.spaces.put(job.spaceKey, {
+          config: SpaceConfig::default,
+          members: Map(),
+        }))),
       error' = None,
     }
 
@@ -265,8 +277,6 @@ module model {
     def memberAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
 
-    // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
     // Check that the user has access to configure the space
@@ -276,8 +286,10 @@ module model {
 
     all {
       // Configure the space
-      arbiters' = arbiters.put(arbiterDid, arbiter.with("spaces",
-        arbiter.spaces.put(job.spaceKey, space.with("config", config)))),
+      arbiters' = arbiters.put(arbiterDid, arbiter
+        .nextVersion()
+        .with("spaces",
+          arbiter.spaces.put(job.spaceKey, space.with("config", config)))),
       error' = None,
     }
 
@@ -290,8 +302,6 @@ module model {
     def memberAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
 
-    // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
     // Make sure we don't delete the $admin space ( we already checked this earlier in jobValidationError but just to be sure )
@@ -303,8 +313,9 @@ module model {
 
     all {
       // Remove the space from the arbiter
-      arbiters' =
-        arbiters.put(arbiterDid, arbiter.with("spaces", arbiter.spaces.mapRemove(job.spaceKey))),
+      arbiters' = arbiters.put(arbiterDid, arbiter
+        .nextVersion()
+        .with("spaces", arbiter.spaces.mapRemove(job.spaceKey))),
       error' = None,
     }
 
@@ -315,6 +326,7 @@ module model {
     member: Member,
     access: Access
   ): bool =
+    // TODO: When implemented, must increment space memberVersion to invalidate queued jobs
     all {
       arbiters' = arbiters,
       error' = None,
@@ -326,6 +338,7 @@ module model {
     job: Job,
     member: Member,
   ): bool =
+    // TODO: When implemented, must increment space memberVersion to invalidate queued jobs
     all {
       arbiters' = arbiters,
       error' = None,
@@ -783,6 +796,8 @@ module types {
     // Once all of the external spaces in the unresolvedList have been resolved
     // we can produce the final member list and then actually perform the operation.
     resolvedSpaces: SpaceId -> ResolvedMemberList, 
+    // The version of the arbiter when the job was started
+    arbiterVersion: int,
   }
 
   /// Data for an arbiter
@@ -799,6 +814,9 @@ module types {
     // The results from finished jobs. Will be true if the job succeeded
     jobResults: JobId -> bool
   }
+
+  /// Increment the version number on the arbiter
+  pure def nextVersion(a: Arbiter): Arbiter = a.with("version", a.version + 1)
 
   pure def isSome(opt: Option): bool =
     match (opt) { | Some => true | None => false }
