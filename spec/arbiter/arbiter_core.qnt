@@ -68,7 +68,6 @@ module model {
         version: 0,
         did: arbiterDid,
         jobQueue: Map(),
-        jobResults: Map(),
         spaces: Map(
           // Create the special $admin space
           SpaceKey::ADMIN -> {
@@ -93,7 +92,7 @@ module model {
     // Check arbiter exists
     if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check Job ID not already used
-    if (arbiter.jobQueue.has(jobId) or arbiter.jobResults.has(jobId)) throw(ErrJobIdAlreadyUsed) else
+    if (arbiter.jobQueue.has(jobId)) throw(ErrJobIdAlreadyUsed) else
 
     // Do some validation on the job
     match (jobValidationError(arbiter, spaceKey, args)) { | Some(err) => throw(err) | None =>
@@ -156,6 +155,9 @@ module model {
   /// NOTE: This action is assumed to be called by a trusted wrapper around the arbiter core. The
   /// resolved member list / must be validated using mechanisms like HTTPs to ensure it actually came
   /// from the remote arbiter with the given DID.
+  ///
+  /// NOTE: providing a completely enormous resolved member list is potentially a DoS vector. This
+  /// should be handled by the wrapper.
   action provideRemoteSpaceMembers(arbiterDid: ArbiterDid, jobId: JobId, spaceId: SpaceId, members: ResolvedMemberList): bool =
     def arbiter = arbiters.get(arbiterDid)
     def job = arbiter.jobQueue.get(jobId)
@@ -501,7 +503,6 @@ module model {
     // types we have since each space might be visited up to once per access state.
     def spaceCount = arbiter.spaces.keys().size()
     def accessCount = Accesses.size()
-    // TODO: maybe we should limit the recursion depth to prevent a DoS attack vector.
     def recursionDepth = spaceCount * accessCount
     def outputState = 0.to(recursionDepth).fold(initState, (state, i) =>
       // Then we visit every space in the queue
@@ -934,8 +935,6 @@ module types {
     spaces: SpaceKey -> Space,
     // Space resolution jobs that are work-in-progress
     jobQueue: JobId -> Job,
-    // The results from finished jobs. Will be true if the job succeeded
-    jobResults: JobId -> bool
   }
 
   /// Increment the version number on the arbiter with a u32 wrapping add.
