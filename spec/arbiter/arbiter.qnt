@@ -12,7 +12,10 @@ module model {
     | ErrSpaceAlreadyExists
     | ErrSpaceNotExists
     | ErrPermissionDenied
+    | ErrOnlyLastOwnerCanDeleteArbiter
+    | ErrCannotDeleteAdminSpace
     | ErrMemberNotExist
+    | ErrMembership
 
   /// The list of arbiters.
   ///
@@ -51,6 +54,7 @@ module model {
     all {
       // Add arbiter
       arbiters' = arbiters.put(arbiterDid, {
+        version: 0,
         did: arbiterDid,
         jobQueue: Map(),
         jobResults: Map(),
@@ -182,19 +186,25 @@ module model {
   /// Return any validation errors for the job if there are issues
   pure def jobValidationError(arbiter: Arbiter, spaceKey: SpaceKey, args: JobArgs): Option[Error] =
     match (args) {
-      | CreateSpace =>
+      | JobCreateSpace =>
         // Make sure the space doesn't already exist
         if (arbiter.spaces.has(spaceKey)) Some(ErrSpaceAlreadyExists)
         else None
-      | DeleteSpace =>
+      | JobConfigureSpace(x) =>
         // Make sure the space exists
         if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
         else None
-      | SetMemberAccess(x) =>
+      | JobDeleteSpace =>
+        // Make sure we don't delete the $admin space
+        if (spaceKey == SpaceKey::ADMIN) Some(ErrCannotDeleteAdminSpace) else
         // Make sure the space exists
         if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
         else None
-      | RemoveMember(x) => 
+      | JobSetMemberAccess(x) =>
+        // Make sure the space exists
+        if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
+        else None
+      | JobRemoveMember(x) => 
         def space = arbiter.spaces.get(spaceKey)
         // Make sure the space exists
         if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
@@ -209,10 +219,11 @@ module model {
     job: Job,
   ): bool =
     match (job.args) {
-      | CreateSpace => createSpace(arbiterDid, members, job)
-      | DeleteSpace => deleteSpace(arbiterDid, members, job)
-      | SetMemberAccess(m) => setMemberAccess(arbiterDid, members, job, m.member, m.access)
-      | RemoveMember(args) => removeMember(arbiterDid, members, job, args.member)
+      | JobCreateSpace => createSpace(arbiterDid, members, job)
+      | JobConfigureSpace(config) => configureSpace(arbiterDid, members, job, config)
+      | JobDeleteSpace => deleteSpace(arbiterDid, members, job)
+      | JobSetMemberAccess(m) => setMemberAccess(arbiterDid, members, job, m.member, m.access)
+      | JobRemoveMember(args) => removeMember(arbiterDid, members, job, args.member)
     }
 
   action createSpace(
@@ -229,25 +240,71 @@ module model {
     if (arbiter.spaces.has(job.spaceKey)) throw(ErrSpaceAlreadyExists) else
 
     // Check that the user has access to create spaces
-
-    // NOTE: If the space did not exist at the time the job was started, the only members in the
-    // list will be those in the admin group which is delegated to by every space and included in
-    // the member list even if a space does not exist.
-    if (not(memberAccess.includesAccess(CreateSpaces))) throw(ErrPermissionDenied) else
+    // NOTE: The space did not exist at the time the job was started, so the member list will only
+    // include those in the admin role, which is appropriate for us to check who can create a space.
+    if (not(resolved.memberList.has(job.userDid)) or not(memberAccess.includesAccess(CreateSpaces)))
+      throw(ErrPermissionDenied)
+    else
 
     all {
-      arbiters' = arbiters,
+      // Create the new space
+      arbiters' = arbiters.put(arbiterDid, arbiter.with("spaces", arbiter.spaces.put(job.spaceKey, {
+        config: SpaceConfig::default,
+        members: Map(),
+      }))),
+      error' = None,
+    }
+
+  action configureSpace(
+    arbiterDid: ArbiterDid, 
+    resolved: ResolvedMemberList,
+    job: Job,
+    config: SpaceConfig
+  ): bool =
+    def arbiter = arbiters.get(arbiterDid)
+    def memberAccess = resolved.memberList.get(job.userDid)
+    def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
+    // Check space exists
+    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    // Check that the user has access to configure the space
+    if (not(resolved.memberList.has(job.userDid)) or not(memberAccess.includesAccess(ConfigureSpace)))
+      throw(ErrPermissionDenied)
+    else
+
+    all {
+      // Configure the space
+      arbiters' = arbiters.put(arbiterDid, arbiter.with("spaces",
+        arbiter.spaces.put(job.spaceKey, space.with("config", config)))),
       error' = None,
     }
 
   action deleteSpace(
     arbiterDid: ArbiterDid, 
-    members: ResolvedMemberList,
+    resolved: ResolvedMemberList,
     job: Job,
   ): bool =
+    def arbiter = arbiters.get(arbiterDid)
+    def memberAccess = resolved.memberList.get(job.userDid)
+    def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check arbiter exists
+    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
+    // Check space exists
+    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    // Make sure we don't delete the $admin space ( we already checked this earlier in jobValidationError but just to be sure )
+    if (job.spaceKey == SpaceKey::ADMIN) throw(ErrCannotDeleteAdminSpace) else
+    // Check that the user has access to delete the space
+    if (not(resolved.memberList.has(job.userDid)) or not(memberAccess.includesAccess(RemoveSpace)))
+      throw(ErrPermissionDenied)
+    else
 
     all {
-      arbiters' = arbiters,
+      // Remove the space from the arbiter
+      arbiters' =
+        arbiters.put(arbiterDid, arbiter.with("spaces", arbiter.spaces.mapRemove(job.spaceKey))),
       error' = None,
     }
 
@@ -553,6 +610,8 @@ module types {
     | AddMembers
     // Member can remove members with equal or lower permission from the space
     | RemoveMembers
+    // Member can change the space's configuration
+    | ConfigureSpace
     //  Member can delete only the space that this access is granted to
     | RemoveSpace
 
@@ -574,6 +633,7 @@ module types {
     AccessRecords,
     AddMembers,
     RemoveMembers,
+    ConfigureSpace,
     RemoveSpace,
     CreateSpaces,
     RemoveAnySpace,
@@ -588,12 +648,13 @@ module types {
       | AccessRecords => 0
       | AddMembers => 1
       | RemoveMembers => 2
-      | RemoveSpace => 3
-      | CreateSpaces => 4
-      | RemoveAnySpace => 5
-      | AddAdmins => 6
-      | RemoveAdmins => 7
-      | Owner => 8
+      | ConfigureSpace => 3
+      | RemoveSpace => 4
+      | CreateSpaces => 5
+      | RemoveAnySpace => 6
+      | AddAdmins => 7
+      | RemoveAdmins => 8
+      | Owner => 9
     }
 
   /// Get the smaller of the provided accesses
@@ -692,13 +753,14 @@ module types {
 
   /// This represents a call to perform some action on the arbiter.
   type JobArgs = 
-    | CreateSpace
-    | DeleteSpace
-    | SetMemberAccess({
+    | JobCreateSpace
+    | JobConfigureSpace(SpaceConfig)
+    | JobDeleteSpace
+    | JobSetMemberAccess({
         member: Member,
         access: Access,
       })
-    | RemoveMember({
+    | JobRemoveMember({
       member: Member
     })
 
@@ -725,6 +787,9 @@ module types {
 
   /// Data for an arbiter
   type Arbiter = {
+    // Monotonic version of the arbiter config that is updated for every change to the arbiter and
+    // that is used for compare-and-swap updates to the arbiter config.
+    version: int,
     // The arbiter's DID
     did: ArbiterDid,
     // The spaces managed by the arbiter
