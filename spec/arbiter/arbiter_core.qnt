@@ -12,10 +12,11 @@ module model {
     | ErrSpaceAlreadyExists
     | ErrSpaceNotExists
     | ErrPermissionDenied
-    | ErrOnlyLastOwnerCanDeleteArbiter
     | ErrCannotDeleteAdminSpace
     | ErrMemberNotExist
     | ErrPermissionChanged
+    | ErrArbiterDeletionMustSpecifyAdminSpace
+    | ErrOnlyLastOwnerCanDeleteArbiter
 
   /// The list of arbiters.
   ///
@@ -215,12 +216,21 @@ module model {
         // Make sure the member is in the space
         else if (not(space.members.has(x.member))) Some(ErrMemberNotExist)
         else None
+      | JobDeleteArbiter(x) =>
+        def space = arbiter.spaces.get(spaceKey)
+        // Require the space key to be $admin just to be explicit.
+        // NOTE: this is a little weird but allows us to keep the jobs homogenously including the space key.
+        if (not(spaceKey == SpaceKey::ADMIN)) Some(ErrArbiterDeletionMustSpecifyAdminSpace) else
+        // Make sure there is only a single delegation in the $admin space.
+        // We want you to remove all other admins before you can delete the arbiter.
+        if (space.members.keys().size() > 1) Some(ErrOnlyLastOwnerCanDeleteArbiter)
+        else None
     }
 
   /// Finishes the execution of a job, applying the changes, or erroring if they are invalid.
   action executeJob(
     arbiterDid: ArbiterDid, 
-    members: ResolvedMemberList,
+    resolved: ResolvedMemberList,
     job: Job,
   ): bool =
     def arbiter = arbiters.get(arbiterDid)
@@ -231,12 +241,16 @@ module model {
     // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
     if (arbiter.version != job.arbiterVersion) throw(ErrPermissionChanged) else
 
+    // Check that the user is in the member list
+    if (not(resolved.memberList.has(job.userDid))) throw(ErrPermissionDenied) else
+
     match (job.args) {
-      | JobCreateSpace => createSpace(arbiterDid, members, job)
-      | JobConfigureSpace(config) => configureSpace(arbiterDid, members, job, config)
-      | JobDeleteSpace => deleteSpace(arbiterDid, members, job)
-      | JobSetMemberAccess(m) => setMemberAccess(arbiterDid, members, job, m.member, m.access)
-      | JobRemoveMember(args) => removeMember(arbiterDid, members, job, args.member)
+      | JobCreateSpace => createSpace(arbiterDid, resolved, job)
+      | JobConfigureSpace(config) => configureSpace(arbiterDid, resolved, job, config)
+      | JobDeleteSpace => deleteSpace(arbiterDid, resolved, job)
+      | JobSetMemberAccess(m) => setMemberAccess(arbiterDid, resolved, job, m.member, m.access)
+      | JobRemoveMember(args) => removeMember(arbiterDid, resolved, job, args.member)
+      | JobDeleteArbiter(args) => deleteArbiter(arbiterDid, resolved, job)
     }
 
   action createSpace(
@@ -253,9 +267,7 @@ module model {
     // Check that the user has access to create spaces
     // NOTE: The space did not exist at the time the job was started, so the member list will only
     // include those in the admin role, which is appropriate for us to check who can create a space.
-    if (not(resolved.memberList.has(job.userDid)) or not(memberAccess.includesAccess(CreateSpaces)))
-      throw(ErrPermissionDenied)
-    else
+    if (not(memberAccess.includesAccess(CreateSpaces))) throw(ErrPermissionDenied) else
 
     all {
       // Create the new space
@@ -280,10 +292,9 @@ module model {
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+
     // Check that the user has access to configure the space
-    if (not(resolved.memberList.has(job.userDid) and userAccess.includesAccess(ConfigureSpace)))
-      throw(ErrPermissionDenied)
-    else
+    if (userAccess.includesAccess(ConfigureSpace)) throw(ErrPermissionDenied) else
 
     all {
       // Configure the space
@@ -305,12 +316,13 @@ module model {
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
-    // Make sure we don't delete the $admin space ( we already checked this earlier in jobValidationError but just to be sure )
+
+    // Make sure we don't delete the $admin space
+    // ( we already checked this earlier in jobValidationError but just to be sure... )
     if (job.spaceKey == SpaceKey::ADMIN) throw(ErrCannotDeleteAdminSpace) else
+
     // Check that the user has access to delete the space
-    if (not(resolved.memberList.has(job.userDid) and userAccess.includesAccess(RemoveSpace)))
-      throw(ErrPermissionDenied)
-    else
+    if (not(userAccess.includesAccess(RemoveSpace))) throw(ErrPermissionDenied) else
 
     all {
       // Remove the space from the arbiter
@@ -333,10 +345,10 @@ module model {
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
-    // Check that the user has access to the space
-    if (not(resolved.memberList.has(job.userDid))) throw(ErrPermissionDenied) else
+
     // Check that the user has access to add members
     if (not(userAccess.includesAccess(AddMembers))) throw(ErrPermissionDenied) else
+
     // Check that the access the user is trying to grant the member is less than or equal to their own
     if (not(userAccess.includesAccess(updatedMemberAccess))) throw(ErrPermissionDenied) else
 
@@ -345,6 +357,7 @@ module model {
 
     // Check that the user isn't modifying the access of a member that already exists, if they don't have RemoveMember permission
     if (updatedMemberExists and not(userAccess.includesAccess(RemoveMembers))) throw(ErrPermissionDenied) else
+
     // Check that the user isn't modifying the access of a member that already exists, if the updated member has more access than the user
     if (updatedMemberExists and updatedMemberExistingAccess.accessLevel() > userAccess.accessLevel()) throw(ErrPermissionDenied) else
 
@@ -372,8 +385,7 @@ module model {
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
-    // Check that the member is in the space
-    if (not(space.members.has(removedMember))) throw(ErrMemberNotExist) else
+
     // Check that the user has access to remove members
     if (not(userAccess.includesAccess(RemoveMembers))) throw(ErrPermissionDenied) else
 
@@ -390,8 +402,32 @@ module model {
       ),
       error' = None,
     }
-    
 
+  action deleteArbiter(
+    arbiterDid: ArbiterDid, 
+    resolved: ResolvedMemberList,
+    job: Job,
+  ): bool =
+    def arbiter = arbiters.get(arbiterDid)
+    def userAccess = resolved.memberList.get(job.userDid)
+    def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check that the space is the admin one
+    if (not(job.spaceKey == SpaceKey::ADMIN)) throw(ErrArbiterDeletionMustSpecifyAdminSpace) else
+
+    // Check that the user has `Owner` access
+    if (not(userAccess.includesAccess(Owner))) throw(ErrPermissionDenied) else
+
+    // Check that space only has one member.
+    // We don't want to allow you to delete an arbiter unless you're the last admin delegation.
+    if (space.members.keys().size() > 1) throw(ErrOnlyLastOwnerCanDeleteArbiter) else
+
+    all {
+      // Remove the arbiter
+      arbiters' = arbiters.mapRemove(arbiterDid),
+      error' = None,
+    }
+    
   //
   // DEFINITIONS
   //
@@ -811,6 +847,7 @@ module types {
     | JobRemoveMember({
       member: Member
     })
+    | JobDeleteArbiter
 
   type JobId = int
   
