@@ -2,6 +2,14 @@
 module model {
   import types.*
 
+  type Result =
+    | Ok
+    | QueuedJob
+    | FinishedJob({
+      id: JobId,
+      result: JobResult
+    })
+    | Err(Error)
   type Error =
     | ErrArbiterAlreadyExists
     | ErrArbiterNotExists
@@ -25,7 +33,7 @@ module model {
   /// impossible to make updates atomically across multiple arbiters.
   var arbiters: ArbiterDid -> Arbiter
 
-  var error: Option[Error]
+  var result: Result
   
   /// Initial state
   action initArbiter = all {
@@ -38,7 +46,7 @@ module model {
 
   action throw(e: Error): bool = all {
     arbiters' = arbiters,
-    error' = Some(e),
+    result' = Err(e),
   }
 
   /// Throw an error and remove a job from the job queue
@@ -46,12 +54,12 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
     all {
       arbiters' = arbiters.put(arbiterDid, arbiter.removeJob(jobId)),
-      error' = Some(e),
+      result' = Err(e),
     }
 
   action ok: bool = all {
     arbiters' = arbiters,
-    error' = None,
+    result' = Ok,
   }
   
   /// Create a new arbiter.
@@ -79,7 +87,7 @@ module model {
           }
         )
       }),
-      error' = None,
+      result' = Ok,
     }
 
   /// Receive a new job to process.
@@ -145,7 +153,7 @@ module model {
               arbiterVersion: arbiter.version,
             }))
           ),
-          error' = None,
+          result' = QueuedJob,
         }
     }}
 
@@ -198,7 +206,7 @@ module model {
             )
           )
         ),
-        error' = None,
+        result' = Ok,
       }
 
   /// Timeout a job that is in the queue and waiting for space member lists to be resolved.
@@ -227,6 +235,10 @@ module model {
   /// Return any validation errors for the job if there are issues
   pure def jobValidationError(arbiter: Arbiter, spaceKey: SpaceKey, args: JobArgs): Option[Error] =
     match (args) {
+      | JobFetchMembers =>
+        // Make sure the space exists
+        if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
+        else None
       | JobCreateSpace =>
         // Make sure the space doesn't already exist
         if (arbiter.spaces.has(spaceKey)) Some(ErrSpaceAlreadyExists)
@@ -274,19 +286,39 @@ module model {
     // Check arbiter exists
     if (not(arbiters.has(arbiterDid))) throwJobErr(ErrArbiterNotExists, arbiterDid, job.id) else
 
-    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
-    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
-
-    // Check that the user is in the member list
-    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
-
     match (job.args) {
+      | JobFetchMembers => fetchMembers(arbiterDid, resolved, job)
       | JobCreateSpace => createSpace(arbiterDid, resolved, job)
       | JobConfigureSpace(config) => configureSpace(arbiterDid, resolved, job, config)
       | JobDeleteSpace => deleteSpace(arbiterDid, resolved, job)
       | JobSetMemberAccess(m) => setMemberAccess(arbiterDid, resolved, job, m.member, m.access)
       | JobRemoveMember(args) => removeMember(arbiterDid, resolved, job, args.member)
       | JobDeleteArbiter(args) => deleteArbiter(arbiterDid, resolved, job)
+    }
+
+  action fetchMembers(
+    arbiterDid: ArbiterDid, 
+    resolved: ResolvedMemberList,
+    job: Job,
+  ): bool = 
+    def arbiter = arbiters.get(arbiterDid)
+    def space = arbiter.spaces.get(job.spaceKey)
+    def memberAccess = resolved.memberList.get(job.userDid)
+
+    // Check space exists
+    if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
+
+    // Make sure that the user is a member of the group, if the group list is not public
+    if (not(space.config.publicMembers) and not(resolved.memberList.has(job.userDid)))
+      throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
+
+    all {
+      arbiters' = arbiters,
+      // Return the member list with the job result
+      result' = FinishedJob({
+        id: job.id,
+        result: JobOkResolvedMembersList(resolved)
+      })
     }
 
   action createSpace(
@@ -296,6 +328,12 @@ module model {
   ): bool = 
     def arbiter = arbiters.get(arbiterDid)
     def memberAccess = resolved.memberList.get(job.userDid)
+
+    // Check that the user is in the member list
+    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
+
+    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
+    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
 
     // Check space doesn't exist
     if (arbiter.spaces.has(job.spaceKey)) throwJobErr(ErrSpaceAlreadyExists, arbiterDid, job.id) else
@@ -314,7 +352,10 @@ module model {
           config: SpaceConfig::default,
           members: Map(),
         }))),
-      error' = None,
+      result' = FinishedJob({
+        id: job.id,
+        result: JobOk
+      }),
     }
 
   action configureSpace(
@@ -326,6 +367,12 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
     def userAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check that the user is in the member list
+    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
+
+    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
+    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
@@ -340,7 +387,10 @@ module model {
         .removeJob(job.id)
         .with("spaces",
           arbiter.spaces.put(job.spaceKey, space.with("config", config)))),
-      error' = None,
+      result' = FinishedJob({
+        id: job.id,
+        result: JobOk
+      }),
     }
 
   action deleteSpace(
@@ -351,6 +401,12 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
     def userAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check that the user is in the member list
+    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
+
+    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
+    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
@@ -368,7 +424,10 @@ module model {
         .nextVersion()
         .removeJob(job.id)
         .with("spaces", arbiter.spaces.mapRemove(job.spaceKey))),
-      error' = None,
+      result' = FinishedJob({
+        id: job.id,
+        result: JobOk
+      }),
     }
 
   action setMemberAccess(
@@ -381,6 +440,12 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
     def userAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check that the user is in the member list
+    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
+
+    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
+    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
@@ -409,7 +474,10 @@ module model {
           .with("members", space.members.put(updatedMember, updatedMemberAccess))
         ))
       ),
-      error' = None,
+      result' = FinishedJob({
+        id: job.id,
+        result: JobOk
+      }),
     }
 
   action removeMember(
@@ -422,6 +490,12 @@ module model {
     def userAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
     def removedMemberAccess = space.members.get(removedMember)
+
+    // Check that the user is in the member list
+    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
+
+    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
+    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throwJobErr(ErrSpaceNotExists, arbiterDid, job.id) else
@@ -441,7 +515,10 @@ module model {
           .with("members", space.members.mapRemove(removedMember))
         ))
       ),
-      error' = None,
+      result' = FinishedJob({
+        id: job.id,
+        result: JobOk
+      }),
     }
 
   action deleteArbiter(
@@ -452,6 +529,12 @@ module model {
     def arbiter = arbiters.get(arbiterDid)
     def userAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check that the user is in the member list
+    if (not(resolved.memberList.has(job.userDid))) throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
+
+    // Check that arbiter has not been modified since the job was started ( compare-and-swap style )
+    if (arbiter.version != job.arbiterVersion) throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
 
     // Check that the space is the admin one
     if (not(job.spaceKey == SpaceKey::ADMIN)) throwJobErr(ErrArbiterDeletionMustSpecifyAdminSpace, arbiterDid, job.id) else
@@ -466,7 +549,10 @@ module model {
     all {
       // Remove the arbiter
       arbiters' = arbiters.mapRemove(arbiterDid),
-      error' = None,
+      result' = FinishedJob({
+        id: job.id,
+        result: JobOk
+      }),
     }
     
   //
@@ -887,8 +973,11 @@ module types {
     members: Member -> Access
   }
 
+  type JobId = int
+
   /// This represents a call to perform some action on the arbiter.
   type JobArgs = 
+    | JobFetchMembers
     | JobCreateSpace
     | JobConfigureSpace(SpaceConfig)
     | JobDeleteSpace
@@ -901,7 +990,9 @@ module types {
     })
     | JobDeleteArbiter
 
-  type JobId = int
+  type JobResult =
+    | JobOk
+    | JobOkResolvedMembersList(ResolvedMemberList)
   
   /// A job is a work-in-progress action such as adding or removing a member.
   type Job = {
@@ -962,11 +1053,10 @@ module arbiter_core {
   import types.*
   import model.*
 
-  pure val userDids: Set[UserDid] = Set("Alice", "Bob", "Charlie", "Daffodil", "Eve")
-  pure val arbiterDids: Set[ArbiterDid] = Set("arb1", "arb2")
-  pure val spaceKeys: Set[SpaceKey] = Set("space1", "space2")
-  pure val roleIds: Set[SpaceKey] = Set("members", "team", "collaborators")
-
+  const userDids: Set[UserDid]
+  const arbiterDids: Set[ArbiterDid]
+  const spaceKeys: Set[SpaceKey]
+  const roleIds: Set[SpaceKey]
 
   action init = initArbiter
 
