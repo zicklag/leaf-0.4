@@ -49,7 +49,7 @@ module model {
   /// The user the authenticated user carrying out the action.
   action create(userDid: UserDid, arbiterDid: ArbiterDid): bool = 
     // Check arbiter exists
-    if (not(arbiters.has(arbiterDid))) throw(ErrArbiterAlreadyExists) else
+    if (arbiters.has(arbiterDid)) throw(ErrArbiterAlreadyExists) else
 
     all {
       // Add arbiter
@@ -217,6 +217,7 @@ module model {
         else None
     }
 
+  /// Finishes the execution of a job, applying the changes, or erroring if they are invalid.
   action executeJob(
     arbiterDid: ArbiterDid, 
     members: ResolvedMemberList,
@@ -274,13 +275,13 @@ module model {
     config: SpaceConfig
   ): bool =
     def arbiter = arbiters.get(arbiterDid)
-    def memberAccess = resolved.memberList.get(job.userDid)
+    def userAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
 
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
     // Check that the user has access to configure the space
-    if (not(resolved.memberList.has(job.userDid)) or not(memberAccess.includesAccess(ConfigureSpace)))
+    if (not(resolved.memberList.has(job.userDid) and userAccess.includesAccess(ConfigureSpace)))
       throw(ErrPermissionDenied)
     else
 
@@ -299,7 +300,7 @@ module model {
     job: Job,
   ): bool =
     def arbiter = arbiters.get(arbiterDid)
-    def memberAccess = resolved.memberList.get(job.userDid)
+    def userAccess = resolved.memberList.get(job.userDid)
     def space = arbiter.spaces.get(job.spaceKey)
 
     // Check space exists
@@ -307,7 +308,7 @@ module model {
     // Make sure we don't delete the $admin space ( we already checked this earlier in jobValidationError but just to be sure )
     if (job.spaceKey == SpaceKey::ADMIN) throw(ErrCannotDeleteAdminSpace) else
     // Check that the user has access to delete the space
-    if (not(resolved.memberList.has(job.userDid)) or not(memberAccess.includesAccess(RemoveSpace)))
+    if (not(resolved.memberList.has(job.userDid) and userAccess.includesAccess(RemoveSpace)))
       throw(ErrPermissionDenied)
     else
 
@@ -321,28 +322,75 @@ module model {
 
   action setMemberAccess(
     arbiterDid: ArbiterDid, 
-    members: ResolvedMemberList,
+    resolved: ResolvedMemberList,
     job: Job,
-    member: Member,
-    access: Access
+    updatedMember: Member,
+    updatedMemberAccess: Access
   ): bool =
-    // TODO: When implemented, must increment space memberVersion to invalidate queued jobs
+    def arbiter = arbiters.get(arbiterDid)
+    def userAccess = resolved.memberList.get(job.userDid)
+    def space = arbiter.spaces.get(job.spaceKey)
+
+    // Check space exists
+    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    // Check that the user has access to the space
+    if (not(resolved.memberList.has(job.userDid))) throw(ErrPermissionDenied) else
+    // Check that the user has access to add members
+    if (not(userAccess.includesAccess(AddMembers))) throw(ErrPermissionDenied) else
+    // Check that the access the user is trying to grant the member is less than or equal to their own
+    if (not(userAccess.includesAccess(updatedMemberAccess))) throw(ErrPermissionDenied) else
+
+    def updatedMemberExists = space.members.has(updatedMember)
+    def updatedMemberExistingAccess = space.members.get(updatedMember)
+
+    // Check that the user isn't modifying the access of a member that already exists, if they don't have RemoveMember permission
+    if (updatedMemberExists and not(userAccess.includesAccess(RemoveMembers))) throw(ErrPermissionDenied) else
+    // Check that the user isn't modifying the access of a member that already exists, if the updated member has more access than the user
+    if (updatedMemberExists and updatedMemberExistingAccess.accessLevel() > userAccess.accessLevel()) throw(ErrPermissionDenied) else
+
     all {
-      arbiters' = arbiters,
+      // Update the member's access
+      arbiters' = arbiters.put(arbiterDid, arbiter
+        .nextVersion()
+        .with("spaces", arbiter.spaces.put(job.spaceKey, space
+          .with("members", space.members.put(updatedMember, updatedMemberAccess))
+        ))
+      ),
       error' = None,
     }
 
   action removeMember(
     arbiterDid: ArbiterDid, 
-    members: ResolvedMemberList,
+    resolved: ResolvedMemberList,
     job: Job,
-    member: Member,
+    removedMember: Member,
   ): bool =
-    // TODO: When implemented, must increment space memberVersion to invalidate queued jobs
+    def arbiter = arbiters.get(arbiterDid)
+    def userAccess = resolved.memberList.get(job.userDid)
+    def space = arbiter.spaces.get(job.spaceKey)
+    def removedMemberAccess = space.members.get(removedMember)
+
+    // Check space exists
+    if (not(arbiter.spaces.has(job.spaceKey))) throw(ErrSpaceNotExists) else
+    // Check that the member is in the space
+    if (not(space.members.has(removedMember))) throw(ErrMemberNotExist) else
+    // Check that the user has access to remove members
+    if (not(userAccess.includesAccess(RemoveMembers))) throw(ErrPermissionDenied) else
+
+    // Check that the user isn't removing a member that has more access than they do
+    if (removedMemberAccess.accessLevel() > userAccess.accessLevel()) throw(ErrPermissionDenied) else
+
     all {
-      arbiters' = arbiters,
+      // Remove the member
+      arbiters' = arbiters.put(arbiterDid, arbiter
+        .nextVersion()
+        .with("spaces", arbiter.spaces.put(job.spaceKey, space
+          .with("members", space.members.mapRemove(removedMember))
+        ))
+      ),
       error' = None,
     }
+    
 
   //
   // DEFINITIONS
@@ -618,56 +666,43 @@ module types {
     // Because any user can always write records to their own permissioned repo in a space, write
     // access is enforced at the app, and not the arbiter. The arbiter just tracks space membership,
     // and the additional access levels needed to add / remove members from spaces.
-    | AccessRecords
-    // Member can add new members to the space
+    | IsMember
+    // Member can add new members to the space, with permissions equal to or less than their own
     | AddMembers
     // Member can remove members with equal or lower permission from the space
     | RemoveMembers
     // Member can change the space's configuration
     | ConfigureSpace
-    //  Member can delete only the space that this access is granted to
-    | RemoveSpace
-
-    // ARBITER PERMISSIONS ( only work when applied in the `$admin` space )
-
-    // The minimum arbiter admin permission: can create new spaces on the arbiter
+    // Member can create new spaces. Note that this is not effective unless granted to a user or
+    // space that is delegated to in the $admin space.
     | CreateSpaces
-    // The member can remove any space in the arbiter
-    | RemoveAnySpace
-    // The member can add new admins
-    | AddAdmins
-    // The member can remove other admins, or themselves, but not owners
-    | RemoveAdmins
+    // Member can delete a space. Note that if this access is granted to somebody in the $admin
+    // space, then it means that they can delete any space.
+    | RemoveSpace
     // The member has no permissions limits and can remove other admins and owners
     | Owner
 
   /// Set of all accesses levels
   pure val Accesses = Set(
-    AccessRecords,
+    IsMember,
     AddMembers,
     RemoveMembers,
     ConfigureSpace,
-    RemoveSpace,
     CreateSpaces,
-    RemoveAnySpace,
-    AddAdmins,
-    RemoveAdmins,
+    RemoveSpace,
     Owner
   )
 
   /// Get the numeric access level from `Access`.
   pure def accessLevel(a: Access): int =
     match a {
-      | AccessRecords => 0
+      | IsMember => 0
       | AddMembers => 1
       | RemoveMembers => 2
       | ConfigureSpace => 3
-      | RemoveSpace => 4
-      | CreateSpaces => 5
-      | RemoveAnySpace => 6
-      | AddAdmins => 7
-      | RemoveAdmins => 8
-      | Owner => 9
+      | CreateSpaces => 4
+      | RemoveSpace => 5
+      | Owner => 6
     }
 
   /// Get the smaller of the provided accesses
@@ -825,7 +860,7 @@ module types {
     match (opt) { | Some(u) => u | None => default }
 }
 
-module arbiter {
+module arbiter_core {
   import types.*
   import model.*
 
