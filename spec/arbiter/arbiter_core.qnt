@@ -25,7 +25,7 @@ module model {
     | ErrPermissionChanged
     | ErrArbiterDeletionMustSpecifyAdminSpace
     | ErrOnlyLastOwnerCanDeleteArbiter
-    | ErrOperationAlreadyInProgress
+    | ErrWriteOperationAlreadyInProgress
     | ErrJobsTimedOut(Set[JobId])
 
   /// The list of arbiters.
@@ -45,6 +45,7 @@ module model {
   // ACTIONS
   //
 
+  /// Throw an error
   action throw(e: Error): bool = all {
     arbiters' = arbiters,
     result' = Err(e),
@@ -57,16 +58,11 @@ module model {
       arbiters' = arbiters.put(arbiterDid, arbiter.removeJob(jobId)),
       result' = Err(e),
     }
-
-  action ok: bool = all {
-    arbiters' = arbiters,
-    result' = Ok,
-  }
   
   /// Create a new arbiter.
   ///
   /// NOTE: the `userDid` is required to be authenticated by the wrapper around the arbiter state
-  /// machine.
+  /// machine as having actually come from the did.
   action create(userDid: UserDid, arbiterDid: ArbiterDid): bool = 
     // Check arbiter exists
     if (arbiters.has(arbiterDid)) throw(ErrArbiterAlreadyExists) else
@@ -91,7 +87,7 @@ module model {
       result' = Ok,
     }
 
-  /// Receive a new job to process.
+  /// Process a new job.
   ///
   /// NOTE: the `userDid` is required to be authenticated by the wrapper around the arbiter state
   /// machine as having actually come from the did.
@@ -144,20 +140,26 @@ module model {
 
       // If we cannot resolve synchronously, then we need to queue the job
       | None => 
-        // Get the list of existing jobs queued for this user
-        def usersJobs = arbiter.jobQueue.keys().filter(jobId => arbiter.jobQueue.get(jobId).userDid == userDid)
+        // Check whether there is an existing write job queued for this user
+        def userHasExistingWriteJob = arbiter.jobQueue.keys().exists(jobId =>
+          def job = arbiter.jobQueue.get(jobId)
+          job.userDid == userDid and
+          match (job.args) {
+            // We don't care about reads
+            | JobFetchMembers => false
+            // All get all the other write jobs
+            | _ => true
+          } 
+        )
 
-        // Make sure they don't have more than 1 in-progress job. This is a basic rate-limit to help
-        // prevent DoS and isn't bad anyway because concurrent mutations will be rejected by the
-        // compare-and-swap step anyway.
+        // We don't allow a user to submit concurrent write jobs because they will just end up
+        // stepping on each-other at the compare-and-swap stage and stopping it early saves memory
+        // and helps prevent DoS attacks.
         //
-        // NOTE: this doesn't prevent exhaustion of resources by many _different_ DIDs submitting jobs at the
-        // same time. We leave that concern to the wrapper, because if we blocked it here, it would allow
-        // attackers to overwhelm the service preventing a legit user from actually getting in.
-        //
-        // The wrapper is the best place to handle this because it can take into account things like IP
-        // addresses and limit based on that.
-        if (usersJobs.size() > 0) throw(ErrOperationAlreadyInProgress) else
+        // NOTE: it's still possible to try to DoS the service with read requests which should be
+        // allowed concurrently and preventing that is the job of the wrapper around the arbiter
+        // core, since it is equipped to track things like timing, source IP addresses, etc.
+        if (userHasExistingWriteJob) throw(ErrWriteOperationAlreadyInProgress) else
 
         all {
           arbiters' = arbiters.put(arbiterDid, arbiter
