@@ -26,6 +26,7 @@ module model {
     | ErrArbiterDeletionMustSpecifyAdminSpace
     | ErrOnlyLastOwnerCanDeleteArbiter
     | ErrOperationAlreadyInProgress
+    | ErrJobsTimedOut(Set[JobId])
 
   /// The list of arbiters.
   ///
@@ -101,6 +102,24 @@ module model {
     if (not(arbiters.has(arbiterDid))) throw(ErrArbiterNotExists) else
     // Check Job ID not already used
     if (arbiter.jobQueue.has(jobId)) throw(ErrJobIdAlreadyUsed) else
+
+    // Make sure we don't have any jobs we need to force a timeout on to avoid a compare-and-swap
+    // version collision
+    def collidingJobs = arbiter.jobQueue.keys().filter(jobId =>
+      def job = arbiter.jobQueue.get(jobId) 
+      versionDiff(arbiter, job) == 1
+    )
+    if (collidingJobs.size() > 0)
+      all {
+        arbiters' = arbiters.put(arbiterDid, arbiter.with("jobQueue",
+          // Remove all of the jobs that have colliding versions
+          arbiter.jobQueue.keys().exclude(collidingJobs)
+            .map(jobId => (jobId, arbiter.jobQueue.get(jobId))).setToMap()
+        )),
+        // Return the list of colliding versions in an error
+        result' = Err(ErrJobsTimedOut(collidingJobs)),
+      }
+    else
 
     // Do some validation on the job
     match (jobValidationError(arbiter, spaceKey, args)) { | Some(err) => throw(err) | None =>
@@ -796,6 +815,7 @@ module model {
       SpaceKey::ADMIN.in(arbiters.get(arbiterDid).spaces.keys())
     )
 
+  /// There is at least one owner for every arbiter
   val InvArbiterHasAtLeastOneOwner =
     arbiters.keys().forall(arbiterDid =>
       def arbiter = arbiters.get(arbiterDid)
@@ -1028,15 +1048,29 @@ module types {
     jobQueue: JobId -> Job,
   }
 
-  /// Increment the version number on the arbiter with a u32 wrapping add.
-  ///
-  /// This doesn't make it _impossible_ for a version collision due to wrapping, but it
-  /// would take a little over an hour with 1 million modifications per second, for the
-  /// u32 to wrap, so it is a requirement that the wrapper call `timeout` on a job before
-  /// it gets that old.
-  /// 
-  /// FIXME: Can we enforce that by forcing a timeout on old jobs?
-  pure def nextVersion(a: Arbiter): Arbiter = a.with("version", a.version + 1 % 2^32)
+  const VERSION_BITS: int
+  pure val VERSION_MAX = 2^VERSION_BITS - 1
+
+  /// Increment the version number on the arbiter with a wrapping add.
+  pure def nextVersion(a: Arbiter): Arbiter = a.with("version", (a.version + 1) % (2 ^ VERSION_BITS))
+
+  /// Calculate the number of updates to the arbiter version before we end up colliding with the
+  /// given job's version. We need to make sure we timeout the job before this happens to make sure
+  /// that the job doesn't end up having the same version as the arbiter even though the arbiter
+  /// has changed.
+  pure def versionDiff(a: Arbiter, job: Job): int = 
+    // If the arbiter's version is less than the job's version, then it means that the arbiter has
+    // hit the max version and started to wrap around
+    if (a.version < job.arbiterVersion) job.arbiterVersion - a.version else
+
+    // If the arbiter version is greater than the job version, then that means it hasn't wrapped
+    // yet, and it can go up to the wrapping point, and then all the way back around up to the
+    // arbiter version.
+    if (a.version > job.arbiterVersion) VERSION_MAX - a.version + job.arbiterVersion else
+
+    // If the versions are equal, we assume that they are the same, and we have the entire version
+    // size before we start to wrap around.
+    VERSION_MAX
 
   /// Remove a job from the job queue
   pure def removeJob(arbiter: Arbiter, jobId: JobId): Arbiter =
