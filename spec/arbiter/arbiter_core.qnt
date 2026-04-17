@@ -2,6 +2,7 @@
 module model {
   import types.*
 
+  /// A result for the arbiter state machine
   type Result =
     | Ok
     | QueuedJob
@@ -10,6 +11,8 @@ module model {
       result: JobResult
     })
     | Err(Error)
+
+  /// An error result for the arbiter state machine
   type Error =
     | ErrArbiterAlreadyExists
     | ErrArbiterNotExists
@@ -34,11 +37,16 @@ module model {
   /// impossible to make updates atomically across multiple arbiters.
   var arbiters: ArbiterDid -> Arbiter
 
+  /// The result of the last step of the arbiter state machine.
+  ///
+  /// Every time that the arbiter state changes, the result will be updated to reflect the success
+  /// or error of the last transition, along with any data needed by the wrapper.
   var result: Result
   
   /// Initial state
   action initArbiter = all {
     arbiters' = Map(),
+    result' = Ok,
   }
 
   //
@@ -317,6 +325,7 @@ module model {
       | JobDeleteArbiter(args) => deleteArbiter(arbiterDid, resolved, job)
     }
 
+  /// Execute Job: Fetch a space's member list
   action fetchMembers(
     arbiterDid: ArbiterDid, 
     resolved: ResolvedMemberList,
@@ -342,6 +351,7 @@ module model {
       })
     }
 
+  /// Execute Job: Create a space
   action createSpace(
     arbiterDid: ArbiterDid, 
     resolved: ResolvedMemberList,
@@ -379,6 +389,7 @@ module model {
       }),
     }
 
+  /// Execute Job: Update space configuration
   action configureSpace(
     arbiterDid: ArbiterDid, 
     resolved: ResolvedMemberList,
@@ -414,6 +425,7 @@ module model {
       }),
     }
 
+  /// Execute Job: Delete a space
   action deleteSpace(
     arbiterDid: ArbiterDid, 
     resolved: ResolvedMemberList,
@@ -451,6 +463,7 @@ module model {
       }),
     }
 
+  /// Execute Job: Set a member's access in a space
   action setMemberAccess(
     arbiterDid: ArbiterDid, 
     resolved: ResolvedMemberList,
@@ -501,6 +514,7 @@ module model {
       }),
     }
 
+  /// Execute Job: Remove a member from a space
   action removeMember(
     arbiterDid: ArbiterDid, 
     resolved: ResolvedMemberList,
@@ -542,6 +556,7 @@ module model {
       }),
     }
 
+  /// Execute Job: Delete an arbiter
   action deleteArbiter(
     arbiterDid: ArbiterDid, 
     resolved: ResolvedMemberList,
@@ -1010,6 +1025,7 @@ module types {
     })
     | JobDeleteArbiter
 
+  /// The result of a finished job
   type JobResult =
     | JobOk
     | JobOkResolvedMembersList(ResolvedMemberList)
@@ -1051,7 +1067,7 @@ module types {
   pure val VERSION_BITS = 32
   pure val VERSION_MAX = 2^VERSION_BITS - 1
 
-  /// Increment the version number on the arbiter with a wrapping add.
+  /// Increment the arbiter version number with a wrapping add.
   pure def nextVersion(a: Arbiter): Arbiter = a.with("version", (a.version + 1) % (2 ^ VERSION_BITS))
 
   /// Calculate the number of updates to the arbiter version before we end up colliding with the
