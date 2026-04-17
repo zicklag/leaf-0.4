@@ -31,14 +31,14 @@ module arbiter_core {
 
   /// A result for the arbiter state machine
   type ArbiterResult =
-    | Ok
-    | QueuedJob
-    | FinishedJob({
+    | ArbiterOk
+    | ArbiterQueuedJob
+    | ArbiterFinishedJob({
       id: JobId,
       result: JobResult
     })
     | ArbiterDeleted
-    | Err(ArbiterError)
+    | ArbiterErr(ArbiterError)
 
   /// An error result for the arbiter state machine
   type ArbiterError =
@@ -73,6 +73,9 @@ module arbiter_core {
   /// but other spaces can have users with arbiter permissions, too, and they will only
   /// come into affect if that space is delegated to by another `$admin` space.
   type Access =
+    // This member can read the member list, but isn't granted any other access and won't be
+    // included in the permissioned space's member list.
+    | ReadMemberList
     // Member can read records in the space.
     //
     // Because any user can always write records to their own permissioned repo in a space, write
@@ -83,7 +86,8 @@ module arbiter_core {
     | AddMembers
     // Member can remove members with equal or lower permission from the space
     | RemoveMembers
-    // Member can change the space's configuration
+    // Member can change the space's configuration **and** can write records to the space's
+    // permissioned repo under the arbiter's account.
     | ConfigureSpace
     // Member can create new spaces. Note that this is not effective unless granted to a user or
     // space that is delegated to in the $admin space.
@@ -96,6 +100,7 @@ module arbiter_core {
 
   /// Set of all accesses levels
   pure val Accesses = Set(
+    ReadMemberList,
     IsMember,
     AddMembers,
     RemoveMembers,
@@ -108,13 +113,14 @@ module arbiter_core {
   /// Get the numeric access level from `Access`.
   pure def accessLevel(a: Access): int =
     match a {
-      | IsMember => 0
-      | AddMembers => 1
-      | RemoveMembers => 2
-      | ConfigureSpace => 3
-      | CreateSpaces => 4
-      | RemoveSpace => 5
-      | Owner => 6
+      | ReadMemberList => 0
+      | IsMember => 1
+      | AddMembers => 2
+      | RemoveMembers => 3
+      | ConfigureSpace => 4
+      | CreateSpaces => 5
+      | RemoveSpace => 6
+      | Owner => 7
     }
 
   /// Get the smaller of the provided accesses
@@ -161,6 +167,15 @@ module arbiter_core {
   type UnresolvedMemberListItem = UMLUser(UserDid) | UMLSpace(SpaceId)
   type UnresolvedMemberList = UnresolvedMemberListItem -> Access
   type ResolvedMemberList = { memberList: UserDid -> Access, missingSpaces: SpaceId -> Access }
+
+  /// Get the final member list for the permissioned space, based on a resolved member list.
+  pure def permissionedSpaceMembers(resolved: ResolvedMemberList): Set[UserDid] =
+    resolved.memberList.keys()
+      // Filter out users that don't have at least IsMember
+      .filter(userDid => 
+        def access = resolved.memberList.get(userDid)
+        access.includesAccess(IsMember)
+      )
 
   /// Synchronously returns a resolved member list if it is possible to do so without making any 
   /// resolutions for remote spaces.
@@ -302,7 +317,7 @@ module arbiter_core {
           ),
         }
       ),
-      result: Ok
+      result: ArbiterOk
     }
 
   /// Process a new job.
@@ -327,7 +342,7 @@ module arbiter_core {
         )
         // Return the list of colliding versions in an error. The caller will have to re-try the job
         // if they want to progress the original job.
-        .with("result", Err(ErrJobsTimedOut(collidingJobs)))
+        .with("result", ArbiterErr(ErrJobsTimedOut(collidingJobs)))
     else
 
     // Do some validation on the job
@@ -386,7 +401,7 @@ module arbiter_core {
             resolvedSpaces: Map(),
             arbiterVersion: arbiter.version,
           }))
-          .with("result", QueuedJob)
+          .with("result", ArbiterQueuedJob)
     }}
 
   /// Provide the resolved space member list for a job that was waiting on a member list to be
@@ -432,7 +447,7 @@ module arbiter_core {
           arbiter.jobQueue.put(jobId,
             job.with("resolvedSpaces", resolvedSpaces) 
           )
-        ).with("result", Ok)
+        ).with("result", ArbiterOk)
 
   /// Timeout a job that is in the queue and waiting for space member lists to be resolved.
   ///
@@ -456,11 +471,11 @@ module arbiter_core {
 
   /// Throw an error
   pure def throw(arbiter: Arbiter, e: ArbiterError): Arbiter =
-    arbiter.with("result", Err(e))
+    arbiter.with("result", ArbiterErr(e))
 
   /// Throw an error and remove a job from the job queue
   pure def throwJobErr(arbiter: Arbiter, e: ArbiterError, jobId: JobId): Arbiter =
-    arbiter.removeJob(jobId).with("result", Err(e))
+    arbiter.removeJob(jobId).with("result", ArbiterErr(e))
   
   /// Return any validation errors for the job if there are issues
   pure def jobValidationError(arbiter: Arbiter, spaceKey: SpaceKey, args: JobArgs): Option[ArbiterError] =
@@ -538,12 +553,18 @@ module arbiter_core {
     // Check space exists
     if (not(arbiter.spaces.has(job.spaceKey))) arbiter.throwJobErr(ErrSpaceNotExists, job.id) else
 
-    // Make sure that the user is a member of the group, if the group list is not public
-    if (not(space.config.publicMembers) and not(resolved.memberList.has(job.userDid)))
+    if (
+      // If the members list for this space is not public
+      not(space.config.publicMembers) and
+      // Make sure that the user is a member of the list and has ReadMemberList access.
+      // NOTE: the access check is somewhat redundant at the time of writing because it is the lowest
+      // access you can have.
+      not(resolved.memberList.has(job.userDid) and memberAccess.includesAccess(ReadMemberList))
+    )
       arbiter.throwJobErr(ErrPermissionDenied, job.id) else
 
     // Return the member list with the job result
-    arbiter.with("result", FinishedJob({
+    arbiter.with("result", ArbiterFinishedJob({
       id: job.id,
       result: JobOkResolvedMembersList(resolved)
     }))
@@ -578,7 +599,7 @@ module arbiter_core {
         config: SpaceConfig::default,
         members: Map(),
       }))
-      .with("result", FinishedJob({
+      .with("result", ArbiterFinishedJob({
         id: job.id,
         result: JobOk
       }))
@@ -610,7 +631,7 @@ module arbiter_core {
       .nextVersion()
       .removeJob(job.id)
       .with("spaces", arbiter.spaces.put(job.spaceKey, space.with("config", config)))
-      .with("result", FinishedJob({
+      .with("result", ArbiterFinishedJob({
         id: job.id,
         result: JobOk
       }))
@@ -645,7 +666,7 @@ module arbiter_core {
       .nextVersion()
       .removeJob(job.id)
       .with("spaces", arbiter.spaces.mapRemove(job.spaceKey))
-      .with("result", FinishedJob({
+      .with("result", ArbiterFinishedJob({
         id: job.id,
         result: JobOk
       }))
@@ -692,7 +713,7 @@ module arbiter_core {
       .with("spaces", arbiter.spaces.put(job.spaceKey, space
         .with("members", space.members.put(updatedMember, updatedMemberAccess))
       ))
-      .with("result", FinishedJob({
+      .with("result", ArbiterFinishedJob({
         id: job.id,
         result: JobOk
       }))
@@ -730,7 +751,7 @@ module arbiter_core {
       .with("spaces", arbiter.spaces.put(job.spaceKey, space
         .with("members", space.members.mapRemove(removedMember))
       ))
-      .with("result", FinishedJob({
+      .with("result", ArbiterFinishedJob({
         id: job.id,
         result: JobOk
       }))
@@ -1020,27 +1041,30 @@ module arbiter_core {
     )
 }
 
+/// 
 module arbiter_server {
   import arbiter_core as core
-
   import arbiter_core.Arbiter
   import arbiter_core.ArbiterDid
   import arbiter_core.JobId
 
+  type Message =
+    | Testing
+
   /// A server request ID
   type ReqId = int
 
-  type ArbiterServer = {
-    arbiter: Arbiter,
-    result: ArbiterServerResult
+  /// An arbiter server state
+  type Server = {
+    arbiters: ArbiterDid -> Arbiter,
+    result: ServerResult
   }
+  type ServerResult =
+    | ServerOk
 
-  type ArbiterServerResult =
-    | RequestQueued
-
-  
 }
 
+/// Module wrapping up the whole arbiter system testing
 module arbiter {
   import arbiter_server.*
 
