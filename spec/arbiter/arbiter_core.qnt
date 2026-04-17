@@ -29,6 +29,7 @@ module model {
     | ErrArbiterDeletionMustSpecifyAdminSpace
     | ErrOnlyLastOwnerCanDeleteArbiter
     | ErrWriteOperationAlreadyInProgress
+    | ErrRemoteSpaceReferencesLocalArbiter
     | ErrJobsTimedOut(Set[JobId])
 
   /// The list of arbiters.
@@ -258,7 +259,7 @@ module model {
 
 
   //
-  // HELPER ACTIONS
+  // HELPER ACTIONS ( NOT CALLED FROM OUTSIDE )
   //
   
   /// Return any validation errors for the job if there are issues
@@ -284,7 +285,11 @@ module model {
         else None
       | JobSetMemberAccess(x) =>
         // Make sure the space exists
-        if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists)
+        if (not(arbiter.spaces.has(spaceKey))) Some(ErrSpaceNotExists) else
+        // Make sure that we don't add a remote space with the DID of the current space ( it should
+        // be a local space, then )
+        if (match (x.member) { | MemberRemoteSpace(id) => id.arbiterDid == arbiter.did | _ => false })
+          Some(ErrRemoteSpaceReferencesLocalArbiter)
         else None
       | JobRemoveMember(x) => 
         def space = arbiter.spaces.get(spaceKey)
@@ -340,7 +345,7 @@ module model {
 
     // Make sure that the user is a member of the group, if the group list is not public
     if (not(space.config.publicMembers) and not(resolved.memberList.has(job.userDid)))
-      throwJobErr(ErrPermissionChanged, arbiterDid, job.id) else
+      throwJobErr(ErrPermissionDenied, arbiterDid, job.id) else
 
     all {
       arbiters' = arbiters,
@@ -824,6 +829,7 @@ module model {
   val Inv = all {
     InvArbiterSpaceAlwaysExists,
     InvArbiterHasAtLeastOneOwner,
+    InvRemoteSpaceMemberDoesNotReferenceLocalArbiter,
   }
 
   /// The special `$admin` space always exists in every arbiter
@@ -840,6 +846,20 @@ module model {
       space.members.keys().exists(member =>
         def access = space.members.get(member)
         access == Owner
+      )
+    )
+  
+  /// There isn't any remote space members that reference the local arbiter. A local local space
+  /// member should be used instead in that case.
+  val InvRemoteSpaceMemberDoesNotReferenceLocalArbiter =
+    arbiters.keys().forall(arbiterDid =>
+      def arbiter = arbiters.get(arbiterDid)
+      arbiter.spaces.keys().forall(spaceKey =>
+        def space = arbiter.spaces.get(spaceKey)
+        not(space.members.keys().exists(member => match (member) {
+          | MemberRemoteSpace(id) => id.arbiterDid == arbiterDid
+          | _ => false
+        }))
       )
     )
 }
@@ -1093,19 +1113,39 @@ module types {
     arbiter.with("jobQueue", arbiter.jobQueue.mapRemove(jobId))
 }
 
-module arbiter_core {
+module arbiter_core_wrapper {
   import types.*
   import model.*
+
+  val Invariant = Inv
 
   const userDids: Set[UserDid]
   const arbiterDids: Set[ArbiterDid]
   const spaceKeys: Set[SpaceKey]
-  const roleIds: Set[SpaceKey]
 
   action init = initArbiter
 
   action step = any {
+    stepValid,
+    stepAny,
+  }
+
+  /// Make a step with intentionally selected nondet values to try and be a valid operation that
+  /// won't cause an error.
+  action stepValid = any {
+    createArbiterValid,
+  }
+
+  /// Make any step with random parameters that may cause an error
+  action stepAny = any {
     createArbiterAny,
+    startJobAny,
+  }
+
+  action createArbiterValid = all {
+    nondet userDid = userDids.oneOf()
+    nondet arbiterDid = arbiterDids.exclude(arbiters.keys()).oneOf()
+    create(userDid, arbiterDid)
   }
 
   action createArbiterAny = all {
@@ -1113,6 +1153,42 @@ module arbiter_core {
     nondet arbiterDid = arbiterDids.oneOf()
     create(userDid, arbiterDid)
   }
+
+  action startJobAny =
+    nondet arbiterDid = arbiterDids.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet spaceKey = spaceKeys.oneOf()
+    nondet jobId = 0.to(64).oneOf()
+    nondet memberUser = userDids.oneOf()
+    nondet memberLocalSpace = spaceKeys.oneOf()
+    nondet memberRemoteSpaceArbiter = arbiterDids.oneOf()
+    nondet memberRemoteSpaceKey = spaceKeys.oneOf()
+    def memberRemoteSpace = { arbiterDid: memberRemoteSpaceArbiter, spaceKey: memberRemoteSpaceKey }
+    nondet member = Set(MemberUser(memberUser), MemberLocalSpace(memberLocalSpace), MemberRemoteSpace(memberRemoteSpace)).oneOf()
+    nondet access = Accesses.oneOf()
+    nondet publicMembers = Set(true, false).oneOf()
+    nondet publicRecords = Set(true, false).oneOf()
+    def spaceConfig = { publicMembers: publicMembers, publicRecords: publicRecords }
+    nondet jobArgs = Set(
+      JobFetchMembers,
+      JobCreateSpace,
+      JobConfigureSpace(spaceConfig),
+      JobDeleteSpace,
+      JobSetMemberAccess({ member: member, access: access }),
+      JobRemoveMember({ member: member }),
+      JobDeleteArbiter,
+    ).oneOf()
+
+    startJob(userDid, arbiterDid, spaceKey, jobId, jobArgs)
+}
+
+module arbiter_core {
+  import arbiter_core_wrapper(
+    arbiterDids = Set("arb1","arb2", "arb3"),
+    userDids = Set("john", "mary", "daffodil", "eve"),
+    spaceKeys = Set("#general", "#devs", "#off-topic", "members", "moderators", "designers"),
+  ).*
+
 }
 
 
