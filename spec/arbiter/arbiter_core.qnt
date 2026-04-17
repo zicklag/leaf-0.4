@@ -853,8 +853,6 @@ module types {
   /// but other spaces can have users with arbiter permissions, too, and they will only
   /// come into affect if that space is delegated to by another `$admin` space.
   type Access =
-    // SPACE PERMISSIONS ( work in any space )
-
     // Member can read records in the space.
     //
     // Because any user can always write records to their own permissioned repo in a space, write
@@ -1048,7 +1046,7 @@ module types {
     jobQueue: JobId -> Job,
   }
 
-  const VERSION_BITS: int
+  pure val VERSION_BITS = 32
   pure val VERSION_MAX = 2^VERSION_BITS - 1
 
   /// Increment the version number on the arbiter with a wrapping add.
@@ -1075,12 +1073,6 @@ module types {
   /// Remove a job from the job queue
   pure def removeJob(arbiter: Arbiter, jobId: JobId): Arbiter =
     arbiter.with("jobQueue", arbiter.jobQueue.mapRemove(jobId))
-
-  pure def isSome(opt: Option): bool =
-    match (opt) { | Some => true | None => false }
-
-  pure def unwrapOr(opt: Option[a], default: a): a =
-    match (opt) { | Some(u) => u | None => default }
 }
 
 module arbiter_core {
