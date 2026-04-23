@@ -32,7 +32,8 @@ module arbiter_core {
   /// A result for the arbiter state machine
   type ArbiterResult =
     | ArbiterOk
-    | ArbiterQueuedJob
+    // The job was queued and the contained list of spaces needs their members resolved.
+    | ArbiterQueuedJob(Set[SpaceId])
     | ArbiterFinishedJob({
       id: JobId,
       result: JobResult
@@ -401,7 +402,7 @@ module arbiter_core {
             resolvedSpaces: Map(),
             arbiterVersion: arbiter.version,
           }))
-          .with("result", ArbiterQueuedJob)
+          .with("result", ArbiterQueuedJob(unresolvedMembers.spacesToResolve()))
     }}
 
   /// Provide the resolved space member list for a job that was waiting on a member list to be
@@ -785,6 +786,10 @@ module arbiter_core {
     // we _are_ the arbiter.
     arbiter.with("result", ArbiterDeleted)
 
+  //
+  // READ OPERATIONS
+  //
+
   /// Calculate the member list synchronously without resolving remote spaces.
   ///
   /// If the returned list contains remote spaces they will need to be resolved to complete the
@@ -1041,27 +1046,244 @@ module arbiter_core {
     )
 }
 
-/// 
+/// The server wraps the core, presents the XRPC API, and manages multiple arbiters.
 module arbiter_server {
+  import basicSpells.* from "../lib/basicSpells"
+
   import arbiter_core as core
   import arbiter_core.Arbiter
+  import arbiter_core.Arbiter::new
+  import arbiter_core.Arbiter::startJob
+  import arbiter_core.Arbiter::timeoutJob
   import arbiter_core.ArbiterDid
+  import arbiter_core.UserDid
   import arbiter_core.JobId
+  import arbiter_core.JobOk
+  import arbiter_core.SpaceId
+  import arbiter_core.SpaceKey::ADMIN
+  import arbiter_core.ResolvedMemberList
+  import arbiter_core.ArbiterError
+  import arbiter_core.JobDeleteArbiter
 
-  type Message =
-    | Testing
+  /// Number of ticks before timing out a job
+  pure val TIMEOUT_TICKS = 8
 
-  /// A server request ID
+  /// A request ID
   type ReqId = int
+  type Time = int
 
-  /// An arbiter server state
+  /// An server state
   type Server = {
+    time: Time,
+    jobStartTimes: ReqId -> Time,
     arbiters: ArbiterDid -> Arbiter,
     result: ServerResult
   }
-  type ServerResult =
-    | ServerOk
 
+  /// Feedback given by the server to outside
+  type Feedback =
+    | Respond(Response)
+    | ResolveRemoteList({
+        space: SpaceId,
+        resolverDepth: int,
+      })
+    | CancelResolvingRemoteList(SpaceId)
+
+  /// An XRPC request
+  type Request = { id: ReqId, endpoint: XrpcEndpoint }
+
+  /// An XRPC endpoint with it's arguments
+  type XrpcEndpoint =
+    | CreateArbiter({
+      userDid: UserDid,
+      arbiterDid: ArbiterDid,
+    })
+    | DeleteArbiter({
+      userDid: UserDid,
+      arbiterDid: ArbiterDid,
+      resolverDepth: int,
+    })
+
+  /// A response
+  type Response = { id: ReqId, data: RespData }
+
+  /// The data that comes with a response
+  type RespData =
+    | Ok
+
+  /// The result of an action on the server
+  type ServerResult =
+    // The operation was successful and there is a set of feedback to be processed by the wrapper.
+    | ServerOk(Set[Feedback])
+    // The operation errored
+    | ServerErr(ServerError)
+    // This is reserved for things that should never happen. If we run into one of these it is a
+    // bug in the specification.
+    | Panic
+
+  /// The server errors we can run into
+  type ServerError =
+    | ErrArbiterAlreadyExists
+    | ErrArbiterNotExists
+    | ErrArbiterErr(ArbiterError)
+    | ErrDuplicateReqId
+
+  /// Return a server error
+  pure def throw(server: Server, e: ServerError): Server =
+    server.with("result", ServerErr(e))
+  pure def panic(server: Server): Server = server.with("result", Panic)
+  pure def ok(server: Server, feedback: Set[Feedback]): Server = server.with("result", ServerOk(feedback))
+  pure def tick(server: Server): Server = server.with("time", server.time + 1)
+  pure def updateArbiter(server: Server, arbiterDid: ArbiterDid, arbiter: Arbiter): Server = server.with("arbiters", server.arbiters.put(arbiterDid, arbiter))
+
+  /// Create a new server instance
+  pure def Server::new(): Server = {
+    time: 0,
+    jobStartTimes: Map(),
+    arbiters: Map(),
+    result: ServerOk(Set())
+  }
+
+  /// Process an XRPC request
+  pure def Server::request(server: Server, req: Request): Server =
+    // Reject requests with an in-use request ID
+    if (server.arbiters.keys().exists(arbiterDid =>
+      def arbiter = server.arbiters.get(arbiterDid)
+      arbiter.jobQueue.has(req.id)
+    )) server.throw(ErrDuplicateReqId) else
+
+    // Handle the request
+    match (req.endpoint) {
+      | CreateArbiter(args) => createArbiter(server, req.id, args.userDid, args.arbiterDid)
+      | DeleteArbiter(args) => deleteArbiter(server, req.id, args.userDid, args.arbiterDid, args.resolverDepth)
+    }
+
+  pure def createArbiter(server: Server, reqId: ReqId, userDid: UserDid, arbiterDid: ArbiterDid): Server =
+    // Make sure the arbiter doesn't already exist
+    if (server.arbiters.has(arbiterDid)) server.throw(ErrArbiterAlreadyExists) else
+    // Create a new arbiter
+    def newArbiter = Arbiter::new(arbiterDid, userDid)
+    server
+      // Add the arbiter to the server
+      .with("arbiters", server.arbiters.put(arbiterDid, newArbiter))
+      // Result was OK
+      .ok(Set())
+
+  pure def deleteArbiter(server: Server, reqId: ReqId, userDid: UserDid, arbiterDid: ArbiterDid, resolverDepth: int): Server =
+    def arbiter = server.arbiters.get(arbiterDid)
+    // Make sure the arbiter exists
+    if (not(server.arbiters.has(arbiterDid))) server.throw(ErrArbiterNotExists) else
+
+    // Start the delete job
+    def updArbiter = Arbiter::startJob(arbiter, userDid, SpaceKey::ADMIN, reqId, JobDeleteArbiter)
+
+    match (updArbiter.result) {
+      // If the delete was successful
+      | ArbiterDeleted => server
+        // Remove the arbiter
+        .with("arbiters", server.arbiters.mapRemove(arbiterDid))
+        .ok(Set())
+
+      // If there was an error while deleting
+      | ArbiterErr(err) => server
+        // Update the arbiter
+        .with("arbiters", server.arbiters.put(arbiterDid, updArbiter))
+        // throw the error
+        .throw(ErrArbiterErr(err))
+
+      // If the delete job was queued
+      | ArbiterQueuedJob(spacesToResolve) =>
+
+        // If we are not allowed to go another resolution step
+        if (resolverDepth < 1)
+          // Immediately timeout the job to force a result without waiting for resolution.
+          def forcedArbiter = Arbiter::timeoutJob(updArbiter, reqId)
+
+          match (forcedArbiter.result) {
+            // If the delete is successful
+            | ArbiterDeleted =>
+              server
+                // Remove the arbiter
+                .with("arbiters", server.arbiters.mapRemove(arbiterDid))
+                .ok(Set())
+
+            // If there is an error
+            | ArbiterErr(e) =>
+              server
+                // Update the arbiter
+                .with("arbiters", server.arbiters.put(arbiterDid, forcedArbiter))
+                // Return the error
+                .throw(ErrArbiterErr(e))
+
+            | _ => server.panic()
+          }
+        
+        // If we are allowed to resolve members, then return the feedback in the result,
+        // requesting that the remote spaces be resolved.
+        else
+          server
+            // Update the arbiter
+            .with("arbiters", server.arbiters.put(arbiterDid, updArbiter))
+            // Record the job start time
+            .with("jobStartTimes", server.jobStartTimes.put(reqId, server.time))
+            // We need to resolve the members for the given space list
+            .ok(spacesToResolve.map(x => ResolveRemoteList({
+              space: x,
+              // Make sure we decrement the resolver depth so that we don't go in
+              // infinite cycles trying to resolve spaces.
+              resolverDepth: resolverDepth - 1
+            })))
+
+      | _ => server.panic()
+    }
+
+  /// Provide the result of a remote server member list resolution
+  pure def Server::resolvedMemberList(server: Server, request: Request): Server = server
+
+  /// Tick the server to let it process timeouts and resolution steps
+  pure def Server::tick(server: Server): Server =
+    // Find a timed out job, if it exists
+    def timedOutJob = server.arbiters.keys().fold(None, (s, arbiterDid) => s.someOrOther(
+      def arbiter = server.arbiters.get(arbiterDid)
+      
+      // Look at every job
+      arbiter.jobQueue.keys().fold(s, (s, jobId) => s.someOrOther(
+        def jobStart = server.jobStartTimes.get(jobId)
+
+        // If the job is timed out
+        if (server.time - jobStart >= TIMEOUT_TICKS)
+          Some({ arbiterDid: arbiterDid, jobId: jobId })
+        else None
+      ))
+    ))
+
+    match (timedOutJob) {
+      // If there is a timed out job
+      | Some(timedOut) =>
+        def arbiterDid = timedOut.arbiterDid
+        def arbiter = server.arbiters.get(arbiterDid)
+
+        // Timeout the job on the arbiter
+        def updArbiter = Arbiter::timeoutJob(arbiter, timedOut.jobId)
+
+        // Update the arbiter
+        server.handleJobResult(updArbiter)
+
+
+      // Just advance time if there are no timed out jobs
+      | None => server.tick()
+    }
+
+  /// Receive an arbiter that has just been updated after running a job
+  pure def handleJobResult(server: Server, updatedArbiter: Arbiter): Server =
+
+    server
+
+  pure def someOrOther(o: Option[a], other: Option[a]): Option[a] =
+    match (o) {
+      | Some(d) => Some(d)
+      | None => other
+    }
 }
 
 /// Module wrapping up the whole arbiter system testing
@@ -1072,7 +1294,7 @@ module arbiter {
   pure val userDids = Set("john", "mary", "daffodil", "eve")
   pure val spaceKeys = Set("#general", "#devs", "#off-topic", "members", "moderators", "designers")
 
-
+  
 }
 
 
