@@ -1470,7 +1470,7 @@ module arbiter {
   }
 
   action step = any {
-    // stepRandom,
+    stepRandom,
     stepValid,
   }
 
@@ -1612,7 +1612,7 @@ module arbiter {
   //////////////////////////////////////////////////////////////////////////////////
 
   // Collect all existing arbiter DIDs across all servers
-  pure def allArbiterDids(servers: ServerId -> Server): Set[ArbiterDid] =
+  pure def allArbiterDids(): Set[ArbiterDid] =
     servers.keys().fold(Set(), (acc, serverId) =>
       servers.get(serverId).arbiters.keys().fold(acc, (a, did) =>
         a.union(Set(did))
@@ -1621,7 +1621,7 @@ module arbiter {
 
   // Get the spaces of an arbiter on a server
   pure def arbiterSpacesOn(server: Server, arbiterDid: ArbiterDid): Set[SpaceKey] =
-    if (server.arbiters.keys().contains(arbiterDid))
+    if (arbiterDid in server.arbiters.keys())
       server.arbiters.get(arbiterDid).spaces.keys()
     else
       Set()
@@ -1636,7 +1636,7 @@ module arbiter {
 
   // Create an arbiter that doesn't exist yet on a server
   action validCreateArbiter =
-    def existingDids = allArbiterDids(servers)
+    def existingDids = allArbiterDids()
     def availableDids = arbiterDids.exclude(existingDids)
     nondet did = availableDids.oneOf()
     nondet userDid = userDids.oneOf()
