@@ -1251,7 +1251,6 @@ module arbiter_server {
       // Look at every job
       arbiter.jobQueue.keys().fold(s, (s, jobId) => s.someOrOther(
         def jobStart = server.jobStartTimes.get(jobId)
-
         // If the job is timed out
         if (server.time - jobStart >= TIMEOUT_TICKS)
           // Return it
@@ -1611,7 +1610,12 @@ module arbiter {
 
   //////////////////////////////////////////////////////////////////////////////////
   // Valid actions - pick actions that make sense given the current state
-  //////////////////////////////////////////////////////////////////////////////////
+  //
+  // These actions avoid common errors like:
+  //   - Operating on a non-existent arbiter
+  //   - Operating on a non-existent space (for ops that require one)
+  //   - Creating an arbiter that already exists
+  //   - Creating a space that already exists
 
   // Collect all existing arbiter DIDs across all servers
   pure def allArbiterDids(servers: ServerId -> Server): Set[ArbiterDid] =
@@ -1621,7 +1625,7 @@ module arbiter {
       )
     )
 
-  // Get the spaces of an arbiter on a server
+  // Get the spaces of an arbiter on a server (empty if arbiter doesn't exist)
   pure def arbiterSpacesOn(server: Server, arbiterDid: ArbiterDid): Set[SpaceKey] =
     if (server.arbiters.keys().contains(arbiterDid))
       server.arbiters.get(arbiterDid).spaces.keys()
@@ -1630,10 +1634,11 @@ module arbiter {
 
   action stepValid = any {
     tickServerAny,
-    sendValidRequest,
+    validCreateArbiter,
+    validCreateSpace,
+    validOperateOnExistingSpace,
     deliverRequestAny,
     deliverResolutionAny,
-    validCreateArbiter,
   }
 
   // Create an arbiter that doesn't exist yet on a server
@@ -1654,22 +1659,41 @@ module arbiter {
       resolutionMsgs' = resolutionMsgs,
     }
 
-  // Send a valid request based on current state - picks an existing arbiter
-  action sendValidRequest =
+  // Create a space that doesn't exist yet on an existing arbiter
+  action validCreateSpace =
     nondet dst = serverIds.oneOf()
     def server = servers.get(dst)
-    def existingArbiters = server.arbiters.keys()
+    nondet did = server.arbiters.keys().oneOf()
+    def arbSpaces = arbiterSpacesOn(server, did)
+    def availableSpaces = spaceKeys.exclude(arbSpaces)
+    nondet spaceKey = availableSpaces.oneOf()
+    nondet userDid = userDids.oneOf()
+    nondet resolverDepth = Set(0, 2).oneOf()
+    def reqId = nextReqId
+    def endpoint = XCreateSpace({ userDid: userDid, arbiterDid: did, spaceKey: spaceKey, resolverDepth: resolverDepth })
+    def msg = { src: dst, dst: dst, req: { id: reqId, endpoint: endpoint } }
+    all {
+      msgs' = msgs.union(Set(msg)),
+      nextReqId' = nextReqId + 1,
+      servers' = servers,
+      resolutionMsgs' = resolutionMsgs,
+    }
+
+  // Operate on an existing space (fetch, configure, delete, set member, remove member)
+  action validOperateOnExistingSpace =
+    nondet dst = serverIds.oneOf()
+    def server = servers.get(dst)
+    nondet did = server.arbiters.keys().oneOf()
+    def arbSpaces = arbiterSpacesOn(server, did)
+    nondet spaceKey = arbSpaces.oneOf()
     nondet endpointType = Set(
-      "CreateSpace", "ConfigureSpace", "DeleteSpace",
+      "ConfigureSpace", "DeleteSpace",
       "FetchMembers", "SetMemberAccess", "RemoveMember"
     ).oneOf()
-    nondet did = existingArbiters.oneOf()
     nondet userDid = userDids.oneOf()
     nondet resolverDepth = Set(0, 2).oneOf()
     nondet publicRecords = Set(true, false).oneOf()
     nondet publicMembers = Set(true, false).oneOf()
-    def arbSpaces = arbiterSpacesOn(server, did)
-    nondet spaceKey = spaceKeys.union(arbSpaces).oneOf()
     nondet access = Accesses.oneOf()
     nondet memberType = Set("User", "LocalSpace", "RemoteSpace").oneOf()
     nondet memberUserDid = userDids.oneOf()
