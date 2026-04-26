@@ -571,10 +571,12 @@ module arbiter_core {
       arbiter.throwJobErr(ErrPermissionDenied, job.id) else
 
     // Return the member list with the job result
-    arbiter.with("result", ArbiterFinishedJob({
-      id: job.id,
-      result: JobOkResolvedMembersList(resolved)
-    }))
+    arbiter
+      .removeJob(job.id)
+      .with("result", ArbiterFinishedJob({
+        id: job.id,
+        result: JobOkResolvedMembersList(resolved)
+      }))
 
   /// Execute Job: Create a space
   pure def createSpace(
@@ -1343,7 +1345,7 @@ module arbiter_server {
             | ArbiterFinishedJob(job) =>
               server
                 // Update the arbiter
-                .putArbiter(arbiterDid, updArbiter)
+                .putArbiter(arbiterDid, timedOutArbiter)
                 // Remove the recorded job start time
                 .removeJobStartTime(job.id)
                 // Respond with the result
