@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-im = "16.0.1"
+im = "15.1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
