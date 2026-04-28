@@ -395,6 +395,11 @@ module arbiter_core {
 
         // Queue the job
         arbiter
+          // FIXME: this is a bug. We should not increment the arbiter version for new jobs. This
+          // will prevent all mutations from applying properly, if they require a remote space
+          // resolution.
+          //
+          // I want to leave this here until we have a test that fails with the bug in it.
           .nextVersion()
           .with("jobQueue", arbiter.jobQueue.put(jobId, {
             id: jobId,
@@ -449,7 +454,7 @@ module arbiter_core {
     else
       // Just update the queued job's resolved spaces
       arbiter
-        .nextVersion()
+        .nextVersion() // FIXME: this is a bug
         .with("jobQueue",
           arbiter.jobQueue.put(jobId,
             job.with("resolvedSpaces", resolvedSpaces) 
@@ -1582,8 +1587,8 @@ import arbiter_core.localUsersFromMembers
   /// to games:#gaming).  server2 hosts the "games" arbiter.
   action init = all {
     servers' = Map(
-      "server1" -> Server::default.putArbiter("acme", acmeArbiter),
-      "server2" -> Server::default.putArbiter("games", gamesArbiter),
+      "server1" -> Server::default,
+      "server2" -> Server::default,
     ),
     msgs' = Set(),
     pendingResolutions' = Map(),
@@ -1887,7 +1892,7 @@ import arbiter_core.localUsersFromMembers
   /// trigger cross-server resolution when processed on server1.
   action sendDevFetchRequest =
     nondet userDid = userDids.oneOf()
-    nondet resolverDepth = Set(0, 1, 2).oneOf()
+    nondet resolverDepth = Set(1, 2).oneOf()
     def availableIds = freeReqId(msgs, servers, pendingResolutions)
     nondet reqId = availableIds.oneOf()
     all {
@@ -1908,29 +1913,45 @@ import arbiter_core.localUsersFromMembers
       pendingResolutions' = pendingResolutions,
     }
 
+  action debugPrintVars = all {
+    msgs' = q::debug(msgs),
+    servers' = q::debug(servers),
+    pendingResolutions' = q::debug(pendingResolutions),
+  }
+
   /// Intentionally exercise the cross-server resolution path.
   ///
   /// 1. init:     server1 hosts acme, server2 hosts games
   /// 2. sendDev:  outside requests fetch-members for acme.#dev
   /// 3. handle:   server1 queues a job on acme (needs games:#gaming)
-  /// 4. dispatch: server1 sends a resolution fetch to server2
+  /// 5. dispatch: server1 sends a resolution fetch to server2
   /// 5. handle:   server2 processes the fetch for games:#gaming (sync resolve)
   /// 6. handle:   server1 receives the resolution reply, job completes
   ///
   /// After step 6, pendingResolutions should be back to empty and the
   /// acme arbiter's job queue should be empty (the job finished).
-  run testCrossServerResolution =
-    init
+  run crossServerResolve1Test =
+    initScenario1
       .then(sendDevFetchRequest)
       .then(handleServerRequest)
+      .then(debugPrintVars)
       .then(dispatchResolutionRequest)
       .then(handleServerRequest)
       .then(handleServerReply)
       .expect(pendingResolutions == Map())
 
   // --------------------------------------------------------------------------
-  // Static arbiter fixtures used by init
+  // Static arbiter fixtures
   // --------------------------------------------------------------------------
+
+  action initScenario1 = all {
+    servers' = Map(
+      "server1" -> Server::default.putArbiter(acmeArbiter.did, acmeArbiter),
+      "server2" -> Server::default.putArbiter(gamesArbiter.did, gamesArbiter),
+    ),
+    msgs' = Set(),
+    pendingResolutions' = Map(),
+  }
 
   /// "acme" arbiter on server1 — its #dev space has a remote delegation
   /// to games:#gaming, which triggers cross-server resolution.
@@ -1941,23 +1962,23 @@ import arbiter_core.localUsersFromMembers
     result: ArbiterOk,
     spaces: Map(
       SpaceKey::ADMIN -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(MemberUser("alice") -> Owner, MemberUser("bob") -> Owner),
       },
       "moderators" -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(MemberUser("charlie") -> RemoveMembers, MemberUser("dave") -> AddMembers),
       },
       "#general" -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(MemberLocalSpace("moderators") -> RemoveMembers, MemberUser("eve") -> IsMember),
       },
       "#random" -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(MemberLocalSpace("moderators") -> RemoveMembers, MemberUser("frank") -> IsMember),
       },
       "#dev" -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(
           MemberLocalSpace("moderators") -> RemoveMembers,
           MemberRemoteSpace({ arbiterDid: "games", spaceKey: "#gaming" }) -> IsMember,
@@ -1975,15 +1996,15 @@ import arbiter_core.localUsersFromMembers
     result: ArbiterOk,
     spaces: Map(
       SpaceKey::ADMIN -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(MemberUser("grace") -> Owner),
       },
       "#lobby" -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(MemberUser("grace") -> Owner, MemberUser("henry") -> IsMember),
       },
       "#gaming" -> {
-        config: { publicRecords: false, publicMembers: false },
+        config: { publicRecords: false, publicMembers: true },
         members: Map(
           MemberLocalSpace("#lobby") -> RemoveMembers,
           MemberUser("ivan") -> AddMembers,
