@@ -1,7 +1,7 @@
 /// The state machine of the arbiter core. This handles the role computation and resolution logic
 /// and is meant to be wrapped by the arbiter server that will drive it.
 module arbiter_core {
-  import basicSpells.* from "../lib/basicSpells"
+  import utils.* from "../lib/utils"
 
   //
   // TYPES
@@ -46,7 +46,7 @@ module arbiter_core {
 
   /// An error result for the arbiter state machine
   type ArbiterError =
-    | ErrJobIdAlreadyUsed
+    | ErrJobIdsExhausted
     | ErrJobNotExists
     | ErrSpaceNotNeeded
     | ErrSpaceAlreadyResolved
@@ -328,9 +328,13 @@ module arbiter_core {
   ///
   /// NOTE: the `userDid` is required to be authenticated by the wrapper around the arbiter state
   /// machine as having actually come from the did.
-  pure def Arbiter::startJob(arbiter: Arbiter, userDid: UserDid, spaceKey: SpaceKey, jobId: JobId, args: JobArgs): Arbiter =
-    // Check Job ID not already used
-    if (arbiter.jobQueue.has(jobId)) arbiter.throw(ErrJobIdAlreadyUsed) else
+  pure def Arbiter::startJob(arbiter: Arbiter, userDid: UserDid, spaceKey: SpaceKey, args: JobArgs): Arbiter =
+    // Get a new job ID if available
+    // In a real implementation this can be any globally unique ID.
+    def newId = 1.to(100).exclude(arbiter.jobQueue.keys()).fold(None, (j, a) => Some(j.orElse(a)))
+
+    // Return an error if we are out of IDs
+    match (newId) { | None => arbiter.throw(ErrJobIdsExhausted) | Some(jobId) =>
 
     // Make sure we don't have any jobs we need to force a timeout on to avoid a compare-and-swap
     // version collision
@@ -415,6 +419,7 @@ module arbiter_core {
             spacesToResolve: unresolvedMembers.spacesToResolve()
           }))
     }}
+  }
 
   /// Provide the resolved space member list for a job that was waiting on a member list to be
   /// resolved.
@@ -1301,7 +1306,7 @@ module arbiter_server {
     // Make sure the arbiter exists
     if (not(server.arbiters.has(arbiterDid))) server.throw(ErrArbiterNotExists) else
     // Start the job
-    def updArbiter = Arbiter::startJob(arbiter, userDid, spaceKey, reqId, jobArgs)
+    def updArbiter = Arbiter::startJob(arbiter, userDid, spaceKey, jobArgs)
     // Handle the result
     server.handleArbiterResult(updArbiter, resolverDepth)
 
