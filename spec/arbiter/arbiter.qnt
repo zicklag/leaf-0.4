@@ -1056,7 +1056,7 @@ module arbiter_core {
 
 /// The server wraps the core, presents the XRPC API, and manages multiple arbiters.
 module arbiter_server {
-  import basicSpells.* from "../lib/basicSpells"
+  import utils.* from "../lib/utils"
 
   import arbiter_core as core
   import arbiter_core.Arbiter
@@ -1108,7 +1108,6 @@ module arbiter_server {
         space: SpaceId,
         resolverDepth: int,
       })
-    | CancelResolvingRemoteList(SpaceId)
 
   /// An XRPC request
   type Request = { id: ReqId, endpoint: XrpcEndpoint }
@@ -1191,8 +1190,7 @@ module arbiter_server {
   // TRIVIAL SERVER HELPERS
   //
 
-  pure def throw(server: Server, e: ServerError): Server =
-    server.with("result", ServerErr(e))
+  pure def throw(server: Server, e: ServerError): Server = server.with("result", ServerErr(e))
   pure def todo(server: Server): Server = server
   pure def panic(server: Server): Server = server.with("result", Panic)
   pure def ok(server: Server, feedback: Set[Feedback]): Server = server.with("result", ServerOk(feedback))
@@ -1403,18 +1401,14 @@ module arbiter_server {
           // Return the error
           .throw(ErrArbiterErr(e))
     }
-
-  // Helper that returns the first option if it's some, or the other option.
-  pure def someOrOther(o: Option[a], other: Option[a]): Option[a] =
-    match (o) {
-      | Some(d) => Some(d)
-      | None => other
-    }
 }
 
 /// Module wrapping up the whole arbiter system for trace generation
 module arbiter {
+  import utils.* from "../lib/utils"
+
   import arbiter_server.*
+  import arbiter_core.Arbiter
   import arbiter_core.Access
   import arbiter_core.Member
   import arbiter_core.MemberUser
@@ -1432,33 +1426,75 @@ module arbiter {
   import arbiter_core.ArbiterDid
   import arbiter_core.UserDid
   import arbiter_core.SpaceKey
+  import arbiter_core.SpaceKey::ADMIN
+  import arbiter_core.ArbiterOk
   import arbiter_core.Accesses
+  import arbiter_core.SpaceConfig
 
-  type ServerId = str
+  type NetId = str
 
-  pure val serverIds = Set("server1", "server2")
+  /// This ID represents requests from outside the server cluster, like user requests
+  pure val NetId::OUTSIDE = "outside"
+
+  pure val serverIds = Set("server1", "server2", NetId::OUTSIDE)
   pure val arbiterDids = Set("arb1","arb2", "arb3")
   pure val userDids = Set("john", "mary", "daffodil", "eve")
   pure val spaceKeys = Set("#general", "#devs", "#off-topic", "members", "moderators", "designers")
 
   type Msg = {
-    src: ServerId,
-    dst: ServerId,
-    req: Request,
+    src: NetId,
+    dst: NetId,
+    kind: MsgKind,
   }
+  pure def isRequest(m: Msg): bool =
+    match (m.kind) {
+      | MsgRequest(_) => true
+      | MsgReply(_) => false
+    }
+  pure def isReply(m: Msg): bool =
+    match (m.kind) {
+      | MsgRequest(_) => false
+      | MsgReply(_) => true
+    }
 
-  type ResolutionMsg = {
-    src: ServerId,
-    dst: ServerId,
-    reqId: ReqId,
-    spaceId: SpaceId,
-    members: ResolvedMemberList,
+  type MsgKind =
+    | MsgRequest(Request)
+    | MsgReply(Reply)
+  type Reply = {
+    id: ReqId,
+    kind: ReplyKind,
   }
+  type ReplyKind = 
+    | ReplyOk
+    | ReplyErr
+    | ReplyMemberList({
+        reqId: ReqId,
+        spaceId: SpaceId,
+        members: ResolvedMemberList,
+      })
 
   var msgs: Set[Msg]
-  var resolutionMsgs: Set[ResolutionMsg]
-  var servers: ServerId -> Server
-  var nextReqId: ReqId
+  var servers: NetId -> Server
+
+  /// Get an available request ID that isn't used by any in-flight messages or jobs.
+  pure def freeReqId(msgs: Set[Msg], servers: NetId -> Server): Set[int] =
+    // 100 valid IDs
+    1.to(100)
+      // Not including in-flight message IDs
+      .exclude(msgs.map(msg =>
+        match (msg.kind) {
+          | MsgRequest(req) => req.id
+          | MsgReply(reply) => reply.id
+        }
+      ))
+      // Not including IDs for jobs in the job queue
+      .exclude(servers.keys().map(serverId =>
+        def server = servers.get(serverId)
+        server.arbiters.keys().map(arbiterDid =>
+          def arbiter = server.arbiters.get(arbiterDid)
+          arbiter.jobQueue.keys()
+        ).flatten()
+      ).flatten())
 
   action init = all {
     servers' = Map(
@@ -1466,247 +1502,347 @@ module arbiter {
       "server2" -> Server::default,
     ),
     msgs' = Set(),
-    resolutionMsgs' = Set(),
-    nextReqId' = 0,
   }
 
   action step = any {
-    // stepRandom,
-    stepValid,
-  }
-
-  //////////////////////////////////////////////////////////////////////////////////
-  // Random actions - may produce errors
-  //////////////////////////////////////////////////////////////////////////////////
-
-  action stepRandom = any {
     tickServerAny,
-    sendRequestAny,
-    deliverRequestAny,
-    deliverResolutionAny,
+    receiveReplyToOutsideAny,
+    handleServerRequest,
   }
 
-  // Pick a server and tick it
+  /// Pick a server and tick it
   action tickServerAny =
     nondet serverId = servers.keys().oneOf()
     def server = servers.get(serverId)
     all {
       servers' = servers.put(serverId, Server::tick(server)),
       msgs' = msgs,
-      resolutionMsgs' = resolutionMsgs,
-      nextReqId' = nextReqId,
     }
 
-  // Helper to create a member from nondet choices
-  pure def makeMember(memberType: str, userDid: UserDid, spaceKey: SpaceKey, remoteArbiterDid: ArbiterDid): Member =
-    if (memberType == "User") MemberUser(userDid) else
-    if (memberType == "LocalSpace") MemberLocalSpace(spaceKey) else
-    MemberRemoteSpace({ arbiterDid: remoteArbiterDid, spaceKey: spaceKey })
-
-  // Helper to create an endpoint from nondet choices
-  pure def makeEndpoint(
-    endpointType: str,
-    userDid: UserDid,
-    arbiterDid: ArbiterDid,
-    spaceKey: SpaceKey,
-    member: Member,
-    access: Access,
-    resolverDepth: int,
-    publicRecords: bool,
-    publicMembers: bool
-  ): XrpcEndpoint =
-    if (endpointType == "CreateArbiter") XCreateArbiter({ userDid: userDid, arbiterDid: arbiterDid, resolverDepth: resolverDepth }) else
-    if (endpointType == "DeleteArbiter") XDeleteArbiter({ userDid: userDid, arbiterDid: arbiterDid, resolverDepth: resolverDepth }) else
-    if (endpointType == "FetchMembers") XFetchMembers({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, resolverDepth: resolverDepth }) else
-    if (endpointType == "CreateSpace") XCreateSpace({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, resolverDepth: resolverDepth }) else
-    if (endpointType == "ConfigureSpace") XConfigureSpace({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, publicRecords: publicRecords, publicMembers: publicMembers, resolverDepth: resolverDepth }) else
-    if (endpointType == "DeleteSpace") XDeleteSpace({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, resolverDepth: resolverDepth }) else
-    if (endpointType == "SetMemberAccess") XSetMemberAccess({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, member: member, access: access, resolverDepth: resolverDepth }) else
-    XRemoveMember({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, member: member, resolverDepth: resolverDepth })
-
-  // Send a request from one server to another (or same server)
-  action sendRequestAny =
-    nondet src = serverIds.oneOf()
-    nondet dst = serverIds.oneOf()
-    nondet endpointType = Set(
-      "CreateArbiter", "DeleteArbiter",
-      "FetchMembers", "CreateSpace", "ConfigureSpace", "DeleteSpace",
-      "SetMemberAccess", "RemoveMember"
+  /// Pick a reply to the outside and simply discard it since we are not simulating the sender.
+  action receiveReplyToOutsideAny =
+    nondet reply = msgs.filter(msg =>
+      if (msg.src == NetId::OUTSIDE and msg.isReply()) true
+      else false
     ).oneOf()
-    nondet arbiterDid = arbiterDids.oneOf()
-    nondet userDid = userDids.oneOf()
-    nondet spaceKey = spaceKeys.oneOf()
-    nondet memberType = Set("User", "LocalSpace", "RemoteSpace").oneOf()
-    nondet memberUserDid = userDids.oneOf()
-    nondet memberSpaceKey = spaceKeys.oneOf()
-    nondet remoteArbiterDid = arbiterDids.exclude(Set(arbiterDid)).oneOf()
-    nondet access = Accesses.oneOf()
-    nondet resolverDepth = Set(0, 1, 2, 3).oneOf()
-    nondet publicRecords = Set(true, false).oneOf()
-    nondet publicMembers = Set(true, false).oneOf()
-    def member = makeMember(memberType, memberUserDid, memberSpaceKey, remoteArbiterDid)
-    def endpoint = makeEndpoint(endpointType, userDid, arbiterDid, spaceKey, member, access, resolverDepth, publicRecords, publicMembers)
-    def reqId = nextReqId
-    def msg = { src: src, dst: dst, req: { id: reqId, endpoint: endpoint } }
     all {
-      msgs' = msgs.union(Set(msg)),
-      nextReqId' = nextReqId + 1,
       servers' = servers,
-      resolutionMsgs' = resolutionMsgs,
+      msgs' = msgs.exclude(Set(reply)),
     }
 
-  // Deliver a request message to the destination server
-  action deliverRequestAny =
-    nondet msg = msgs.oneOf()
-    def server = servers.get(msg.dst)
-    def resultServer = Server::request(server, msg.req)
-    all {
-      msgs' = msgs.exclude(Set(msg)),
-      servers' = servers.put(msg.dst, resultServer),
-      resolutionMsgs' = resolutionMsgs.union(resolutionFeedbackToMessages(msg.dst, resultServer)),
-      nextReqId' = nextReqId,
-    }
+  action handleServerRequest =
+    // Get a random request in the message queue
+    nondet msg = msgs.fold(Set(), (out, msg) =>
+      match (msg.kind) {
+        | MsgRequest(r) => out.union(Set({ src: msg.src, dst: msg.dst, req: r }))
+        | MsgReply(_) => out
+      }
+    ).oneOf()
 
-  // Convert resolution feedback to resolution messages
-  pure def resolutionFeedbackToMessages(src: ServerId, server: Server): Set[ResolutionMsg] =
-    match (server.result) {
-      | ServerOk(feedback) =>
-        feedback.fold(Set(), (msgs, fb) =>
-          match (fb) {
-            | ResolveRemoteList(info) =>
-              msgs.union(Set({
-                src: src,
-                dst: otherServer(src),
-                reqId: info.reqId,
-                spaceId: info.space,
-                members: dummyResolvedMemberList,
-              }))
-            | _ => msgs
+    // Get the server that the request was sent to
+    def dstServer = servers.get(msg.dst)
+
+    // Send the request to the server
+    def updServer = Server::request(dstServer, msg.req)
+
+    // Create new messages for any feedback we need to respond to from the server result
+    def newMessages = match (updServer.result) {
+      | ServerOk(feedback) => feedback.fold(Set(), (msgs, feedback) =>
+          match (feedback) {
+            | Respond(resp) => match (resp.data) {
+                | JobOk => msgs
+                | JobOkResolvedMembersList(_) => msgs
+              }
+            | ResolveRemoteList(req) => msgs
           }
         )
-      | _ => Set()
+      // For now we just allow errors to timeout instead of returning them
+      | ServerErr(err) => Set()
+      | Panic => Set()
     }
 
-  // Get the other server ID
-  pure def otherServer(src: ServerId): ServerId =
-    if (src == "server1") "server2" else "server1"
-
-  // Create a dummy resolved member list for testing
-  pure val dummyResolvedMemberList: ResolvedMemberList =
-    { memberList: Map(), missingSpaces: Map() }
-
-  // Deliver a resolution message to the destination server
-  action deliverResolutionAny =
-    nondet msg = resolutionMsgs.oneOf()
-    def server = servers.get(msg.dst)
-    def resultServer = Server::resolvedMemberList(server, msg.spaceId.arbiterDid, msg.reqId, msg.spaceId, msg.members)
-    def newResolutionMsgs = resolutionMsgs.exclude(Set(msg)).union(resolutionFeedbackToMessages(msg.dst, resultServer))
     all {
-      resolutionMsgs' = newResolutionMsgs,
-      servers' = servers.put(msg.dst, resultServer),
       msgs' = msgs,
-      nextReqId' = nextReqId,
-    }
+      servers' = servers,
+    } 
+  
 
-  //////////////////////////////////////////////////////////////////////////////////
-  // Valid actions - pick actions that make sense given the current state
-  //
-  // These actions avoid common errors like:
-  //   - Operating on a non-existent arbiter
-  //   - Operating on a non-existent space (for ops that require one)
-  //   - Creating an arbiter that already exists
-  //   - Creating a space that already exists
 
-  // Collect all existing arbiter DIDs across all servers
-  pure def allArbiterDids(servers: ServerId -> Server): Set[ArbiterDid] =
-    servers.keys().fold(Set(), (acc, serverId) =>
-      servers.get(serverId).arbiters.keys().fold(acc, (a, did) =>
-        a.union(Set(did))
-      )
-    )
+  // action deliverResolutionAny =
+  //   nondet msg = resolutionMsgs.oneOf()
+  //   def server = servers.get(msg.dst)
+  //   def resultServer = Server::resolvedMemberList(server, msg.spaceId.arbiterDid, msg.reqId, msg.spaceId, msg.members)
+  //   def newResolutionMsgs = resolutionMsgs.exclude(Set(msg)).union(resolutionFeedbackToMessages(msg.dst, resultServer))
+  //   all {
+  //     servers' = servers.put(msg.dst, resultServer),
+  //     msgs' = msgs,
+  //   }
 
-  // Get the spaces of an arbiter on a server (empty if arbiter doesn't exist)
-  pure def arbiterSpacesOn(server: Server, arbiterDid: ArbiterDid): Set[SpaceKey] =
-    if (server.arbiters.keys().contains(arbiterDid))
-      server.arbiters.get(arbiterDid).spaces.keys()
-    else
-      Set()
+  // //////////////////////////////////////////////////////////////////////////////////
+  // // Random actions - may produce errors
+  // //////////////////////////////////////////////////////////////////////////////////
 
-  action stepValid = any {
-    tickServerAny,
-    validCreateArbiter,
-    validCreateSpace,
-    validOperateOnExistingSpace,
-    deliverRequestAny,
-    deliverResolutionAny,
+  // action stepRandom = any {
+  //   sendRequestAny,
+  //   deliverRequestAny,
+  //   deliverResolutionAny,
+  // }
+
+  // // Helper to create a member from nondet choices
+  // pure def makeMember(memberType: str, userDid: UserDid, spaceKey: SpaceKey, remoteArbiterDid: ArbiterDid): Member =
+  //   if (memberType == "User") MemberUser(userDid) else
+  //   if (memberType == "LocalSpace") MemberLocalSpace(spaceKey) else
+  //   MemberRemoteSpace({ arbiterDid: remoteArbiterDid, spaceKey: spaceKey })
+
+  // // Helper to create an endpoint from nondet choices
+  // pure def makeEndpoint(
+  //   endpointType: str,
+  //   userDid: UserDid,
+  //   arbiterDid: ArbiterDid,
+  //   spaceKey: SpaceKey,
+  //   member: Member,
+  //   access: Access,
+  //   resolverDepth: int,
+  //   publicRecords: bool,
+  //   publicMembers: bool
+  // ): XrpcEndpoint =
+  //   if (endpointType == "CreateArbiter") XCreateArbiter({ userDid: userDid, arbiterDid: arbiterDid, resolverDepth: resolverDepth }) else
+  //   if (endpointType == "DeleteArbiter") XDeleteArbiter({ userDid: userDid, arbiterDid: arbiterDid, resolverDepth: resolverDepth }) else
+  //   if (endpointType == "FetchMembers") XFetchMembers({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, resolverDepth: resolverDepth }) else
+  //   if (endpointType == "CreateSpace") XCreateSpace({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, resolverDepth: resolverDepth }) else
+  //   if (endpointType == "ConfigureSpace") XConfigureSpace({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, publicRecords: publicRecords, publicMembers: publicMembers, resolverDepth: resolverDepth }) else
+  //   if (endpointType == "DeleteSpace") XDeleteSpace({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, resolverDepth: resolverDepth }) else
+  //   if (endpointType == "SetMemberAccess") XSetMemberAccess({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, member: member, access: access, resolverDepth: resolverDepth }) else
+  //   XRemoveMember({ userDid: userDid, arbiterDid: arbiterDid, spaceKey: spaceKey, member: member, resolverDepth: resolverDepth })
+
+  // // Send a request from one server to another (or same server)
+  // action sendRequestAny =
+  //   nondet src = serverIds.oneOf()
+  //   nondet dst = serverIds.oneOf()
+  //   nondet endpointType = Set(
+  //     "CreateArbiter", "DeleteArbiter",
+  //     "FetchMembers", "CreateSpace", "ConfigureSpace", "DeleteSpace",
+  //     "SetMemberAccess", "RemoveMember"
+  //   ).oneOf()
+  //   nondet arbiterDid = arbiterDids.oneOf()
+  //   nondet userDid = userDids.oneOf()
+  //   nondet spaceKey = spaceKeys.oneOf()
+  //   nondet memberType = Set("User", "LocalSpace", "RemoteSpace").oneOf()
+  //   nondet memberUserDid = userDids.oneOf()
+  //   nondet memberSpaceKey = spaceKeys.oneOf()
+  //   nondet remoteArbiterDid = arbiterDids.exclude(Set(arbiterDid)).oneOf()
+  //   nondet access = Accesses.oneOf()
+  //   nondet resolverDepth = Set(0, 1, 2, 3).oneOf()
+  //   nondet publicRecords = Set(true, false).oneOf()
+  //   nondet publicMembers = Set(true, false).oneOf()
+  //   def member = makeMember(memberType, memberUserDid, memberSpaceKey, remoteArbiterDid)
+  //   def endpoint = makeEndpoint(endpointType, userDid, arbiterDid, spaceKey, member, access, resolverDepth, publicRecords, publicMembers)
+  //   def reqId = nextReqId
+  //   def msg = { src: src, dst: dst, req: { id: reqId, endpoint: endpoint } }
+  //   all {
+  //     msgs' = msgs.union(Set(msg)),
+  //     nextReqId' = nextReqId + 1,
+  //     servers' = servers,
+  //     resolutionMsgs' = resolutionMsgs,
+  //   }
+
+  // // Deliver a request message to the destination server
+  // action deliverRequestAny =
+  //   nondet msg = msgs.oneOf()
+  //   def server = servers.get(msg.dst)
+  //   def resultServer = Server::request(server, msg.req)
+  //   all {
+  //     msgs' = msgs.exclude(Set(msg)),
+  //     servers' = servers.put(msg.dst, resultServer),
+  //     resolutionMsgs' = resolutionMsgs.union(resolutionFeedbackToMessages(msg.dst, resultServer)),
+  //     nextReqId' = nextReqId,
+  //   }
+
+  // // Convert resolution feedback to resolution messages
+  // pure def resolutionFeedbackToMessages(src: ServerId, server: Server): Set[ResolutionMsg] =
+  //   match (server.result) {
+  //     | ServerOk(feedback) =>
+  //       feedback.fold(Set(), (msgs, fb) =>
+  //         match (fb) {
+  //           | ResolveRemoteList(info) =>
+  //             msgs.union(Set({
+  //               src: src,
+  //               dst: otherServer(src),
+  //               reqId: info.reqId,
+  //               spaceId: info.space,
+  //               members: dummyResolvedMemberList,
+  //             }))
+  //           | _ => msgs
+  //         }
+  //       )
+  //     | _ => Set()
+  //   }
+
+  // // Get the other server ID
+  // pure def otherServer(src: ServerId): ServerId =
+  //   if (src == "server1") "server2" else "server1"
+
+  // // Create a dummy resolved member list for testing
+  // pure val dummyResolvedMemberList: ResolvedMemberList =
+  //   { memberList: Map(), missingSpaces: Map() }
+
+  // // Deliver a resolution message to the destination server
+
+  // //////////////////////////////////////////////////////////////////////////////////
+  // // Valid actions - pick actions that make sense given the current state
+  // //
+  // // These actions avoid common errors like:
+  // //   - Operating on a non-existent arbiter
+  // //   - Operating on a non-existent space (for ops that require one)
+  // //   - Creating an arbiter that already exists
+  // //   - Creating a space that already exists
+
+  // // Collect all existing arbiter DIDs across all servers
+  // pure def allArbiterDids(servers: ServerId -> Server): Set[ArbiterDid] =
+  //   servers.keys().fold(Set(), (acc, serverId) =>
+  //     servers.get(serverId).arbiters.keys().fold(acc, (a, did) =>
+  //       a.union(Set(did))
+  //     )
+  //   )
+
+  // // Get the spaces of an arbiter on a server (empty if arbiter doesn't exist)
+  // pure def arbiterSpacesOn(server: Server, arbiterDid: ArbiterDid): Set[SpaceKey] =
+  //   if (server.arbiters.keys().contains(arbiterDid))
+  //     server.arbiters.get(arbiterDid).spaces.keys()
+  //   else
+  //     Set()
+
+  // action stepValid = any {
+  //   tickServerAny,
+  //   validCreateArbiter,
+  //   validCreateSpace,
+  //   validOperateOnExistingSpace,
+  //   deliverRequestAny,
+  //   deliverResolutionAny,
+  // }
+
+  // // Create an arbiter that doesn't exist yet on a server
+  // action validCreateArbiter =
+  //   def existingDids = allArbiterDids(servers)
+  //   def availableDids = arbiterDids.exclude(existingDids)
+  //   nondet did = availableDids.oneOf()
+  //   nondet userDid = userDids.oneOf()
+  //   nondet dst = serverIds.oneOf()
+  //   nondet resolverDepth = Set(0, 2).oneOf()
+  //   def reqId = nextReqId
+  //   def endpoint = XCreateArbiter({ userDid: userDid, arbiterDid: did, resolverDepth: resolverDepth })
+  //   def msg = { src: dst, dst: dst, req: { id: reqId, endpoint: endpoint } }
+  //   all {
+  //     msgs' = msgs.union(Set(msg)),
+  //     nextReqId' = nextReqId + 1,
+  //     servers' = servers,
+  //     resolutionMsgs' = resolutionMsgs,
+  //   }
+
+  // // Create a space that doesn't exist yet on an existing arbiter
+  // action validCreateSpace =
+  //   nondet dst = serverIds.oneOf()
+  //   def server = servers.get(dst)
+  //   nondet did = server.arbiters.keys().oneOf()
+  //   def arbSpaces = arbiterSpacesOn(server, did)
+  //   def availableSpaces = spaceKeys.exclude(arbSpaces)
+  //   nondet spaceKey = availableSpaces.oneOf()
+  //   nondet userDid = userDids.oneOf()
+  //   nondet resolverDepth = Set(0, 2).oneOf()
+  //   def reqId = nextReqId
+  //   def endpoint = XCreateSpace({ userDid: userDid, arbiterDid: did, spaceKey: spaceKey, resolverDepth: resolverDepth })
+  //   def msg = { src: dst, dst: dst, req: { id: reqId, endpoint: endpoint } }
+  //   all {
+  //     msgs' = msgs.union(Set(msg)),
+  //     nextReqId' = nextReqId + 1,
+  //     servers' = servers,
+  //     resolutionMsgs' = resolutionMsgs,
+  //   }
+
+  // // Operate on an existing space (fetch, configure, delete, set member, remove member)
+  // action validOperateOnExistingSpace =
+  //   nondet dst = serverIds.oneOf()
+  //   def server = servers.get(dst)
+  //   nondet did = server.arbiters.keys().oneOf()
+  //   def arbSpaces = arbiterSpacesOn(server, did)
+  //   nondet spaceKey = arbSpaces.oneOf()
+  //   nondet endpointType = Set(
+  //     "ConfigureSpace", "DeleteSpace",
+  //     "FetchMembers", "SetMemberAccess", "RemoveMember"
+  //   ).oneOf()
+  //   nondet userDid = userDids.oneOf()
+  //   nondet resolverDepth = Set(0, 2).oneOf()
+  //   nondet publicRecords = Set(true, false).oneOf()
+  //   nondet publicMembers = Set(true, false).oneOf()
+  //   nondet access = Accesses.oneOf()
+  //   nondet memberType = Set("User", "LocalSpace", "RemoteSpace").oneOf()
+  //   nondet memberUserDid = userDids.oneOf()
+  //   nondet memberSpaceKey = spaceKeys.oneOf()
+  //   nondet remoteArbiterDid = arbiterDids.exclude(Set(did)).oneOf()
+  //   def member = makeMember(memberType, memberUserDid, memberSpaceKey, remoteArbiterDid)
+  //   def endpoint = makeEndpoint(endpointType, userDid, did, spaceKey, member, access, resolverDepth, publicRecords, publicMembers)
+  //   def reqId = nextReqId
+  //   def msg = { src: dst, dst: dst, req: { id: reqId, endpoint: endpoint } }
+  //   all {
+  //     msgs' = msgs.union(Set(msg)),
+  //     nextReqId' = nextReqId + 1,
+  //     servers' = servers,
+  //     resolutionMsgs' = resolutionMsgs,
+  //   }
+
+  pure val acmeArbiter: Arbiter = {
+    version: 0,
+    did: "acme",
+    jobQueue: Map(),
+    result: ArbiterOk,
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(MemberUser("alice") -> Owner, MemberUser("bob") -> Owner),
+      },
+      "moderators" -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(MemberUser("charlie") -> RemoveMembers, MemberUser("dave") -> AddMembers),
+      },
+      "#general" -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(MemberLocalSpace("moderators") -> RemoveMembers, MemberUser("eve") -> IsMember),
+      },
+      "#random" -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(MemberLocalSpace("moderators") -> RemoveMembers, MemberUser("frank") -> IsMember),
+      },
+      "#dev" -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(
+          MemberLocalSpace("moderators") -> RemoveMembers,
+          MemberRemoteSpace({ arbiterDid: "games", spaceKey: "#gaming" }) -> IsMember,
+        ),
+      },
+    ),
   }
 
-  // Create an arbiter that doesn't exist yet on a server
-  action validCreateArbiter =
-    def existingDids = allArbiterDids(servers)
-    def availableDids = arbiterDids.exclude(existingDids)
-    nondet did = availableDids.oneOf()
-    nondet userDid = userDids.oneOf()
-    nondet dst = serverIds.oneOf()
-    nondet resolverDepth = Set(0, 2).oneOf()
-    def reqId = nextReqId
-    def endpoint = XCreateArbiter({ userDid: userDid, arbiterDid: did, resolverDepth: resolverDepth })
-    def msg = { src: dst, dst: dst, req: { id: reqId, endpoint: endpoint } }
-    all {
-      msgs' = msgs.union(Set(msg)),
-      nextReqId' = nextReqId + 1,
-      servers' = servers,
-      resolutionMsgs' = resolutionMsgs,
-    }
-
-  // Create a space that doesn't exist yet on an existing arbiter
-  action validCreateSpace =
-    nondet dst = serverIds.oneOf()
-    def server = servers.get(dst)
-    nondet did = server.arbiters.keys().oneOf()
-    def arbSpaces = arbiterSpacesOn(server, did)
-    def availableSpaces = spaceKeys.exclude(arbSpaces)
-    nondet spaceKey = availableSpaces.oneOf()
-    nondet userDid = userDids.oneOf()
-    nondet resolverDepth = Set(0, 2).oneOf()
-    def reqId = nextReqId
-    def endpoint = XCreateSpace({ userDid: userDid, arbiterDid: did, spaceKey: spaceKey, resolverDepth: resolverDepth })
-    def msg = { src: dst, dst: dst, req: { id: reqId, endpoint: endpoint } }
-    all {
-      msgs' = msgs.union(Set(msg)),
-      nextReqId' = nextReqId + 1,
-      servers' = servers,
-      resolutionMsgs' = resolutionMsgs,
-    }
-
-  // Operate on an existing space (fetch, configure, delete, set member, remove member)
-  action validOperateOnExistingSpace =
-    nondet dst = serverIds.oneOf()
-    def server = servers.get(dst)
-    nondet did = server.arbiters.keys().oneOf()
-    def arbSpaces = arbiterSpacesOn(server, did)
-    nondet spaceKey = arbSpaces.oneOf()
-    nondet endpointType = Set(
-      "ConfigureSpace", "DeleteSpace",
-      "FetchMembers", "SetMemberAccess", "RemoveMember"
-    ).oneOf()
-    nondet userDid = userDids.oneOf()
-    nondet resolverDepth = Set(0, 2).oneOf()
-    nondet publicRecords = Set(true, false).oneOf()
-    nondet publicMembers = Set(true, false).oneOf()
-    nondet access = Accesses.oneOf()
-    nondet memberType = Set("User", "LocalSpace", "RemoteSpace").oneOf()
-    nondet memberUserDid = userDids.oneOf()
-    nondet memberSpaceKey = spaceKeys.oneOf()
-    nondet remoteArbiterDid = arbiterDids.exclude(Set(did)).oneOf()
-    def member = makeMember(memberType, memberUserDid, memberSpaceKey, remoteArbiterDid)
-    def endpoint = makeEndpoint(endpointType, userDid, did, spaceKey, member, access, resolverDepth, publicRecords, publicMembers)
-    def reqId = nextReqId
-    def msg = { src: dst, dst: dst, req: { id: reqId, endpoint: endpoint } }
-    all {
-      msgs' = msgs.union(Set(msg)),
-      nextReqId' = nextReqId + 1,
-      servers' = servers,
-      resolutionMsgs' = resolutionMsgs,
-    }
+  pure val gamesArbiter: Arbiter = {
+    version: 0,
+    did: "games",
+    jobQueue: Map(),
+    result: ArbiterOk,
+    spaces: Map(
+      SpaceKey::ADMIN -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(MemberUser("grace") -> Owner),
+      },
+      "#lobby" -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(MemberUser("grace") -> Owner, MemberUser("henry") -> IsMember),
+      },
+      "#gaming" -> {
+        config: { publicRecords: false, publicMembers: false },
+        members: Map(
+          MemberLocalSpace("#lobby") -> RemoveMembers,
+          MemberUser("ivan") -> AddMembers,
+        ),
+      },
+    ),
+  }
 }
