@@ -1,6 +1,4 @@
-/// The state machine of the arbiter core. This handles the role computation and resolution logic
-/// and is meant to be wrapped by the arbiter server that will drive it.
-module arbiter_core {
+module arbiter_core_types {
   import utils.* from "../lib/utils"
 
   //
@@ -250,7 +248,7 @@ module arbiter_core {
   /// The result of a finished job
   type JobResult =
     | JobOk
-    | JobOkResolvedMembersList(ResolvedMemberList)
+    | JobOkResolvedMemberList(ResolvedMemberList)
   
   /// A job is a work-in-progress action such as adding or removing a member.
   type Job = {
@@ -272,6 +270,14 @@ module arbiter_core {
     // The version of the arbiter when the job was started
     arbiterVersion: int,
   }
+}
+
+/// The state machine of the arbiter core. This handles the role computation and resolution logic
+/// and is meant to be wrapped by the arbiter server that will drive it.
+module arbiter_core {
+  import arbiter_core_types.*
+
+  import utils.* from "../lib/utils"
 
   pure val VERSION_BITS = 32
   pure val VERSION_MAX = 2^VERSION_BITS - 1
@@ -306,7 +312,7 @@ module arbiter_core {
   //
 
   // Create a new arbiter with the given arbiter DID and initial owner.
-  pure def Arbiter::new(arbiterDid: ArbiterDid, userDid: UserDid): Arbiter = 
+  pure def new(arbiterDid: ArbiterDid, userDid: UserDid): Arbiter = 
     {
       version: 0,
       did: arbiterDid,
@@ -328,7 +334,7 @@ module arbiter_core {
   ///
   /// NOTE: the `userDid` is required to be authenticated by the wrapper around the arbiter state
   /// machine as having actually come from the did.
-  pure def Arbiter::startJob(arbiter: Arbiter, userDid: UserDid, spaceKey: SpaceKey, args: JobArgs): Arbiter =
+  pure def startJob(arbiter: Arbiter, userDid: UserDid, spaceKey: SpaceKey, args: JobArgs): Arbiter =
     // Get a new job ID if available
     // In a real implementation this can be any globally unique ID.
     def newId = 1.to(100).exclude(arbiter.jobQueue.keys()).fold(None, (j, a) => Some(j.orElse(a)))
@@ -430,7 +436,7 @@ module arbiter_core {
   ///
   /// NOTE: providing a completely enormous resolved member list is potentially a DoS vector. This
   /// should be handled by the wrapper.
-  pure def Arbiter::provideRemoteSpaceMembers(arbiter: Arbiter, jobId: JobId, spaceId: SpaceId, members: ResolvedMemberList): Arbiter =
+  pure def provideRemoteSpaceMembers(arbiter: Arbiter, jobId: JobId, spaceId: SpaceId, members: ResolvedMemberList): Arbiter =
     def job = arbiter.jobQueue.get(jobId)
 
     // Check job exists
@@ -469,7 +475,7 @@ module arbiter_core {
   /// Timeout a job that is in the queue and waiting for space member lists to be resolved.
   ///
   /// This will execute the job without waiting for the remote member lists to finish resolving.
-  pure def Arbiter::timeoutJob(arbiter: Arbiter, jobId: JobId): Arbiter =
+  pure def timeoutJob(arbiter: Arbiter, jobId: JobId): Arbiter =
     def job = arbiter.jobQueue.get(jobId)
 
     // Check job exists
@@ -585,7 +591,7 @@ module arbiter_core {
       .removeJob(job.id)
       .with("result", ArbiterFinishedJob({
         id: job.id,
-        result: JobOkResolvedMembersList(resolved)
+        result: JobOkResolvedMemberList(resolved)
       }))
 
   /// Execute Job: Create a space
@@ -1064,130 +1070,83 @@ module arbiter_core {
     )
 }
 
+
 /// The server wraps the core, presents the XRPC API, and manages multiple arbiters.
-module arbiter_server {
+module arbiter_template {
   import utils.* from "../lib/utils"
 
-  import arbiter_core as core
-  import arbiter_core.Arbiter
-  import arbiter_core.Arbiter::new
-  import arbiter_core.Arbiter::startJob
-  import arbiter_core.Arbiter::timeoutJob
-  import arbiter_core.Arbiter::provideRemoteSpaceMembers
-  import arbiter_core.ArbiterDid
-  import arbiter_core.UserDid
-  import arbiter_core.Member
-  import arbiter_core.Access
-  import arbiter_core.SpaceKey
-  import arbiter_core.JobId
-  import arbiter_core.JobArgs
-  import arbiter_core.JobOk
-  import arbiter_core.JobResult
-  import arbiter_core.SpaceId
-  import arbiter_core.SpaceKey::ADMIN
-  import arbiter_core.ResolvedMemberList
-  import arbiter_core.ArbiterError
-  import arbiter_core.JobFetchMembers
-  import arbiter_core.JobCreateSpace  
-  import arbiter_core.JobDeleteSpace
-  import arbiter_core.JobConfigureSpace
-  import arbiter_core.JobSetMemberAccess
-  import arbiter_core.JobRemoveMember
-  import arbiter_core.JobDeleteArbiter
+  import choreo(processes = NODES) as choreo from "../lib/choreo"
+  pure def CustomEffect = choreo::CustomEffect
 
-  /// Number of ticks before timing out a job
+  import arbiter_core_types.*
+  import arbiter_core as core
+
   pure val TIMEOUT_TICKS = 8
 
-  /// A request ID
-  type ReqId = int
+  const NODES: Set[Node]
+  const ARBITERS: Set[ArbiterDid]
+  const USERS: Set[UserDid]
+
+  type Node = str
   type Time = int
 
-  /// An server state
-  type Server = {
-    time: Time,
-    jobStartTimes: ReqId -> Time,
-    arbiters: ArbiterDid -> Arbiter,
-    result: ServerResult
+  /// The message data.
+  ///
+  /// Note: For reply message kinds, the fields other than `kind` are preserved.
+  type Msg = {
+    // The node that this message came from. Preserved in replies
+    srcNode: Node,
+    // the user / arbiter that sent this message, except in the case of a reply, where it is the
+    // user / arbiter that sent the message that is being replied to
+    userDid: str,
+    // The arbiter that this message is targeting
+    arbiterDid: ArbiterDid,
+    // The space key this message is targeting
+    spaceKey: SpaceKey,
+    // The JobID that triggered the original message
+    srcJobId: JobId,
+    // The maximum resolution chain depth
+    resolverDepth: int,
+    // The kind of message
+    kind: MsgKind,
   }
 
-  /// Feedback given by the server to outside
-  type Feedback =
-    | Respond(Response)
-    | ResolveRemoteList({
-        reqId: ReqId,
-        space: SpaceId,
-        resolverDepth: int,
-      })
+  pure val Msg::NULL = {
+    srcNode: "",
+    userDid: "",
+    arbiterDid: "",
+    spaceKey: "",
+    srcJobId: 0,
+    resolverDepth: 0,
+    kind: XFetchMembers,
+  }
 
-  /// An XRPC request
-  type Request = { id: ReqId, endpoint: XrpcEndpoint }
+  /// The server message type.
+  type MsgKind =
+    | ReplyResolvedMembers(ReplyResolvedMembersArgs)
+    | XFetchMembers
+    | XCreateSpace
+    | XConfigureSpace(XConfigureSpaceArgs)
+    | XDeleteSpace
+    | XSetMemberAccess(XSetMemberAccessArgs)
+    | XRemoveMember(XRemoveMemberArgs)
+    | XCreateArbiter
+    | XDeleteArbiter
 
-  /// An XRPC endpoint with it's arguments
-  type XrpcEndpoint =
-    | XFetchMembers({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        spaceKey: SpaceKey,
-        resolverDepth: int,
-      })
-    | XCreateSpace({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        spaceKey: SpaceKey,
-        resolverDepth: int,
-      })
-    | XConfigureSpace({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        spaceKey: SpaceKey,
-        publicRecords: bool,
-        publicMembers: bool,
-        resolverDepth: int,
-      })
-    | XDeleteSpace({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        spaceKey: SpaceKey,
-        resolverDepth: int,
-      })
-    | XSetMemberAccess({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        spaceKey: SpaceKey,
-        member: Member,
-        access: Access,
-        resolverDepth: int,
-      })
-    | XRemoveMember({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        spaceKey: SpaceKey,
-        member: Member,
-        resolverDepth: int,
-      })
-    | XCreateArbiter({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        resolverDepth: int,
-      })
-    | XDeleteArbiter({
-        userDid: UserDid,
-        arbiterDid: ArbiterDid,
-        resolverDepth: int,
-      })
-
-  /// A response
-  type Response = { id: ReqId, data: JobResult }
-
-  /// The result of an action on the server
-  type ServerResult =
-    // The operation was successful and there is a set of feedback to be processed by the wrapper.
-    | ServerOk(Set[Feedback])
-    // The operation errored
-    | ServerErr(ServerError)
-    // This is reserved for things that should never happen. If we run into one of these it is a
-    // bug in the specification.
-    | Panic
+  type ReplyResolvedMembersArgs = {
+    members: ResolvedMemberList,
+  }
+  type XConfigureSpaceArgs = {
+    publicRecords: bool,
+    publicMembers: bool,
+  }
+  type XSetMemberAccessArgs = {
+    member: Member,
+    access: Access,
+  }
+  type XRemoveMemberArgs = {
+    member: Member,
+  }
 
   /// The server errors we can run into
   type ServerError =
@@ -1196,71 +1155,178 @@ module arbiter_server {
     | ErrArbiterErr(ArbiterError)
     | ErrDuplicateReqId
 
+  /// A server's state
+  type Server = {
+    time: Time,
+    jobInfo: JobId -> JobInfo,
+    arbiters: ArbiterDid -> Arbiter,
+  }
+
+  type JobInfo = {
+    // The message that started this job
+    msg: Msg,
+    // The time the job was started
+    startTime: Time,
+  }
+
+  type CustomEffects =
+    | UpdatePlc({ arbiterDid: ArbiterDid, node: Node })
+    | ConsumeMessage({
+        node: Node,
+        msg: Msg,
+      })
+    | Error(ServerError)
+    | Panic(Node)
+  type Event = ()
+  type Extensions = {
+    // "DID PLC" mapping of arbiter DIDs to the node they are hosted on.
+    didPlc: ArbiterDid -> Node,
+    panickedServer: Option[Node],
+  }
+
+  /* Boilerplate */
+  type LocalState = choreo::LocalState[Node, Server]
+  type LocalContext = choreo::LocalContext[Node, Server, Msg, Event, Extensions]
+  type Transition = choreo::Transition[Node, Server, Msg, Event, CustomEffects]
+  type GlobalContext = choreo::GlobalContext[
+    Node,
+    Server,
+    Msg,
+    Event,
+    Extensions
+  ]
+  /* End of boilerplate */
+
+  //
+  // ACTIONS
+  // 
+
+  // Initial node state
+  pure def initialize(n: Node): LocalState = {
+    process_id: n,
+    time: 0,
+    jobInfo: Map(),
+    arbiters: Map(),
+  }
+
+  // System init state
+  action init = choreo::init({
+    system: NODES.mapBy(n => initialize(n)),
+    messages: NODES.union(USERS).mapBy(n => Set()),
+    events: NODES.mapBy(n => Set()),
+    extensions: {
+      didPlc: Map(),
+      panickedServer: None,
+    }
+  })
+
+  // Step action
+  action step = choreo::step(
+    transitions,
+    applyCustomEffects
+  )
+
+  val s = choreo::s
+  val NoPanics = s.extensions.panickedServer == None
+  val Invariant = and {
+    NoPanics
+  }
+
+  // Possible state transitions
+  pure def transitions(ctx: LocalContext): Set[Transition] = Set(
+    // Tick the server
+    Set(Server::tick(ctx)),
+    // Handle one of the messages
+    ctx.messages.map(msg => Server::handleMessage(ctx, msg)),
+    // Simulate users sending requests to the system
+    sendUserMessage(ctx),
+  ).flatten()
+
+  // Applies global effects
+  pure def applyCustomEffects(ctx: GlobalContext, effect: CustomEffects): GlobalContext =
+    match (effect) {
+      // Update the PLC resolution record
+      | UpdatePlc(record) => {
+          ...ctx,
+          extensions: {
+            ...ctx.extensions,
+            didPlc: ctx.extensions.didPlc.put(record.arbiterDid, record.node)
+          }
+        }
+      // Consume a message so it isn't handled again by the node
+      | ConsumeMessage(args) => {
+        ...ctx,
+        messages: ctx.messages.put(args.node, ctx.messages.get(args.node).exclude(Set(args.msg)))
+      }
+      | Error(_) => ctx
+      | Panic(node) => { ...ctx, extensions: { ...ctx.extensions, panickedServer: Some(node) } }
+    }
+
   //
   // TRIVIAL SERVER HELPERS
   //
 
-  pure def throw(server: Server, e: ServerError): Server = server.with("result", ServerErr(e))
-  pure def todo(server: Server): Server = server
-  pure def panic(server: Server): Server = server.with("result", Panic)
-  pure def ok(server: Server, feedback: Set[Feedback]): Server = server.with("result", ServerOk(feedback))
-  pure def tick(server: Server): Server = server.with("time", server.time + 1)
-  pure def putArbiter(server: Server, arbiterDid: ArbiterDid, arbiter: Arbiter): Server = server.with("arbiters", server.arbiters.put(arbiterDid, arbiter))
-  pure def removeArbiter(server: Server, arbiterDid: ArbiterDid): Server = server.with("arbiters", server.arbiters.mapRemove(arbiterDid))
-  pure def addJobStartTime(server: Server, reqId: ReqId): Server = server.with("jobStartTimes", server.jobStartTimes.put(reqId, server.time))
-  pure def removeJobStartTime(server: Server, reqId: ReqId): Server = server.with("jobStartTimes", server.jobStartTimes.mapRemove(reqId))
+  pure def throw(server: LocalState, e: ServerError): Transition = { post_state: server, effects: Set(CustomEffect(Error(e))) }
+  pure def panic(server: LocalState): Transition = { post_state: server, effects: Set(CustomEffect(Panic(server.process_id))) }
+  pure def ok(server: LocalState): Transition = { post_state: server, effects: Set() }
+  pure def updatePlc(server: LocalState, arbiterDid: ArbiterDid, node: Node): Transition = { post_state: server, effects: Set(CustomEffect(UpdatePlc({ arbiterDid: arbiterDid, node: node })))}
+  pure def send(server: LocalState, msgs: Set[{toNode: Node, msg: Msg}]): Transition = { post_state: server, effects: msgs.map(x => choreo::Send({to: x.toNode, message: x.msg})) }
+
+  pure def tick(server: LocalState): LocalState = server.with("time", server.time + 1)
+  pure def putArbiter(server: LocalState, arbiterDid: ArbiterDid, arbiter: Arbiter): LocalState = server.with("arbiters", server.arbiters.put(arbiterDid, arbiter))
+  pure def removeArbiter(server: LocalState, arbiterDid: ArbiterDid): LocalState = server.with("arbiters", server.arbiters.mapRemove(arbiterDid))
+  pure def addJobInfo(server: LocalState, jobId: JobId, jobInfo: JobInfo): LocalState = server.with("jobInfo", server.jobInfo.put(jobId, jobInfo))
+  pure def removeJobInfo(server: LocalState, jobId: JobId): LocalState = server.with("jobInfo", server.jobInfo.mapRemove(jobId))
 
   //
-  // ACTIONS
+  // TRANSITION IMPLEMENTATIONS
   //
 
-  /// Create a new server instance
-  pure def Server::default: Server = {
-    time: 0,
-    jobStartTimes: Map(),
-    arbiters: Map(),
-    result: ServerOk(Set())
-  }
+  /// Process a message
+  pure def Server::handleMessage(ctx: LocalContext, msg: Msg): Transition =
+    def server = ctx.state
 
-  /// Process an XRPC request
-  pure def Server::request(server: Server, req: Request): Server =
-    // Reject requests with an in-use request ID
-    if (server.arbiters.keys().exists(arbiterDid =>
-      def arbiter = server.arbiters.get(arbiterDid)
-      arbiter.jobQueue.has(req.id)
-    )) server.throw(ErrDuplicateReqId) else
-
-    // Handle the request
-    match (req.endpoint) {
-      | XCreateArbiter(args) => server.createArbiter(req.id, args.userDid, args.arbiterDid)
-      | XDeleteArbiter(args) => startJob(server, req.id, args.resolverDepth, args.userDid, args.arbiterDid, SpaceKey::ADMIN, JobDeleteArbiter)
-      | XFetchMembers(args) => server.startJob(req.id, args.resolverDepth, args.userDid, args.arbiterDid, args.spaceKey, JobFetchMembers)
-      | XCreateSpace(args) => server.startJob(req.id, args.resolverDepth, args.userDid, args.arbiterDid, args.spaceKey, JobCreateSpace)
-      | XConfigureSpace(args) => server.startJob(req.id, args.resolverDepth, args.userDid, args.arbiterDid, args.spaceKey, JobConfigureSpace({
+    // Handle the message
+    def transition = match (msg.kind) {
+      | XCreateArbiter => ctx.createArbiter(msg)
+      | XDeleteArbiter(args) => ctx.startJob(msg, JobDeleteArbiter)
+      | ReplyResolvedMembers(args) => ctx.handleResolutionReply(msg, args.members)
+      | XFetchMembers => ctx.startJob(msg, JobFetchMembers)
+      | XCreateSpace => ctx.startJob(msg, JobCreateSpace)
+      | XConfigureSpace(args) => ctx.startJob(msg, JobConfigureSpace({
           publicRecords: args.publicRecords,
           publicMembers: args.publicMembers,
         }))
-      | XDeleteSpace(args) => server.startJob(req.id, args.resolverDepth, args.userDid, args.arbiterDid, args.spaceKey, JobDeleteSpace)
-      | XSetMemberAccess(args) => server.startJob(req.id, args.resolverDepth, args.userDid, args.arbiterDid, args.spaceKey, JobSetMemberAccess({
+      | XDeleteSpace => ctx.startJob(msg, JobDeleteSpace)
+      | XSetMemberAccess(args) => ctx.startJob(msg, JobSetMemberAccess({
           member: args.member,
           access: args.access,
         }))
-      | XRemoveMember(args) => server.startJob(req.id, args.resolverDepth, args.userDid, args.arbiterDid, args.spaceKey, JobRemoveMember({
+      | XRemoveMember(args) => ctx.startJob(msg, JobRemoveMember({
           member: args.member,
         }))
     }
 
+    // Make sure the message is consumed so we don't handle it a second time, by adding
+    // a ConsumeMessage effect.
+    transition.with("effects",
+      transition.effects
+        .union(Set(CustomEffect(ConsumeMessage({ node: server.process_id, msg: msg }))))
+    )
+
   /// Tick the server to let it process timeouts and resolution steps
-  pure def Server::tick(server: Server): Server =
+  pure def Server::tick(ctx: LocalContext): Transition =
+    def server = ctx.state
+
     // Find a timed out job, if it exists
     def timedOutJob = server.arbiters.keys().fold(None, (s, arbiterDid) => s.someOrOther(
       def arbiter = server.arbiters.get(arbiterDid)
       
       // Look at every job
       arbiter.jobQueue.keys().fold(s, (s, jobId) => s.someOrOther(
-        def jobStart = server.jobStartTimes.get(jobId)
+        def jobInfo = server.jobInfo.get(jobId)
         // If the job is timed out
-        if (server.time - jobStart >= TIMEOUT_TICKS)
+        if (server.time - jobInfo.startTime >= TIMEOUT_TICKS)
           // Return it
           Some({ arbiterDid: arbiterDid, jobId: jobId })
         else None
@@ -1274,54 +1340,63 @@ module arbiter_server {
         def arbiter = server.arbiters.get(arbiterDid)
 
         // Timeout the job on the arbiter
-        def updArbiter = Arbiter::timeoutJob(arbiter, timedOut.jobId)
+        def updArbiter = core::timeoutJob(arbiter, timedOut.jobId)
 
-        server
-          // Advance time
-          .tick()
-          // Update the arbiter
-          .handleArbiterResult(updArbiter, 0)
+        ctx
+          .with("state", server.tick())
+          // Update the arbiter. Pass a null message because the handleArbiterResult wants to know
+          // what message triggered the result, in case it needs to create a new job and store who
+          // to respond to when that job completes.
+          //
+          // In this case of timing out an existing job, there should be no case in which this message
+          // actually gets used so a null message is fine.
+          .handleArbiterResult(updArbiter, Msg::NULL)
 
       // Just advance time if there are no timed out jobs
-      | None => server.tick()
+      | None => server.tick().ok()
     }
 
   //
   // HELPERS
   //
 
-  pure def createArbiter(server: Server, reqId: ReqId, userDid: UserDid, arbiterDid: ArbiterDid): Server =
+  pure def handleResolutionReply(ctx: LocalContext, m: Msg, members: ResolvedMemberList): Transition =
+    def server = ctx.state
+    def arbiter = server.arbiters.get(m.arbiterDid)
+
+    // Make sure the arbiter exists
+    if (not(server.arbiters.has(m.arbiterDid))) server.throw(ErrArbiterNotExists) else
+    // Update the arbiter
+    def updArbiter = core::provideRemoteSpaceMembers(arbiter, m.srcJobId, { arbiterDid: m.arbiterDid, spaceKey: m.spaceKey }, members)
+    // Handle the result
+    ctx.handleArbiterResult(updArbiter, m)
+
+  pure def createArbiter(ctx: LocalContext, m: Msg): Transition =
+    def server = ctx.state
+
     // Make sure the arbiter doesn't already exist
-    if (server.arbiters.has(arbiterDid)) server.throw(ErrArbiterAlreadyExists) else
+    if (server.arbiters.has(m.arbiterDid)) server.throw(ErrArbiterAlreadyExists) else
     // Create a new arbiter
-    def newArbiter = Arbiter::new(arbiterDid, userDid)
+    def newArbiter = core::new(m.arbiterDid, m.userDid)
     server
       // Add the arbiter to the server
-      .putArbiter(arbiterDid, newArbiter)
-      // Result was OK
-      .ok(Set())
+      .putArbiter(m.arbiterDid, newArbiter)
+      // Update PLC directory to resolve the did to this node, too
+      .updatePlc(m.arbiterDid, server.process_id)
 
-  pure def startJob(server: Server, reqId: ReqId, resolverDepth: int, userDid: UserDid, arbiterDid: ArbiterDid, spaceKey: SpaceKey, jobArgs: JobArgs): Server =
-    def arbiter = server.arbiters.get(arbiterDid)
+  pure def startJob(ctx: LocalContext, msg: Msg, jobArgs: JobArgs): Transition =
+    def server = ctx.state
+    def arbiter = server.arbiters.get(msg.arbiterDid)
     // Make sure the arbiter exists
-    if (not(server.arbiters.has(arbiterDid))) server.throw(ErrArbiterNotExists) else
+    if (not(server.arbiters.has(msg.arbiterDid))) server.throw(ErrArbiterNotExists) else
     // Start the job
-    def updArbiter = Arbiter::startJob(arbiter, userDid, spaceKey, jobArgs)
+    def updArbiter = core::startJob(arbiter, msg.userDid, msg.spaceKey, jobArgs)
     // Handle the result
-    server.handleArbiterResult(updArbiter, resolverDepth)
-
-  /// Provide the result of a remote server member list resolution
-  pure def Server::resolvedMemberList(server: Server, arbiterDid: ArbiterDid, reqId: ReqId, spaceId: SpaceId, members: ResolvedMemberList): Server =
-    def arbiter = server.arbiters.get(arbiterDid)
-    // Make sure the arbiter exists
-    if (not(server.arbiters.has(arbiterDid))) server.throw(ErrArbiterNotExists) else
-    // Update the arbiter
-    def updArbiter = Arbiter::provideRemoteSpaceMembers(arbiter, reqId, spaceId, members)
-    // Handle the result
-    server.handleArbiterResult(updArbiter, 0)
+    ctx.handleArbiterResult(updArbiter, msg)
 
   /// Given an arbiter that has just been updated, handle the result
-  pure def handleArbiterResult(server: Server, updArbiter: Arbiter, resolverDepth: int): Server =
+  pure def handleArbiterResult(ctx: LocalContext, updArbiter: Arbiter, msg: Msg): Transition =
+    def server = ctx.state
     def arbiterDid = updArbiter.did
 
     match (updArbiter.result) {
@@ -1330,14 +1405,14 @@ module arbiter_server {
         server
           // Update the arbiter
           .putArbiter(arbiterDid, updArbiter)
-          .ok(Set())
+          .ok()
 
       // If we need to queue remote space resolution
       | ArbiterQueuedJob(job) =>
         // If the resolver depth is less than one, we can't actually solve the queued spaces.
-        if (resolverDepth < 1)
+        if (msg.resolverDepth < 1)
           // We need to immediately timeout the job
-          def timedOutArbiter = Arbiter::timeoutJob(updArbiter, job.id)
+          def timedOutArbiter = core::timeoutJob(updArbiter, job.id)
 
           // And handle the result
           match (timedOutArbiter.result) {
@@ -1346,17 +1421,31 @@ module arbiter_server {
               server
                 // Remove the arbiter
                 .removeArbiter(arbiterDid)
-                .ok(Set())
+                .ok()
 
             // The job finishes successfully
             | ArbiterFinishedJob(job) =>
-              server
-                // Update the arbiter
-                .putArbiter(arbiterDid, timedOutArbiter)
-                // Remove the recorded job start time
-                .removeJobStartTime(job.id)
-                // Respond with the result
-                .ok(Set(Respond({ id: job.id, data: job.result })))
+              def jobInfo = server.jobInfo.get(job.id)
+              match (job.result) {
+                | JobOkResolvedMemberList(members) =>
+                  server
+                    // Update the arbiter
+                    .putArbiter(arbiterDid, timedOutArbiter)
+                    // Remove the recorded job start time
+                    .removeJobInfo(job.id)
+                    // Respond with the result
+                    .send(Set({
+                      toNode: jobInfo.msg.srcNode,
+                      msg: {
+                        ...jobInfo.msg,
+                        kind: ReplyResolvedMembers({
+                          members: members,
+                        }),
+                      }
+                    }))
+
+                | JobOk => server.removeJobInfo(job.id).ok()
+              }
 
             // If there is an error
             | ArbiterErr(e) =>
@@ -1375,33 +1464,70 @@ module arbiter_server {
           server
             // Update the arbiter
             .putArbiter(arbiterDid, updArbiter)
-            // Record the job start time
-            .addJobStartTime(job.id)
+            // Record the job info
+            .addJobInfo(job.id, {
+              msg: msg,
+              startTime: server.time,
+            })
             // We need to resolve the members for the given space list
-            .ok(job.spacesToResolve.map(x => ResolveRemoteList({
-              space: x,
-              reqId: job.id,
-              // Make sure we decrement the resolver depth so that we don't go in
-              // infinite cycles trying to resolve spaces.
-              resolverDepth: resolverDepth - 1
-            })))
+            .send(job.spacesToResolve.map(spaceId => {
+              // FIXME: this resolve could fail
+              toNode: ctx.extensions.didPlc.get(spaceId.arbiterDid),
+              msg: {
+                srcNode: server.process_id,
+                userDid: arbiterDid,
+                arbiterDid: spaceId.arbiterDid,
+                spaceKey: spaceId.spaceKey,
+                srcJobId: job.id,
+                // Make sure we decrement the resolver depth so that we don't go in
+                // infinite cycles trying to resolve spaces.
+                resolverDepth: msg.resolverDepth - 1,
+                kind: XFetchMembers,
+              }
+            }))
 
       // If the arbiter finished a job
       | ArbiterFinishedJob(job) =>
-        server
-          // Update the arbiter
-          .putArbiter(arbiterDid, updArbiter)
-          // Remove the recorded job start time
-          .removeJobStartTime(job.id)
-          // Respond with the result
-          .ok(Set(Respond({ id: job.id, data: job.result })))
+        def jobMsg =
+          // If we have info for this job it means it was previously queued.
+          if (server.jobInfo.has(job.id))
+            // We want to reply to the original message that created the job.
+            server.jobInfo.get(job.id).msg
+          // If we don't have info for this job, it means that the job was completed immediately and
+          // not queued, so we want to reply to the message that triggered this result.
+          else msg
+
+        match (job.result) {
+          | JobOk => server
+              // Update the arbiter
+              .putArbiter(arbiterDid, updArbiter)
+              // Remove the job info
+              .removeJobInfo(job.id)
+              // We're good
+              .ok()
+          | JobOkResolvedMemberList(members) => server
+              // Update the arbiter
+              .putArbiter(arbiterDid, updArbiter)
+              // Remove the job info
+              .removeJobInfo(job.id)
+              // Respond with the result
+              .send(Set({
+                  toNode: jobMsg.srcNode,
+                  msg: {
+                    ...jobMsg,
+                    kind: ReplyResolvedMembers({
+                      members: members,
+                    }),
+                  }
+                }))
+        }
 
       // If the arbiter is deleted
       | ArbiterDeleted =>
         server
           // Remove the arbiter
           .removeArbiter(arbiterDid)
-          .ok(Set())
+          .ok()
 
       // If there is an error
       | ArbiterErr(e) =>
@@ -1411,552 +1537,48 @@ module arbiter_server {
           // Return the error
           .throw(ErrArbiterErr(e))
     }
+
+  pure def sendMessage(ctx: LocalContext, msg: Msg): Transition =
+    { post_state: ctx.state, effects: Set(choreo::Send({ to: ctx.state.process_id, message: msg })) }
+
+  // Simulate a user sending a random message to the server
+  pure def sendUserMessage(ctx: LocalContext): Set[Transition] =
+    ARBITERS.map(arbiterDid =>
+      USERS.map(userDid => Set(
+        // Create arbiter
+        sendMessage(ctx, {
+          srcNode: userDid,
+          userDid: userDid,
+          arbiterDid: arbiterDid,
+          spaceKey: SpaceKey::ADMIN,
+          srcJobId: 0,
+          resolverDepth: 3,
+          kind: XCreateArbiter,
+        }),
+        // 
+        sendMessage(ctx, {
+          srcNode: userDid,
+          userDid: userDid,
+          arbiterDid: arbiterDid,
+          spaceKey: SpaceKey::ADMIN,
+          srcJobId: 0,
+          resolverDepth: 3,
+          kind: XFetchMembers,
+        })
+      )).flatten()
+    ).flatten()
 }
 
-/// Module wrapping up the whole arbiter system for trace generation
 module arbiter {
-  import utils.* from "../lib/utils"
+  import arbiter_template(
+    NODES = Set("a", "b"),
+    ARBITERS = Set("arb1", "arb2"),
+    USERS = Set("alice", "bob", "charlie"),
+  ).*
+}
 
-  import arbiter_server.*
-  import arbiter_core.Arbiter
-  import arbiter_core.ArbiterDid
-  import arbiter_core.UserDid
-  import arbiter_core.SpaceId
-  import arbiter_core.ResolvedMemberList
-  import arbiter_core.UnresolvedMemberList
-  import arbiter_core.spacesToResolve
-  import arbiter_core.SpaceKey
-  import arbiter_core.SpaceKey::ADMIN
-  import arbiter_core.ArbiterOk
-  import arbiter_core.Member
-  import arbiter_core.MemberUser
-  import arbiter_core.MemberLocalSpace
-  import arbiter_core.MemberRemoteSpace
-  import arbiter_core.SpaceConfig
-  import arbiter_core.Owner
-  import arbiter_core.IsMember
-  import arbiter_core.AddMembers
-  import arbiter_core.RemoveMembers
-import arbiter_core.localUsersFromMembers
-
-  // --------------------------------------------------------------------------
-  // Types
-  // --------------------------------------------------------------------------
-
-  type NetId = str
-
-  /// This ID represents requests from outside the server cluster, like user requests
-  pure val NetId::OUTSIDE = "outside"
-
-  pure val userDids = Set("alice", "bob", "eve", "frank", "charlie", "dave", "grace", "henry", "ivan")
-
-  type Msg = {
-    src: NetId,
-    dst: NetId,
-    kind: MsgKind,
-  }
-
-  pure def isRequest(m: Msg): bool =
-    match (m.kind) {
-      | MsgRequest(_) => true
-      | MsgReply(_) => false
-    }
-
-  pure def isReply(m: Msg): bool =
-    match (m.kind) {
-      | MsgRequest(_) => false
-      | MsgReply(_) => true
-    }
-
-  type MsgKind =
-    | MsgRequest(Request)
-    | MsgReply(Reply)
-
-  type Reply = {
-    id: ReqId,
-    kind: ReplyKind,
-  }
-
-  type ReplyKind = 
-    | ReplyOk
-    | ReplyErr
-    | ReplyMemberList({
-        reqId: ReqId,
-        spaceId: SpaceId,
-        members: ResolvedMemberList,
-      })
-
-  /// Tracks pending resolution requests so we know which original job to complete
-  /// when a resolution reply comes back.
-  type PendingInfo = {
-    originalReqId: ReqId,
-    arbiterDid: ArbiterDid,
-    spaceId: SpaceId,
-  }
-
-  // --------------------------------------------------------------------------
-  // State variables
-  // --------------------------------------------------------------------------
-
-  var msgs: Set[Msg]
-  var servers: NetId -> Server
-  var pendingResolutions: ReqId -> PendingInfo
-
-  // --------------------------------------------------------------------------
-  // Helper functions
-  // --------------------------------------------------------------------------
-
-  /// Find which server hosts a given arbiter DID.
-  pure def serverForArbiter(servers: NetId -> Server, arbiterDid: ArbiterDid): Option[NetId] =
-    servers.keys().fold(None, (result, serverId) =>
-      def server = servers.get(serverId)
-      if (server.arbiters.has(arbiterDid))
-        someOrOther(Some(serverId), result)
-      else
-        someOrOther(None, result)
-    )
-
-  /// Get all request IDs that are free (not used by any in-flight message,
-  /// pending resolution, or job in any arbiter's queue).
-  pure def freeReqId(
-    msgs: Set[Msg],
-    servers: NetId -> Server,
-    pendingResolutions: ReqId -> PendingInfo
-  ): Set[int] =
-    1.to(100)
-      .exclude(msgs.map(msg =>
-        match (msg.kind) {
-          | MsgRequest(req) => req.id
-          | MsgReply(reply) => reply.id
-        }
-      ))
-      .exclude(pendingResolutions.keys())
-      .exclude(servers.keys().map(serverId =>
-        def server = servers.get(serverId)
-        server.arbiters.keys().map(arbiterDid =>
-          def arbiter = server.arbiters.get(arbiterDid)
-          arbiter.jobQueue.keys()
-        ).flatten()
-      ).flatten())
-
-  /// Convert ServerOk feedback (Respond items) into reply messages.
-  /// ResolveRemoteList items are NOT handled here — they are dispatched
-  /// separately by dispatchResolutionRequest.
-  pure def respondFeedbackToMessages(
-    msgSrc: NetId, msgDst: NetId, req: Request,
-    feedback: Set[Feedback]
-  ): Set[Msg] =
-    feedback.fold(Set(), (acc, fb) =>
-      match (fb) {
-        | Respond(resp) =>
-          match (resp.data) {
-            | JobOkResolvedMembersList(members) =>
-              match (req.endpoint) {
-                | XFetchMembers(args) =>
-                  acc.union(Set({
-                    src: msgDst,
-                    dst: msgSrc,
-                    kind: MsgReply({
-                      id: resp.id,
-                      kind: ReplyMemberList({
-                        reqId: resp.id,
-                        spaceId: { arbiterDid: args.arbiterDid, spaceKey: args.spaceKey },
-                        members: members,
-                      }),
-                    }),
-                  }))
-                | _ =>
-                  acc.union(Set({
-                    src: msgDst,
-                    dst: msgSrc,
-                    kind: MsgReply({ id: resp.id, kind: ReplyOk }),
-                  }))
-              }
-            | JobOk =>
-              acc.union(Set({
-                src: msgDst,
-                dst: msgSrc,
-                kind: MsgReply({ id: resp.id, kind: ReplyOk }),
-              }))
-          }
-        | _ => acc
-      }
-    )
-
-  // --------------------------------------------------------------------------
-  // Actions
-  // --------------------------------------------------------------------------
-
-  /// Initialise the system with two servers, each hosting one arbiter.
-  /// server1 hosts the "acme" arbiter (which has a remote space delegation
-  /// to games:#gaming).  server2 hosts the "games" arbiter.
-  action init = all {
-    servers' = Map(
-      "server1" -> Server::default,
-      "server2" -> Server::default,
-    ),
-    msgs' = Set(),
-    pendingResolutions' = Map(),
-  }
-
-  /// Top-level step — pick one action to execute.
-  action step = any {
-    tickServerAny,
-    handleServerRequest,
-    dispatchResolutionRequest,
-    handleServerReply,
-    sendOutsideRequest,
-    receiveReplyToOutsideAny,
-  }
-
-  /// Pick a server and advance its clock.  This may trigger job timeouts.
-  action tickServerAny =
-    nondet serverId = servers.keys().oneOf()
-    def server = servers.get(serverId)
-    all {
-      servers' = servers.put(serverId, Server::tick(server)),
-      msgs' = msgs,
-      pendingResolutions' = pendingResolutions,
-    }
-
-  /// Discard replies destined for outside — we don't simulate the external client.
-  action receiveReplyToOutsideAny =
-    nondet reply = msgs.fold(Set(), (out, m) =>
-      if (m.src == NetId::OUTSIDE)
-        match (m.kind) {
-          | MsgRequest(_) => out
-          | MsgReply(_) => out.union(Set(m))
-        }
-      else out
-    ).oneOf()
-    all {
-      servers' = servers,
-      msgs' = msgs.exclude(Set(reply)),
-      pendingResolutions' = pendingResolutions,
-    }
-
-  /// Process a request message at the destination server.
-  ///
-  /// 1. Calls Server::request to submit the job to the arbiter.
-  /// 2. If the job completes immediately (Respond feedback), converts the
-  ///    response into a reply message and sends it back to the requester.
-  /// 3. If the job needs resolution (ResolveRemoteList feedback), the server
-  ///    state is updated with the queued job and the resolution dispatch is
-  ///    left to the dispatchResolutionRequest action in a later step.
-  action handleServerRequest =
-    nondet msg = msgs.fold(Set(), (out, m) =>
-      match (m.kind) {
-        | MsgRequest(_) => out.union(Set(m))
-        | MsgReply(_) => out
-      }
-    ).oneOf()
-    match (msg.kind) {
-      | MsgRequest(req) =>
-        def server = servers.get(msg.dst)
-        def updServer = Server::request(server, req)
-
-        // Convert Respond feedback into reply messages
-        def newMsgs = match (updServer.result) {
-          | ServerOk(feedback) =>
-            respondFeedbackToMessages(msg.src, msg.dst, req, feedback)
-          | _ => Set()
-        }
-
-        all {
-          servers' = servers.put(msg.dst, updServer),
-          msgs' = msgs.exclude(Set(msg)).union(newMsgs),
-          pendingResolutions' = pendingResolutions,
-        }
-
-      // Unreachable: the fold above only selects MsgRequest values
-      | MsgReply(_) =>
-        all {
-          servers' = servers,
-          msgs' = msgs,
-          pendingResolutions' = pendingResolutions,
-        }
-    }
-
-  /// Find an arbiter with a queued job that is waiting on a remote space
-  /// resolution, pick one unresolved space, and send a fetch-members request
-  /// to the server that hosts that space.
-  ///
-  /// A fresh request ID is used (avoiding the job-ID-reuse problem) and the
-  /// mapping from this new ID to the original job context is stored in
-  /// pendingResolutions.
-  action dispatchResolutionRequest =
-    // Only consider servers that have at least one arbiter with a job
-    // that has unresolved remote spaces.
-    def serversWithNeedyJobs = servers.keys().filter(serverId =>
-      def s = servers.get(serverId)
-      s.arbiters.keys().exists(did =>
-        def a = s.arbiters.get(did)
-        a.jobQueue.keys().exists(jobId =>
-          def j = a.jobQueue.get(jobId)
-          j.unresolvedMembers.spacesToResolve()
-            .exclude(j.resolvedSpaces.keys()).size() > 0
-        )
-      )
-    )
-
-    nondet serverId = serversWithNeedyJobs.oneOf()
-    def server = servers.get(serverId)
-
-    // Find arbiters on this server that have needy jobs
-    def arbitersWithNeedyJobs = server.arbiters.keys().filter(did =>
-      def arbiter = server.arbiters.get(did)
-      arbiter.jobQueue.keys().exists(jobId =>
-        def job = arbiter.jobQueue.get(jobId)
-        job.unresolvedMembers.spacesToResolve()
-          .exclude(job.resolvedSpaces.keys()).size() > 0
-      )
-    )
-
-    nondet arbiterDid = arbitersWithNeedyJobs.oneOf()
-    def arbiter = server.arbiters.get(arbiterDid)
-
-    // Pick a specific job that needs resolution
-    def needyJobIds = arbiter.jobQueue.keys().filter(jobId =>
-      def job = arbiter.jobQueue.get(jobId)
-      job.unresolvedMembers.spacesToResolve()
-        .exclude(job.resolvedSpaces.keys()).size() > 0
-    )
-
-    nondet jobId = needyJobIds.oneOf()
-    def job = arbiter.jobQueue.get(jobId)
-
-    // Pick one unresolved space from that job
-    def unresolvedSpaces = job.unresolvedMembers.spacesToResolve()
-      .exclude(job.resolvedSpaces.keys())
-
-    nondet spaceId = unresolvedSpaces.oneOf()
-
-    // Find the server that hosts the remote arbiter
-    match (serverForArbiter(servers, spaceId.arbiterDid)) {
-      | Some(host) =>
-        // Use a user from the target arbiter's $admin space for the resolution
-        // request — these users have Owner access and can read any space.
-        def targetServer = servers.get(host)
-        def targetArbiter = targetServer.arbiters.get(spaceId.arbiterDid)
-        def adminSpace = targetArbiter.spaces.get(SpaceKey::ADMIN)
-        def adminUsers = adminSpace.members.keys().localUsersFromMembers()
-        nondet resolutionUserDid = adminUsers.oneOf()
-
-        // Pick a fresh request ID for the resolution request
-        def availableIds = freeReqId(msgs, servers, pendingResolutions)
-        nondet resolutionReqId = availableIds.oneOf()
-
-        all {
-          servers' = servers,
-          msgs' = msgs.union(Set({
-            src: serverId,
-            dst: host,
-            kind: MsgRequest({
-              id: resolutionReqId,
-              endpoint: XFetchMembers({
-                userDid: resolutionUserDid,
-                arbiterDid: spaceId.arbiterDid,
-                spaceKey: spaceId.spaceKey,
-                resolverDepth: 1,
-              }),
-            }),
-          })),
-          pendingResolutions' = pendingResolutions.put(resolutionReqId, {
-            originalReqId: jobId,
-            arbiterDid: arbiterDid,
-            spaceId: spaceId,
-          }),
-        }
-
-      | None =>
-        // Remote arbiter not found on any server — message is lost and
-        // the job will eventually timeout.
-        all {
-          servers' = servers,
-          msgs' = msgs,
-          pendingResolutions' = pendingResolutions,
-        }
-    }
-
-  /// Process a reply message, feeding resolved member lists back into the
-  /// arbiter that was waiting for them.
-  ///
-  /// 1. Looks up the reply's ID in pendingResolutions to find the original job.
-  /// 2. Calls Server::resolvedMemberList with the original job info.
-  /// 3. If the job completes as a result, any Respond feedback is converted
-  ///    into a reply to outside (which receiveReplyToOutsideAny will consume).
-  action handleServerReply =
-    nondet msg = msgs.fold(Set(), (out, m) =>
-      match (m.kind) {
-        | MsgRequest(_) => out
-        | MsgReply(_) => out.union(Set(m))
-      }
-    ).oneOf()
-    match (msg.kind) {
-      | MsgReply(reply) => match (reply.kind) {
-          | ReplyMemberList(r) =>
-            if (pendingResolutions.has(reply.id))
-              def info = pendingResolutions.get(reply.id)
-              def server = servers.get(msg.dst)
-              def updServer = Server::resolvedMemberList(
-                server, info.arbiterDid, info.originalReqId,
-                r.spaceId, r.members
-              )
-
-              // If the job completed, send the response to outside
-              def newMsgs = match (updServer.result) {
-                | ServerOk(feedback) =>
-                  respondFeedbackToMessages(
-                    msg.dst, NetId::OUTSIDE,
-                    // Build a minimal Request for the helper to use
-                    { id: info.originalReqId, endpoint: XFetchMembers({
-                      userDid: "",
-                      arbiterDid: info.spaceId.arbiterDid,
-                      spaceKey: info.spaceId.spaceKey,
-                      resolverDepth: 0,
-                    })},
-                    feedback
-                  )
-                | _ => Set()
-              }
-
-              all {
-                servers' = servers.put(msg.dst, updServer),
-                msgs' = msgs.exclude(Set(msg)).union(newMsgs),
-                pendingResolutions' = pendingResolutions.mapRemove(reply.id),
-              }
-            else
-              // No pending resolution — discard the message
-              all {
-                servers' = servers,
-                msgs' = msgs.exclude(Set(msg)),
-                pendingResolutions' = pendingResolutions,
-              }
-
-          | _ =>
-            // ReplyOk or ReplyErr — just discard
-            all {
-              servers' = servers,
-              msgs' = msgs.exclude(Set(msg)),
-              pendingResolutions' = pendingResolutions,
-            }
-        }
-
-      // Unreachable: the fold above only selects MsgReply values
-      | MsgRequest(_) =>
-        all {
-          servers' = servers,
-          msgs' = msgs,
-          pendingResolutions' = pendingResolutions,
-        }
-    }
-
-  /// Send a request from "outside" to a server.
-  /// Picks an existing arbiter, an existing space on that arbiter, a user
-  /// DID, and a resolver depth, then creates a FetchMembers request.
-  action sendOutsideRequest =
-    nondet serverId = servers.keys().oneOf()
-    def server = servers.get(serverId)
-    nondet arbiterDid = server.arbiters.keys().oneOf()
-    def arbiter = server.arbiters.get(arbiterDid)
-    nondet spaceKey = arbiter.spaces.keys().oneOf()
-    nondet userDid = userDids.oneOf()
-    nondet resolverDepth = Set(0, 1, 2).oneOf()
-
-    def availableIds = freeReqId(msgs, servers, pendingResolutions)
-    nondet reqId = availableIds.oneOf()
-
-    all {
-      msgs' = msgs.union(Set({
-        src: NetId::OUTSIDE,
-        dst: serverId,
-        kind: MsgRequest({
-          id: reqId,
-          endpoint: XFetchMembers({
-            userDid: userDid,
-            arbiterDid: arbiterDid,
-            spaceKey: spaceKey,
-            resolverDepth: resolverDepth,
-          }),
-        }),
-      })),
-      servers' = servers,
-      pendingResolutions' = pendingResolutions,
-    }
-
-  // --------------------------------------------------------------------------
-  // Test helpers — used by the run block below
-  // --------------------------------------------------------------------------
-
-  /// A witness that is true when any pending resolution exists.
-  /// Use with: quint run --witnesses=witnessHasPendingResolution
-  val witnessHasPendingResolution = pendingResolutions.keys().size() > 0
-
-  /// Send a specific fetch-members request for acme.#dev from outside.
-  /// This space has a remote delegation to games:#gaming, so it will
-  /// trigger cross-server resolution when processed on server1.
-  action sendDevFetchRequest =
-    nondet userDid = userDids.oneOf()
-    nondet resolverDepth = Set(1, 2).oneOf()
-    def availableIds = freeReqId(msgs, servers, pendingResolutions)
-    nondet reqId = availableIds.oneOf()
-    all {
-      msgs' = msgs.union(Set({
-        src: NetId::OUTSIDE,
-        dst: "server1",
-        kind: MsgRequest({
-          id: reqId,
-          endpoint: XFetchMembers({
-            userDid: userDid,
-            arbiterDid: "acme",
-            spaceKey: "#dev",
-            resolverDepth: resolverDepth,
-          }),
-        }),
-      })),
-      servers' = servers,
-      pendingResolutions' = pendingResolutions,
-    }
-
-  action debugPrintVars = all {
-    msgs' = q::debug(msgs),
-    servers' = q::debug(servers),
-    pendingResolutions' = q::debug(pendingResolutions),
-  }
-
-  /// Intentionally exercise the cross-server resolution path.
-  ///
-  /// 1. init:     server1 hosts acme, server2 hosts games
-  /// 2. sendDev:  outside requests fetch-members for acme.#dev
-  /// 3. handle:   server1 queues a job on acme (needs games:#gaming)
-  /// 5. dispatch: server1 sends a resolution fetch to server2
-  /// 5. handle:   server2 processes the fetch for games:#gaming (sync resolve)
-  /// 6. handle:   server1 receives the resolution reply, job completes
-  ///
-  /// After step 6, pendingResolutions should be back to empty and the
-  /// acme arbiter's job queue should be empty (the job finished).
-  run crossServerResolve1Test =
-    initScenario1
-      .then(sendDevFetchRequest)
-      .then(handleServerRequest)
-      .then(debugPrintVars)
-      .then(dispatchResolutionRequest)
-      .then(handleServerRequest)
-      .then(handleServerReply)
-      .expect(pendingResolutions == Map())
-
-  // --------------------------------------------------------------------------
-  // Static arbiter fixtures
-  // --------------------------------------------------------------------------
-
-  action initScenario1 = all {
-    servers' = Map(
-      "server1" -> Server::default.putArbiter(acmeArbiter.did, acmeArbiter),
-      "server2" -> Server::default.putArbiter(gamesArbiter.did, gamesArbiter),
-    ),
-    msgs' = Set(),
-    pendingResolutions' = Map(),
-  }
+module fixtures {
+  import arbiter_core_types.*
 
   /// "acme" arbiter on server1 — its #dev space has a remote delegation
   /// to games:#gaming, which triggers cross-server resolution.
