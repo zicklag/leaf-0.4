@@ -4,7 +4,6 @@ module arbiter_server {
 
   import choreo(processes = NODES) as choreo from "../lib/choreo"
   pure def CustomEffect = choreo::CustomEffect
-  export choreo
 
   import arbiter_core_types.* from "./arbiter_core"
   import arbiter_core as core from "./arbiter_core"
@@ -163,8 +162,16 @@ module arbiter_server {
   )
 
   val NoPanics = choreo::s.extensions.panickedServer == None
+  val AllArbiterInvariants = choreo::s.system.keys().forall(nodeId =>
+    def node = choreo::s.system.get(nodeId)
+    node.arbiters.keys().forall(arbiterDid =>
+      def arbiter = node.arbiters.get(arbiterDid)
+      core::Arbiter::invariants(arbiter)
+    )
+  )
   val Invariant = and {
-    NoPanics
+    NoPanics,
+    AllArbiterInvariants,
   }
 
   // Possible state transitions

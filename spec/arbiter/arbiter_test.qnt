@@ -1,12 +1,14 @@
 module arbiter_test {
   import utils.* from "../lib/utils"
+  import arbiter_core_types.* from "./arbiter_core"
 
+  val nodes = Set("a", "b")
   import arbiter_server(
-    NODES = Set("a", "b"),
+    NODES = nodes,
     ARBITERS = Set("arb1", "arb2"),
     USERS = Set("alice", "bob", "charlie"),
   ).* from "./arbiter"
-  import arbiter_core_types.* from "./arbiter_core"
+  import choreo(processes = nodes) as choreo from "../lib/choreo"
 
   import fixtures.*
 
