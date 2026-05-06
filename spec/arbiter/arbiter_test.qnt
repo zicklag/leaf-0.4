@@ -166,11 +166,11 @@ module arbiter_test {
   /// Have an owner add a new owner
   run addOwnerToAcmeArbiterTest =
     initScenario1
-      // Have bob, an owner, send a message to add zicklag as an owner to the $admin space
+      // Have bob, an owner, send a message to add subcomAdmin as an owner to the $admin space
       .then(sendMsgFromUser("bob", "a", "acme", "$admin", XSetMemberAccess({ member: MemberUser("newOwner"), access: Owner }), 2))
       // Have server a handle the message
       .then(handleMsg("a"))
-      // It should complete immediately with zicklag as a new member.
+      // It should complete immediately with subcomAdmin as a new member.
       .expect(choreo::s.system.get("a").arbiters.get("acme").spaces.get("$admin").members.get(MemberUser("newOwner")) == Owner)
 
   /// Have a remotely-delegated owner add a new local owner.
@@ -206,9 +206,9 @@ module arbiter_test {
   /// resolve instantly by setting resolver depth to 0, and that local admins will still be able to add users in that case.
   run addOwnerToSubcomAsLocalOwnerArbiterTest =
     initScenario1
-      // Have zicklag, who is a local owner of subcom, try to add a new owner
-      .then(sendMsgFromUser("zicklag", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newOwner"), access: Owner }), 0))
-      // Server B will handle the message, and realize that zicklag is a local owner so access doesn't require a remote lookup
+      // Have subcomAdmin, who is a local owner of subcom, try to add a new owner
+      .then(sendMsgFromUser("subcomAdmin", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newOwner"), access: Owner }), 0))
+      // Server B will handle the message, and realize that subcomAdmin is a local owner so access doesn't require a remote lookup
       .then(handleMsg("b"))
       // And we will see that the new owner has been added successfully
       .expect(choreo::s.system.get("b").arbiters.get("subcom").spaces.get("$admin").members.get(MemberUser("newOwner")) == Owner)
@@ -217,9 +217,9 @@ module arbiter_test {
   /// the remote resolution times out.
   run addOwnerToSubcomAsLocalOwnerWithRemoteResolveTimeoutArbiterTest =
     initScenario1
-      // Have zicklag, who is a local owner of subcom, try to add a new owner
-      .then(sendMsgFromUser("zicklag", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newOwner"), access: Owner }), 2))
-      // Server B will handle the message, and realize that zicklag is a local owner so access doesn't require a remote lookup
+      // Have subcomAdmin, who is a local owner of subcom, try to add a new owner
+      .then(sendMsgFromUser("subcomAdmin", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newOwner"), access: Owner }), 2))
+      // Server B will handle the message, and realize that subcomAdmin is a local owner so access doesn't require a remote lookup
       .then(handleMsg("b"))
       // Tick the server enough times to force a timeout of the remote resolution
       .then(9.reps(i => tickServer("b")))
@@ -239,6 +239,48 @@ module arbiter_test {
       .then(handleMsg("b"))
       // And we will see that server throws an error
       .expect(choreo::s.extensions.serverError == Some({ node: "b", error: ErrArbiterErr(ErrPermissionDenied) }))
+
+  /// Try to have both alice and bob try to add a member to a space with a remote delegation at the
+  /// same time, and show that only one of the requests is accepted.
+  ///
+  /// TODO: this test makes me realize we aren't telling you when a particular job errors so the
+  /// runtime isn't cleaning up the errored jobs.
+  run twoOwnersAddAMemberToSpaceWithRemoteDelegationSimultaneouslyArbiterTest =
+    initScenario1
+      // Alice sends a request to add a new member
+      .then(sendMsgFromUser("alice", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newMember1"), access: AddMembers }), 2))
+      // Server B handles it, but will start a job that needs to resolve the member list from server a
+      .then(handleMsg("b"))
+      // And Bob sends one immediately after for a different user
+      .then(sendMsgFromUser("bob", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newMember2"), access: RemoveMembers }), 2))
+      // Server B handles it, but will start another job to handle the member list from server a
+      .then(handleMsg("b"))
+      // Server A handles both of the resolution requests and will send replies to server B. It's
+      // nondeterministic which one it handles first.
+      .then(handleMsg("a"))
+      .then(handleMsg("a"))
+      // Server B will handle one of the resolutions, which should succeed
+      .then(handleMsg("b"))
+      // At this point the arbiter should have successfully completed the 
+      .expect(match(choreo::s.system.get("b").arbiters.get("subcom").result) {
+          | ArbiterFinishedJob(job) => job.result == JobOk
+          | _ => false
+        })
+      // Now server B handles the next reply, which will attempt to complete the second job.
+      .then(handleMsg("b"))
+      // But this will error because the state has been changed since the request was submitted by
+      // the earlier request.
+      .expect(choreo::s.system.get("b").arbiters.get("subcom").result == ArbiterErr(ErrPermissionChanged))
+      // One of the new members should have been added to the arbiter
+      .expect(
+        def member1 = MemberUser("newMember1")
+        def member2 = MemberUser("newMember2")
+        def m = choreo::s.system.get("b").arbiters.get("subcom").spaces.get("$admin").members {
+          (m.has(member1) and m.get(member1) == AddMembers)
+            or
+          (m.has(member2) and m.get(member2) == RemoveMembers)
+        }
+      )
 }
 
 module fixtures {
@@ -291,7 +333,7 @@ module fixtures {
         config: { publicRecords: false, publicMembers: false },
         members: Map(
           MemberRemoteSpace({ arbiterDid: "acme", spaceKey: "$admin" }) -> Owner,
-          MemberUser("zicklag") -> Owner,
+          MemberUser("subcomAdmin") -> Owner,
         )
       }
     )
