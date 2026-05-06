@@ -405,12 +405,6 @@ module arbiter_core {
 
         // Queue the job
         arbiter
-          // FIXME: this is a bug. We should not increment the arbiter version for new jobs. This
-          // will prevent all mutations from applying properly, if they require a remote space
-          // resolution.
-          //
-          // I want to leave this here until we have a test that fails with the bug in it.
-          .nextVersion()
           .with("jobQueue", arbiter.jobQueue.put(jobId, {
             id: jobId,
             userDid: userDid,
@@ -465,7 +459,6 @@ module arbiter_core {
     else
       // Just update the queued job's resolved spaces
       arbiter
-        .nextVersion() // FIXME: this is a bug
         .with("jobQueue",
           arbiter.jobQueue.put(jobId,
             job.with("resolvedSpaces", resolvedSpaces) 

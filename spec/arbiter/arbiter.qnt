@@ -385,7 +385,7 @@ module arbiter_server {
                   server
                     // Update the arbiter
                     .putArbiter(arbiterDid, timedOutArbiter)
-                    // Remove the recorded job start time
+                    // Cleanup job info
                     .removeJobInfo(job.id)
                     // Respond with the result
                     .send(Set({
@@ -398,7 +398,12 @@ module arbiter_server {
                       }
                     }))
 
-                | JobOk => server.removeJobInfo(job.id).ok()
+                | JobOk => server
+                  // Update the arbiter
+                  .putArbiter(arbiterDid, timedOutArbiter)
+                  // Cleanup job info
+                  .removeJobInfo(job.id)
+                  .ok()
               }
 
             // If there is an error
