@@ -3,6 +3,8 @@
 //! This module handles role computation and resolution logic. It is designed to be wrapped
 //! by the arbiter server that drives it.
 
+use serde::{Deserialize, Serialize};
+
 use im::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
@@ -26,15 +28,26 @@ pub const ADMIN_SPACE_KEY: &str = "$admin";
 /// All later permissions include the ones before. There are two "tiers":
 /// space permissions and arbiter permissions. The arbiter permissions only have
 /// effect when inherited into the `$admin` space.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// In the ITF trace format Quint serialises sum types as `{ tag, value }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "value")]
 pub enum Access {
+    #[serde(rename = "ReadMemberList")]
     ReadMemberList = 0,
+    #[serde(rename = "IsMember")]
     IsMember = 1,
+    #[serde(rename = "AddMembers")]
     AddMembers = 2,
+    #[serde(rename = "RemoveMembers")]
     RemoveMembers = 3,
+    #[serde(rename = "ConfigureSpace")]
     ConfigureSpace = 4,
+    #[serde(rename = "CreateSpaces")]
     CreateSpaces = 5,
+    #[serde(rename = "RemoveSpace")]
     RemoveSpace = 6,
+    #[serde(rename = "Owner")]
     Owner = 7,
 }
 
@@ -77,10 +90,14 @@ impl Access {
 // ---------------------------------------------------------------------------
 
 /// A member in a space may be a user with a DID, another local space, or a remote space.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "value")]
 pub enum Member {
+    #[serde(rename = "MemberUser")]
     User(UserDid),
+    #[serde(rename = "MemberLocalSpace")]
     LocalSpace(SpaceKey),
+    #[serde(rename = "MemberRemoteSpace")]
     RemoteSpace(SpaceId),
 }
 
@@ -89,7 +106,7 @@ pub enum Member {
 // ---------------------------------------------------------------------------
 
 /// A reference to a space, qualified by the arbiter that owns it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpaceId {
     pub arbiter_did: ArbiterDid,
     pub space_key: SpaceKey,
@@ -100,7 +117,8 @@ pub struct SpaceId {
 // ---------------------------------------------------------------------------
 
 /// Extra configuration associated to a space.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SpaceConfig {
     pub public_records: bool,
     pub public_members: bool,
@@ -111,7 +129,7 @@ pub struct SpaceConfig {
 // ---------------------------------------------------------------------------
 
 /// A permissioned space.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Space {
     pub config: SpaceConfig,
     pub members: HashMap<Member, Access>,
@@ -122,9 +140,12 @@ pub struct Space {
 // ---------------------------------------------------------------------------
 
 /// An item in the unresolved member list: either a user or a remote space that must be resolved.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "value")]
 pub enum UnresolvedMemberListItem {
+    #[serde(rename = "UMLUser")]
     User(UserDid),
+    #[serde(rename = "UMLSpace")]
     Space(SpaceId),
 }
 
@@ -132,7 +153,8 @@ pub enum UnresolvedMemberListItem {
 pub type UnresolvedMemberList = HashMap<UnresolvedMemberListItem, Access>;
 
 /// A fully resolved member list, plus any spaces that are still missing.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResolvedMemberList {
     pub member_list: HashMap<UserDid, Access>,
     pub missing_spaces: HashMap<SpaceId, Access>,
@@ -154,7 +176,8 @@ impl ResolvedMemberList {
 // ---------------------------------------------------------------------------
 
 /// Errors produced by the arbiter state machine.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum ArbiterError {
     JobIdAlreadyUsed,
     JobNotExists,
@@ -178,9 +201,12 @@ pub enum ArbiterError {
 // ---------------------------------------------------------------------------
 
 /// The result of a finished job.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "value")]
 pub enum JobResult {
+    #[serde(rename = "JobOk")]
     Ok,
+    #[serde(rename = "JobOkResolvedMemberList")]
     ResolvedMembersList(ResolvedMemberList),
 }
 
@@ -189,18 +215,25 @@ pub enum JobResult {
 // ---------------------------------------------------------------------------
 
 /// The result of an action on the arbiter state machine.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "value")]
 pub enum ArbiterResult {
+    #[serde(rename = "ArbiterOk")]
     Ok,
+    #[serde(rename = "ArbiterQueuedJob")]
     QueuedJob {
         id: JobId,
+        #[serde(rename = "spacesToResolve")]
         spaces_to_resolve: HashSet<SpaceId>,
     },
+    #[serde(rename = "ArbiterFinishedJob")]
     FinishedJob {
         id: JobId,
         result: JobResult,
     },
+    #[serde(rename = "ArbiterDeleted")]
     Deleted,
+    #[serde(rename = "ArbiterErr")]
     Err(ArbiterError),
 }
 
@@ -209,19 +242,27 @@ pub enum ArbiterResult {
 // ---------------------------------------------------------------------------
 
 /// Arguments for a job to perform some action on the arbiter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "value")]
 pub enum JobArgs {
+    #[serde(rename = "JobFetchMembers")]
     FetchMembers,
+    #[serde(rename = "JobCreateSpace")]
     CreateSpace,
+    #[serde(rename = "JobConfigureSpace")]
     ConfigureSpace(SpaceConfig),
+    #[serde(rename = "JobDeleteSpace")]
     DeleteSpace,
+    #[serde(rename = "JobSetMemberAccess")]
     SetMemberAccess {
         member: Member,
         access: Access,
     },
+    #[serde(rename = "JobRemoveMember")]
     RemoveMember {
         member: Member,
     },
+    #[serde(rename = "JobDeleteArbiter")]
     DeleteArbiter,
 }
 
@@ -230,7 +271,8 @@ pub enum JobArgs {
 // ---------------------------------------------------------------------------
 
 /// A work-in-progress action such as adding or removing a member.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Job {
     pub id: JobId,
     pub user_did: UserDid,
@@ -246,7 +288,8 @@ pub struct Job {
 // ---------------------------------------------------------------------------
 
 /// The core state of an arbiter.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Arbiter {
     /// Monotonic version used for compare-and-swap updates.
     pub version: i64,
@@ -255,6 +298,7 @@ pub struct Arbiter {
     /// Spaces managed by the arbiter.
     pub spaces: HashMap<SpaceKey, Space>,
     /// Work-in-progress resolution jobs.
+    #[serde(rename = "jobQueue")]
     pub job_queue: HashMap<JobId, Job>,
     /// The result of the last operation.
     pub result: ArbiterResult,
@@ -491,7 +535,7 @@ impl Arbiter {
         }
 
         // Queue the job
-        let mut a = next_version(self);
+        let mut a = self.clone();
         let spaces_to_resolve_set = spaces_to_resolve(&unresolved_members);
         a.job_queue = a.job_queue.update(
             job_id,
@@ -564,7 +608,7 @@ impl Arbiter {
             };
             execute_job(self, resolved, &updated_job)
         } else {
-            let mut a = next_version(self);
+            let mut a = self.clone();
             a.job_queue = a.job_queue.update(
                 job_id,
                 Job {

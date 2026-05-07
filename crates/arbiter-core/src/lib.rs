@@ -5,7 +5,11 @@
 //! to mirror Quint's immutable-update semantics.
 
 pub mod core;
+#[cfg(test)]
+pub mod mbt;
 pub mod server;
+pub mod service;
 
 pub use core::*;
 pub use server::*;
+pub use service::*;
