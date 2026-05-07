@@ -50,7 +50,7 @@ module arbiter_core_types {
 
   /// An error result for the arbiter state machine
   type ArbiterErrorKind =
-    | ErrJobIdsExhausted
+    | ErrJobIdExists
     | ErrJobNotExists
     | ErrSpaceNotNeeded
     | ErrSpaceAlreadyResolved
@@ -340,13 +340,9 @@ module arbiter_core {
   ///
   /// NOTE: the `userDid` is required to be authenticated by the wrapper around the arbiter state
   /// machine as having actually come from the did.
-  pure def startJob(arbiter: Arbiter, userDid: UserDid, spaceKey: SpaceKey, args: JobArgs): Arbiter =
-    // Get a new job ID if available
-    // In a real implementation this can be any globally unique ID.
-    def newId = 1.to(100).exclude(arbiter.jobQueue.keys()).fold(None, (j, a) => Some(j.orElse(a)))
-
-    // Return an error if we are out of IDs
-    match (newId) { | None => arbiter.throw(ErrJobIdsExhausted) | Some(jobId) =>
+  pure def startJob(arbiter: Arbiter, userDid: UserDid, spaceKey: SpaceKey, jobId: JobId, args: JobArgs): Arbiter =
+    // Make sure the job ID doesn't already exist
+    if (arbiter.jobQueue.has(jobId)) arbiter.throw(ErrJobIdExists) else
 
     // Make sure we don't have any jobs we need to force a timeout on to avoid a compare-and-swap
     // version collision
@@ -424,7 +420,7 @@ module arbiter_core {
             id: jobId,
             spacesToResolve: unresolvedMembers.spacesToResolve()
           }))
-    }}
+    }
   }
 
   /// Provide the resolved space member list for a job that was waiting on a member list to be

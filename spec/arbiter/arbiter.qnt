@@ -345,12 +345,21 @@ module arbiter_server {
   pure def startJob(ctx: LocalContext, msg: Msg, jobArgs: JobArgs): Transition =
     def server = ctx.state
     def arbiter = server.arbiters.get(msg.arbiterDid)
+
+    // Generate a unique job ID
+    def newId = 1.to(100).exclude(server.jobInfo.keys()).fold(None, (j, a) => Some(j.orElse(a)))
+
+    // Panic if we are out of IDs. The implementation must make sure this never happens
+    match (newId) { | None => server.panic() | Some(jobId) =>
+
     // Make sure the arbiter exists
     if (not(server.arbiters.has(msg.arbiterDid))) server.throw(ErrArbiterNotExists) else
     // Start the job
-    def updArbiter = core::startJob(arbiter, msg.userDid, msg.spaceKey, jobArgs)
+    def updArbiter = core::startJob(arbiter, msg.userDid, msg.spaceKey, jobId, jobArgs)
     // Handle the result
     ctx.handleArbiterResult(updArbiter, msg)
+
+    }
 
   /// Given an arbiter that has just been updated, handle the result
   pure def handleArbiterResult(ctx: LocalContext, updArbiter: Arbiter, msg: Msg): Transition =
