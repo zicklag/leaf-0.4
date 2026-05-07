@@ -228,7 +228,7 @@ module arbiter_test {
       .expect(choreo::s.system.get("b").arbiters.get("subcom").spaces.get("$admin").members.get(MemberUser("newOwner")) == Owner)
 
   /// Try to add an owner with an account that shouldn't be allowed to
-  run failToAddOwnerToSubcomAsAcmeOwnerArbiterTest =
+  run randoFailToAddOwnerToSubcomArbiterTest =
     initScenario1
       // Have rando, who has no permissions in the space try to add themselves as an owner
       .then(sendMsgFromUser("rando", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("rando"), access: Owner }), 2))
