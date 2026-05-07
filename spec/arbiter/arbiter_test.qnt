@@ -200,7 +200,7 @@ module arbiter_test {
       .then(9.reps(i => tickServer("b")))
       // And we will see that the arbiter errored with permission denied because it couldn't validate that the member was actually
       // in the remote arbiter's list.
-      .expect(choreo::s.extensions.serverError == Some({ node: "b", error: ErrArbiterErr(ErrPermissionDenied) }))
+      .expect(choreo::s.extensions.serverError.matchesArbiterErrKind("b", ErrPermissionDenied))
 
   /// Make sure that adding a member to a space that has a remote delegation can be forced to
   /// resolve instantly by setting resolver depth to 0, and that local admins will still be able to add users in that case.
@@ -238,13 +238,10 @@ module arbiter_test {
       // Then server B will receive the reply and finish the action
       .then(handleMsg("b"))
       // And we will see that server throws an error
-      .expect(choreo::s.extensions.serverError == Some({ node: "b", error: ErrArbiterErr(ErrPermissionDenied) }))
+      .expect(choreo::s.extensions.serverError.matchesArbiterErrKind("b", ErrPermissionDenied))
 
   /// Try to have both alice and bob try to add a member to a space with a remote delegation at the
   /// same time, and show that only one of the requests is accepted.
-  ///
-  /// TODO: this test makes me realize we aren't telling you when a particular job errors so the
-  /// runtime isn't cleaning up the errored jobs.
   run twoOwnersAddAMemberToSpaceWithRemoteDelegationSimultaneouslyArbiterTest =
     initScenario1
       // Alice sends a request to add a new member
@@ -270,7 +267,7 @@ module arbiter_test {
       .then(handleMsg("b"))
       // But this will error because the state has been changed since the request was submitted by
       // the earlier request.
-      .expect(choreo::s.system.get("b").arbiters.get("subcom").result == ArbiterErr(ErrPermissionChanged))
+      .expect(choreo::s.extensions.serverError.matchesArbiterErrKind("b", ErrPermissionChanged))
       // One of the new members should have been added to the arbiter
       .expect(
         def member1 = MemberUser("newMember1")
@@ -281,6 +278,18 @@ module arbiter_test {
           (m.has(member2) and m.get(member2) == RemoveMembers)
         }
       )
+
+  /// Utility to check that the error matches the given node and arbiter kind, ignoring the detail
+  /// of the specific job ID in the arbiter error.
+  pure def matchesArbiterErrKind(err: Option[{ node: Node, error: ServerError }], node: Node, kind: ArbiterErrorKind): bool =
+    match (err) {
+      | Some(e) =>
+          e.node == node and match (e.error) {
+            | ErrArbiterErr(e) => e.kind == kind
+            | _ => false
+          }
+      | None => false
+    }
 }
 
 module fixtures {

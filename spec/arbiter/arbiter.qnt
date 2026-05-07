@@ -211,7 +211,19 @@ module arbiter_server {
   // TRIVIAL SERVER HELPERS
   //
 
-  pure def throw(server: LocalState, e: ServerError): Transition = { post_state: server, effects: Set(CustomEffect(Error({ node: server.process_id, error: e }))) }
+  pure def throw(server: LocalState, serverErr: ServerError): Transition =
+    // If this is an arbiter error with a job ID we want to remove the job info from the server,
+    // since the job is done now.
+    def updServer = match (serverErr) {
+      | ErrArbiterErr(e) => match (e.jobId) {
+          | Some(jobId) => server.removeJobInfo(jobId)
+          | None => server
+        }
+      | _ => server
+    }
+    // Return the error effect with the possibly-updated server
+    { post_state: updServer, effects: Set(CustomEffect(Error({ node: server.process_id, error: serverErr }))) }
+
   pure def panic(server: LocalState): Transition = { post_state: server, effects: Set(CustomEffect(Panic(server.process_id))) }
   pure def ok(server: LocalState): Transition = { post_state: server, effects: Set() }
   pure def updatePlc(server: LocalState, arbiterDid: ArbiterDid, node: Node): Transition = { post_state: server, effects: Set(CustomEffect(UpdatePlc({ arbiterDid: arbiterDid, node: node })))}

@@ -42,8 +42,14 @@ module arbiter_core_types {
     | ArbiterDeleted
     | ArbiterErr(ArbiterError)
 
+  type ArbiterError = {
+      kind: ArbiterErrorKind,
+      // The job that errored, if any
+      jobId: Option[JobId],
+    }
+
   /// An error result for the arbiter state machine
-  type ArbiterError =
+  type ArbiterErrorKind =
     | ErrJobIdsExhausted
     | ErrJobNotExists
     | ErrSpaceNotNeeded
@@ -356,7 +362,7 @@ module arbiter_core {
         )
         // Return the list of colliding versions in an error. The caller will have to re-try the job
         // if they want to progress the original job.
-        .with("result", ArbiterErr(ErrJobsTimedOut(collidingJobs)))
+        .throw(ErrJobsTimedOut(collidingJobs))
     else
 
     // Do some validation on the job
@@ -486,15 +492,15 @@ module arbiter_core {
   //
 
   /// Throw an error
-  pure def throw(arbiter: Arbiter, e: ArbiterError): Arbiter =
-    arbiter.with("result", ArbiterErr(e))
+  pure def throw(arbiter: Arbiter, e: ArbiterErrorKind): Arbiter =
+    arbiter.with("result", ArbiterErr({ kind: e, jobId: None }))
 
   /// Throw an error and remove a job from the job queue
-  pure def throwJobErr(arbiter: Arbiter, e: ArbiterError, jobId: JobId): Arbiter =
-    arbiter.removeJob(jobId).with("result", ArbiterErr(e))
+  pure def throwJobErr(arbiter: Arbiter, e: ArbiterErrorKind, jobId: JobId): Arbiter =
+    arbiter.removeJob(jobId).with("result", ArbiterErr({ kind: e, jobId: Some(jobId) }))
   
   /// Return any validation errors for the job if there are issues
-  pure def jobValidationError(arbiter: Arbiter, spaceKey: SpaceKey, args: JobArgs): Option[ArbiterError] =
+  pure def jobValidationError(arbiter: Arbiter, spaceKey: SpaceKey, args: JobArgs): Option[ArbiterErrorKind] =
     match (args) {
       | JobFetchMembers =>
         // Make sure the space exists
