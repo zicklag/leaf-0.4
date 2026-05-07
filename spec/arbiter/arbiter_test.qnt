@@ -64,6 +64,7 @@ module arbiter_test {
         kind: kind,
       }))))
   action handleMsg(node: Node): bool = choreo::step_with(node, handleMessage, applyCustomEffects)
+  action handleAnyMsg: bool = nondet node = nodes.oneOf() handleMsg(node)
   action tickServer(node: Node): bool = choreo::step_with(node, Server::tick, applyCustomEffects)
 
   /// Resolve a space with several layers of delegation including remote delegation
@@ -246,16 +247,13 @@ module arbiter_test {
     initScenario1
       // Alice sends a request to add a new member
       .then(sendMsgFromUser("alice", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newMember1"), access: AddMembers }), 2))
-      // Server B handles it, but will start a job that needs to resolve the member list from server a
-      .then(handleMsg("b"))
       // And Bob sends one immediately after for a different user
       .then(sendMsgFromUser("bob", "b", "subcom", "$admin", XSetMemberAccess({ member: MemberUser("newMember2"), access: RemoveMembers }), 2))
-      // Server B handles it, but will start another job to handle the member list from server a
-      .then(handleMsg("b"))
+      // Server B handles both messages, queuing jobs for them which will need to be resolved from server A
+      .then(2.reps(i => handleMsg("b")))
       // Server A handles both of the resolution requests and will send replies to server B. It's
       // nondeterministic which one it handles first.
-      .then(handleMsg("a"))
-      .then(handleMsg("a"))
+      .then(2.reps(i => handleMsg("a")))
       // Server B will handle one of the resolutions, which should succeed
       .then(handleMsg("b"))
       // At this point the arbiter should have successfully completed the 
