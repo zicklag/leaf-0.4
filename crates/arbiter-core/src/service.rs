@@ -55,16 +55,44 @@ impl ArbiterService {
         let arbiter = self.arbiters.get(arbiter_did).cloned().unwrap();
         let job_id = self.alloc_job_id();
         let upd = arbiter.start_job(user_did, ADMIN_SPACE_KEY.to_string(), job_id, args);
+        self.handle_job_result(arbiter_did.clone(), upd)
+    }
+
+    /// Run a job on a specific space (any space key, not just $admin).
+    ///
+    /// **Precondition**: the arbiter with `arbiter_did` must already exist.
+    ///
+    /// On success the updated arbiter is written back to the map.
+    /// On error the old arbiter is kept (matching Quint's `runJobGetArb`).
+    pub fn run_job(
+        &mut self,
+        arbiter_did: &ArbiterDid,
+        user_did: UserDid,
+        space_key: SpaceKey,
+        args: JobArgs,
+    ) -> Result<(), ArbiterError> {
+        let arbiter = self.arbiters.get(arbiter_did).cloned().unwrap();
+        let job_id = self.alloc_job_id();
+        let upd = arbiter.start_job(user_did, space_key, job_id, args);
+        self.handle_job_result(arbiter_did.clone(), upd)
+    }
+
+    /// Shared handler for job results: update arbiter on success, keep old on error.
+    fn handle_job_result(
+        &mut self,
+        arbiter_did: ArbiterDid,
+        upd: Arbiter,
+    ) -> Result<(), ArbiterError> {
         match upd.result.clone() {
             ArbiterResult::FinishedJob { .. }
             | ArbiterResult::Deleted
             | ArbiterResult::Ok
             | ArbiterResult::QueuedJob { .. } => {
-                self.arbiters.insert(arbiter_did.clone(), upd);
+                self.arbiters.insert(arbiter_did, upd);
                 Ok(())
             }
             ArbiterResult::Err(e) => {
-                // Matches Quint's `runAdminJobGetArb`: on error, keep the old arbiter.
+                // Matches Quint's `runJobGetArb`: on error, keep the old arbiter.
                 Err(e)
             }
         }
@@ -163,17 +191,19 @@ impl ArbiterService {
     /// Set a member's access level in a space.
     ///
     /// **Precondition**: the arbiter must already exist.
+    /// Uses the provided space key directly (not just $admin).
     pub fn set_space_member_access(
         &mut self,
         user_did: UserDid,
         arbiter_did: ArbiterDid,
-        _space_key: SpaceKey,
+        space_key: SpaceKey,
         member: Member,
         access: Access,
     ) -> Result<(), ArbiterError> {
-        self.run_admin_job(
+        self.run_job(
             &arbiter_did,
             user_did,
+            space_key,
             JobArgs::SetMemberAccess { member, access },
         )
     }
@@ -181,29 +211,33 @@ impl ArbiterService {
     /// Remove a member from a space.
     ///
     /// **Precondition**: the arbiter must already exist.
+    /// Uses the provided space key directly (not just $admin).
     pub fn remove_space_member(
         &mut self,
         user_did: UserDid,
         arbiter_did: ArbiterDid,
-        _space_key: SpaceKey,
+        space_key: SpaceKey,
         member: Member,
     ) -> Result<(), ArbiterError> {
-        self.run_admin_job(
+        self.run_job(
             &arbiter_did,
             user_did,
+            space_key,
             JobArgs::RemoveMember { member },
         )
     }
 
-    /// Fetch the resolved member list of the `$admin` space.
+    /// Fetch the resolved member list of the a specific space.
     ///
     /// **Precondition**: the arbiter must already exist.
+    /// Uses the provided space key directly (not just $admin).
     pub fn fetch_members(
         &mut self,
         user_did: UserDid,
         arbiter_did: ArbiterDid,
+        space_key: SpaceKey,
     ) -> Result<(), ArbiterError> {
-        self.run_admin_job(&arbiter_did, user_did, JobArgs::FetchMembers)
+        self.run_job(&arbiter_did, user_did, space_key, JobArgs::FetchMembers)
     }
 
     // -----------------------------------------------------------------

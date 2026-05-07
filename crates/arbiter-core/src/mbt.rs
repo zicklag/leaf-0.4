@@ -2,12 +2,15 @@
 //!
 //! The Quint specification `arbiter_core_mbt.qnt` wraps the pure `arbiter_core`
 //! state machine with `mbt::actionTaken` and `mbt::nondetPicks` variables, and
-//! defines nondeterministic actions (create arbiter, add admin, remove admin,
-//! create space, set/remove member access, fetch members) that the Rust
-//! `ArbiterService` mirrors.
+//! defines nondeterministic actions that exercise ALL job types, including:
+//!   - Space creation/deletion/configuration
+//!   - Member management (add/remove/set access)
+//!   - Local and remote space delegation
+//!   - Arbiter creation and deletion
+//!   - Member list fetching
 //!
 //! The [`Driver`] implementation below replays each trace step by step, calling
-//! the corresponding `ArbiterService` method.  After every step the framework
+//! the corresponding `ArbiterService` method. After every step the framework
 //! compares the Quint-spec state (arbiters map + error + nextJobId) against the
 //! Rust driver state; any mismatch fails the test.
 
@@ -17,7 +20,7 @@ use quint_connect::*;
 use quint_connect::runner::{Config as RunnerConfig, RunConfig, run_test};
 use serde::Deserialize;
 
-use crate::{Arbiter, ArbiterDid, ArbiterService, JobArgs};
+use crate::{Arbiter, ArbiterDid, ArbiterService, JobArgs, Member, Access};
 
 // ---------------------------------------------------------------------------
 // State – matched against the Quint spec's state
@@ -82,6 +85,28 @@ impl Driver for ArbiterDriver {
                 self.error = false;
             },
 
+            // ---------------------------------------------------------------
+            // Setup / state-priming
+            // ---------------------------------------------------------------
+
+            // --- ensureArbiterExists ---
+            // Create arbiter only if it doesn't exist. Never errors.
+            ensureArbiterExists(uid, aid) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                }
+                self.error = false;
+            },
+
+            // ---------------------------------------------------------------
+            // Error-prone creation
+            // ---------------------------------------------------------------
+
             // --- createArbiterAny ---
             // If arbiter exists: keep old, error=true, nextJobId unchanged
             // If arbiter doesn't exist: create new, error=false, nextJobId unchanged
@@ -99,6 +124,10 @@ impl Driver for ArbiterDriver {
                 // next_job_id is NOT incremented for createArbiterAny
             },
 
+            // ---------------------------------------------------------------
+            // Admin member management
+            // ---------------------------------------------------------------
+
             // --- addArbiterAdminAny ---
             addArbiterAdminAny(uid, aid, na) => {
                 let uid: String = uid;
@@ -107,12 +136,17 @@ impl Driver for ArbiterDriver {
                 if !self.service.arbiters.contains_key(aid.as_str()) {
                     self.service.arbiters.insert(
                         aid.clone(),
-                        Arbiter::new(aid.clone(), String::new()),
+                        Arbiter::new(aid.clone(), uid.clone()),
                     );
                     self.service.alloc_job_id();
                     self.error = true;
                 } else {
-                    call!(add_admin, uid, aid, na);
+                    call!(run_admin_job, &aid, uid,
+                        JobArgs::SetMemberAccess {
+                            member: Member::User(na),
+                            access: Access::Owner,
+                        }
+                    );
                 }
             },
 
@@ -124,48 +158,142 @@ impl Driver for ArbiterDriver {
                 if !self.service.arbiters.contains_key(aid.as_str()) {
                     self.service.arbiters.insert(
                         aid.clone(),
-                        Arbiter::new(aid.clone(), String::new()),
+                        Arbiter::new(aid.clone(), uid.clone()),
                     );
                     self.service.alloc_job_id();
                     self.error = true;
                 } else {
-                    call!(remove_admin, uid, aid, rm);
+                    call!(run_admin_job, &aid, uid,
+                        JobArgs::RemoveMember {
+                            member: Member::User(rm),
+                        }
+                    );
                 }
             },
 
-            // --- createSpaceAny ---
-            // NOTE: Quint's runAdminJobGetArb passes ADMIN as spaceKey, NOT sk.
-            // The `sk` nondet pick is only recorded as metadata.
-            createSpaceAny(uid, aid, sk) => {
+            // --- setAdminMemberAccessAny ---
+            // Set non-Owner access on a user in the $admin space.
+            setAdminMemberAccessAny(uid, aid, na, acc) => {
                 let uid: String = uid;
                 let aid: String = aid;
-                let _sk: String = sk;
+                let na: String = na;
+                let acc: Access = acc;
                 if !self.service.arbiters.contains_key(aid.as_str()) {
                     self.service.arbiters.insert(
                         aid.clone(),
-                        Arbiter::new(aid.clone(), String::new()),
+                        Arbiter::new(aid.clone(), uid.clone()),
                     );
                     self.service.alloc_job_id();
                     self.error = true;
                 } else {
-                    // Match Quint: use ADMIN space key, not the nondet pick.
-                    // This always fails because ADMIN already exists.
-                    let result = self.service.run_admin_job(
-                        &aid, uid, JobArgs::CreateSpace,
+                    call!(run_admin_job, &aid, uid,
+                        JobArgs::SetMemberAccess {
+                            member: Member::User(na),
+                            access: acc,
+                        }
                     );
-                    self.error = result.is_err();
                 }
             },
 
-            // --- setSpaceMemberAccessAny ---
-            setSpaceMemberAccessAny(uid, aid, sk, mbr, acc) => {
+            // ---------------------------------------------------------------
+            // Space lifecycle
+            // ---------------------------------------------------------------
+
+            // --- createSpaceAny ---
+            // Uses the nondet-picked space key so creation can actually succeed.
+            createSpaceAny(uid, aid, sk) => {
                 let uid: String = uid;
                 let aid: String = aid;
                 let sk: String = sk;
                 if !self.service.arbiters.contains_key(aid.as_str()) {
                     self.service.arbiters.insert(
                         aid.clone(),
-                        Arbiter::new(aid.clone(), String::new()),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                    self.service.alloc_job_id();
+                    self.error = true;
+                } else {
+                    call!(run_job, &aid, uid, sk.clone(), JobArgs::CreateSpace);
+                }
+            },
+
+            // --- createAdminSpaceAlwaysErrors ---
+            // Tries to create the $admin space (always errors).
+            createAdminSpaceAlwaysErrors(uid, aid) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                    self.service.alloc_job_id();
+                    self.error = true;
+                } else {
+                    call!(run_admin_job, &aid, uid, JobArgs::CreateSpace);
+                }
+            },
+
+            // --- deleteSpaceAny ---
+            // Deletes a non-admin space.
+            deleteSpaceAny(uid, aid, sk) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                let sk: String = sk;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                    self.service.alloc_job_id();
+                    self.error = true;
+                } else {
+                    call!(run_job, &aid, uid, sk, JobArgs::DeleteSpace);
+                }
+            },
+
+            // --- configureSpaceAny ---
+            // Configures a space's publicRecords / publicMembers flags.
+            configureSpaceAny(uid, aid, sk, pubRec, pubMem) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                let _sk: String = sk;
+                let pubRec: bool = pubRec;
+                let pubMem: bool = pubMem;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                    self.service.alloc_job_id();
+                    self.error = true;
+                } else {
+                    call!(run_admin_job, &aid, uid,
+                        JobArgs::ConfigureSpace(crate::SpaceConfig {
+                            public_records: pubRec,
+                            public_members: pubMem,
+                        })
+                    );
+                }
+            },
+
+            // ---------------------------------------------------------------
+            // Member management (any space)
+            // ---------------------------------------------------------------
+
+            // --- setSpaceMemberAccessAny ---
+            // Uses the picked space key directly (not just $admin).
+            // Nondet picks: uid, aid, sk, mbr, acc
+            setSpaceMemberAccessAny(uid, aid, sk, mbr, acc) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                let sk: String = sk;
+                let mbr: Member = mbr;
+                let acc: Access = acc;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
                     );
                     self.service.alloc_job_id();
                     self.error = true;
@@ -175,14 +303,17 @@ impl Driver for ArbiterDriver {
             },
 
             // --- removeSpaceMemberAny ---
+            // Uses the picked space key directly.
+            // Nondet picks: uid, aid, sk, mbr
             removeSpaceMemberAny(uid, aid, sk, mbr) => {
                 let uid: String = uid;
                 let aid: String = aid;
                 let sk: String = sk;
+                let mbr: Member = mbr;
                 if !self.service.arbiters.contains_key(aid.as_str()) {
                     self.service.arbiters.insert(
                         aid.clone(),
-                        Arbiter::new(aid.clone(), String::new()),
+                        Arbiter::new(aid.clone(), uid.clone()),
                     );
                     self.service.alloc_job_id();
                     self.error = true;
@@ -191,19 +322,103 @@ impl Driver for ArbiterDriver {
                 }
             },
 
+            // ---------------------------------------------------------------
+            // Local and remote delegation
+            // ---------------------------------------------------------------
+
+            // --- addLocalSpaceDelegateAny ---
+            // Adds a local space as a delegate member (MemberLocalSpace).
+            // Nondet picks: uid, aid, sk, delegateSk, acc
+            addLocalSpaceDelegateAny(uid, aid, sk, delegateSk, acc) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                let sk: String = sk;
+                let delegateSk: String = delegateSk;
+                let acc: Access = acc;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                    self.service.alloc_job_id();
+                    self.error = true;
+                } else {
+                    call!(set_space_member_access, uid, aid, sk,
+                        Member::LocalSpace(delegateSk), acc
+                    );
+                }
+            },
+
+            // --- addRemoteSpaceDelegateAny ---
+            // Adds a remote space as a delegate member (MemberRemoteSpace).
+            // Nondet picks: uid, aid, sk, remoteAid, remoteSk, acc
+            addRemoteSpaceDelegateAny(uid, aid, sk, remoteAid, remoteSk, acc) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                let sk: String = sk;
+                let remoteAid: String = remoteAid;
+                let remoteSk: String = remoteSk;
+                let acc: Access = acc;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                    self.service.alloc_job_id();
+                    self.error = true;
+                } else {
+                    call!(set_space_member_access, uid, aid, sk,
+                        Member::RemoteSpace(crate::SpaceId {
+                            arbiter_did: remoteAid,
+                            space_key: remoteSk,
+                        }),
+                        acc
+                    );
+                }
+            },
+
+            // ---------------------------------------------------------------
+            // Fetch members (any space)
+            // ---------------------------------------------------------------
+
             // --- fetchMembersAny ---
-            fetchMembersAny(uid, aid) => {
+            // Fetches members of the picked space (not just $admin).
+            // Nondet picks: uid, aid, sk
+            fetchMembersAny(uid, aid, sk) => {
+                let uid: String = uid;
+                let aid: String = aid;
+                let sk: String = sk;
+                if !self.service.arbiters.contains_key(aid.as_str()) {
+                    self.service.arbiters.insert(
+                        aid.clone(),
+                        Arbiter::new(aid.clone(), uid.clone()),
+                    );
+                    self.service.alloc_job_id();
+                    self.error = true;
+                } else {
+                    call!(fetch_members, uid, aid, sk);
+                }
+            },
+
+            // ---------------------------------------------------------------
+            // Arbiter deletion
+            // ---------------------------------------------------------------
+
+            // --- deleteArbiterAny ---
+            // Deletes an arbiter (only works if user is sole owner).
+            // Nondet picks: uid, aid
+            deleteArbiterAny(uid, aid) => {
                 let uid: String = uid;
                 let aid: String = aid;
                 if !self.service.arbiters.contains_key(aid.as_str()) {
                     self.service.arbiters.insert(
                         aid.clone(),
-                        Arbiter::new(aid.clone(), String::new()),
+                        Arbiter::new(aid.clone(), uid.clone()),
                     );
                     self.service.alloc_job_id();
                     self.error = true;
                 } else {
-                    call!(fetch_members, uid, aid);
+                    call!(run_admin_job, &aid, uid, JobArgs::DeleteArbiter);
                 }
             },
         })
@@ -292,7 +507,8 @@ fn run_quint_test(driver: ArbiterDriver, test_name: &str) {
 
 #[test]
 fn simulation() {
-    run_simulation_test(ArbiterDriver::default(), 25, 700);
+    // Increased max_steps and max_samples for better coverage of all 14+ actions
+    run_simulation_test(ArbiterDriver::default(), 50, 700);
 }
 
 // NOTE: The `quint_test` tests below require `quint test` to support the `--mbt`
@@ -325,6 +541,11 @@ fn simulation() {
 // }
 //
 // #[test]
+// fn test_create_then_delete_space() {
+//     run_quint_test(ArbiterDriver::default(), "createThenDeleteSpaceTest");
+// }
+//
+// #[test]
 // fn test_permission_denied() {
 //     run_quint_test(ArbiterDriver::default(), "permissionDeniedAddAdminTest");
 // }
@@ -335,4 +556,39 @@ fn simulation() {
 //         ArbiterDriver::default(),
 //         "fetchMembersNonexistentArbiterTest",
 //     );
+// }
+//
+// #[test]
+// fn test_configure_space_public() {
+//     run_quint_test(ArbiterDriver::default(), "configureSpacePublicTest");
+// }
+//
+// #[test]
+// fn test_configure_non_existent_space() {
+//     run_quint_test(ArbiterDriver::default(), "configureNonExistentSpaceTest");
+// }
+//
+// #[test]
+// fn test_delete_arbiter_as_sole_owner() {
+//     run_quint_test(ArbiterDriver::default(), "deleteArbiterAsSoleOwnerTest");
+// }
+//
+// #[test]
+// fn test_delete_arbiter_with_two_owners_fails() {
+//     run_quint_test(ArbiterDriver::default(), "deleteArbiterWithTwoOwnersFailsTest");
+// }
+//
+// #[test]
+// fn test_add_local_space_delegation() {
+//     run_quint_test(ArbiterDriver::default(), "addLocalSpaceDelegationTest");
+// }
+//
+// #[test]
+// fn test_add_remote_space_delegation() {
+//     run_quint_test(ArbiterDriver::default(), "addRemoteSpaceDelegationTest");
+// }
+//
+// #[test]
+// fn test_add_self_referencing_remote_space_fails() {
+//     run_quint_test(ArbiterDriver::default(), "addSelfReferencingRemoteSpaceFailsTest");
 // }

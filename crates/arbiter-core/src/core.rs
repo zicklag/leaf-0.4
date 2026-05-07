@@ -107,6 +107,7 @@ pub enum Member {
 
 /// A reference to a space, qualified by the arbiter that owns it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SpaceId {
     pub arbiter_did: ArbiterDid,
     pub space_key: SpaceKey,
