@@ -1,0 +1,72 @@
+{
+  "lexicon": 1,
+  "id": "town.muni.arbiter.setMemberAccess",
+  "revision": 3,
+  "description": "Set or update a member's access level in a permissioned space. The authenticated user must have AddMembers access (and RemoveMembers if modifying an existing member). Cannot grant access higher than the requesting user's own access.",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["arbiterDid", "spaceKey", "member", "access"],
+          "properties": {
+            "arbiterDid": {
+              "type": "string",
+              "description": "DID of the arbiter managing the space."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Key of the space to modify."
+            },
+            "member": {
+              "type": "union",
+              "description": "The member whose access is being set.",
+              "refs": [
+                "town.muni.arbiter#memberUser",
+                "town.muni.arbiter#memberLocalSpace",
+                "town.muni.arbiter#memberRemoteSpace"
+              ]
+            },
+            "access": {
+              "type": "string",
+              "description": "The access level to grant.",
+              "knownValues": [
+                "town.muni.arbiter#readMemberList",
+                "town.muni.arbiter#isMember",
+                "town.muni.arbiter#addMembers",
+                "town.muni.arbiter#removeMembers",
+                "town.muni.arbiter#configureSpace",
+                "town.muni.arbiter#createSpaces",
+                "town.muni.arbiter#removeSpace",
+                "town.muni.arbiter#owner"
+              ]
+            },
+            "resolverDepth": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 0,
+              "description": "Maximum depth for resolving remote space members. Defaults to 3."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        { "name": "ArbiterNotExists", "description": "No arbiter with this DID exists." },
+        { "name": "SpaceNotExists", "description": "The referenced space does not exist." },
+        { "name": "PermissionDenied", "description": "The user does not have sufficient permissions." },
+        { "name": "PermissionChanged", "description": "The arbiter state changed since the request was submitted." },
+        { "name": "RemoteSpaceReferencesLocalArbiter", "description": "Cannot add a remote space member that references the local arbiter — use a local space member instead." }
+      ]
+    }
+  }
+}

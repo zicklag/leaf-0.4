@@ -1,0 +1,43 @@
+{
+  "lexicon": 1,
+  "id": "town.muni.arbiter.deleteArbiter",
+  "revision": 3,
+  "description": "Delete an arbiter. The authenticated user must be the sole Owner in the $admin space.",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["arbiterDid"],
+          "properties": {
+            "arbiterDid": {
+              "type": "string",
+              "description": "DID of the arbiter to delete."
+            },
+            "resolverDepth": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 0,
+              "description": "Maximum depth for resolving remote space members. Defaults to 3."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        { "name": "ArbiterNotExists", "description": "No arbiter with this DID exists." },
+        { "name": "PermissionDenied", "description": "The authenticated user does not have Owner access." },
+        { "name": "OnlyLastOwnerCanDeleteArbiter", "description": "There are multiple owners — remove other admins first." }
+      ]
+    }
+  }
+}

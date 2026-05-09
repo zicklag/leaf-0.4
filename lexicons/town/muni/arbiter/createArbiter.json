@@ -1,0 +1,35 @@
+{
+  "lexicon": 1,
+  "id": "town.muni.arbiter.createArbiter",
+  "revision": 2,
+  "description": "Create a new arbiter on the server. The authenticated user becomes the initial Owner in the $admin space.",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["arbiterDid"],
+          "properties": {
+            "arbiterDid": {
+              "type": "string",
+              "description": "DID for the new arbiter."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        { "name": "ArbiterAlreadyExists", "description": "An arbiter with this DID already exists." }
+      ]
+    }
+  }
+}

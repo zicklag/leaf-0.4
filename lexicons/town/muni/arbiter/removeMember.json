@@ -1,0 +1,58 @@
+{
+  "lexicon": 1,
+  "id": "town.muni.arbiter.removeMember",
+  "revision": 3,
+  "description": "Remove a member from a permissioned space. The authenticated user must have RemoveMembers access and cannot remove a member with higher access than their own.",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["arbiterDid", "spaceKey", "member"],
+          "properties": {
+            "arbiterDid": {
+              "type": "string",
+              "description": "DID of the arbiter managing the space."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Key of the space to modify."
+            },
+            "member": {
+              "type": "union",
+              "description": "The member to remove.",
+              "refs": [
+                "town.muni.arbiter#memberUser",
+                "town.muni.arbiter#memberLocalSpace",
+                "town.muni.arbiter#memberRemoteSpace"
+              ]
+            },
+            "resolverDepth": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 0,
+              "description": "Maximum depth for resolving remote space members. Defaults to 3."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        { "name": "ArbiterNotExists", "description": "No arbiter with this DID exists." },
+        { "name": "SpaceNotExists", "description": "The referenced space does not exist." },
+        { "name": "MemberNotExist", "description": "The referenced member does not exist in the space." },
+        { "name": "PermissionDenied", "description": "The user does not have sufficient permissions." },
+        { "name": "PermissionChanged", "description": "The arbiter state changed since the request was submitted." }
+      ]
+    }
+  }
+}

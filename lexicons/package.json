@@ -1,0 +1,14 @@
+{
+  "name": "lexicons",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AT Protocol lexicon schemas for Muni Town.",
+  "type": "module",
+  "scripts": {
+    "validate": "node validate.js",
+    "test": "node validate.js"
+  },
+  "dependencies": {
+    "@atproto/lex-cli": "^0.9.9"
+  }
+}

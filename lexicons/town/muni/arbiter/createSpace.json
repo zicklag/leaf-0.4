@@ -1,0 +1,48 @@
+{
+  "lexicon": 1,
+  "id": "town.muni.arbiter.createSpace",
+  "revision": 3,
+  "description": "Create a new permissioned space under an arbiter. The authenticated user must have CreateSpaces access (typically from the $admin space).",
+  "defs": {
+    "main": {
+      "type": "procedure",
+      "input": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": ["arbiterDid", "spaceKey"],
+          "properties": {
+            "arbiterDid": {
+              "type": "string",
+              "description": "DID of the arbiter that will manage the space."
+            },
+            "spaceKey": {
+              "type": "string",
+              "description": "Key for the new space. Must not already exist."
+            },
+            "resolverDepth": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 0,
+              "description": "Maximum depth for resolving remote space members. Defaults to 3."
+            }
+          }
+        }
+      },
+      "output": {
+        "encoding": "application/json",
+        "schema": {
+          "type": "object",
+          "required": [],
+          "properties": {}
+        }
+      },
+      "errors": [
+        { "name": "ArbiterNotExists", "description": "No arbiter with this DID exists." },
+        { "name": "SpaceAlreadyExists", "description": "A space with this key already exists." },
+        { "name": "PermissionDenied", "description": "The user does not have CreateSpaces access." },
+        { "name": "PermissionChanged", "description": "The arbiter state changed since the request was submitted." }
+      ]
+    }
+  }
+}
