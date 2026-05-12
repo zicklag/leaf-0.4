@@ -317,6 +317,8 @@ module arbiter_core {
   // ACTIONS
   //
 
+  // TODO: we need to model the jobs being randomly dropped in case the server crashes.
+
   // Create a new arbiter with the given arbiter DID and initial owner.
   pure def new(arbiterDid: ArbiterDid, userDid: UserDid): Arbiter = 
     {
