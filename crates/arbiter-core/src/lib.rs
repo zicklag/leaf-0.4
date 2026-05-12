@@ -10,6 +10,9 @@ pub mod mbt;
 pub mod server;
 pub mod service;
 
+#[cfg(feature = "async")]
+pub mod futures;
+
 pub use core::*;
 pub use server::*;
 pub use service::*;

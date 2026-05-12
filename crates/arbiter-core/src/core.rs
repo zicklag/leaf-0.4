@@ -177,23 +177,38 @@ impl ResolvedMemberList {
 // ---------------------------------------------------------------------------
 
 /// Errors produced by the arbiter state machine.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, thiserror::Error)]
 #[serde(rename_all = "PascalCase")]
 pub enum ArbiterError {
+    #[error("JobIdAlreadyUsed")]
     JobIdAlreadyUsed,
+    #[error("JobNotExists")]
     JobNotExists,
+    #[error("SpaceNotNeeded")]
     SpaceNotNeeded,
+    #[error("SpaceAlreadyResolved")]
     SpaceAlreadyResolved,
+    #[error("SpaceAlreadyExists")]
     SpaceAlreadyExists,
+    #[error("SpaceNotExists")]
     SpaceNotExists,
+    #[error("PermissionDenied")]
     PermissionDenied,
+    #[error("CannotDeleteAdminSpace")]
     CannotDeleteAdminSpace,
+    #[error("MemberNotExist")]
     MemberNotExist,
+    #[error("PermissionChanged")]
     PermissionChanged,
+    #[error("ArbiterDeletionMustSpecifyAdminSpace")]
     ArbiterDeletionMustSpecifyAdminSpace,
+    #[error("WriteOperationAlreadyInProgress")]
     WriteOperationAlreadyInProgress,
+    #[error("RemoteSpaceReferencesLocalArbiter")]
     RemoteSpaceReferencesLocalArbiter,
+    #[error("OnlyLastOwnerCanDeleteArbiter")]
     OnlyLastOwnerCanDeleteArbiter,
+    #[error("JobsTimedOut({0:?})")]
     JobsTimedOut(HashSet<JobId>),
 }
 
@@ -598,7 +613,7 @@ impl Arbiter {
         // Check whether all spaces are resolved
         let unresolved_spaces = spaces_to_resolve(&job.unresolved_members);
         let job_is_ready = unresolved_spaces
-            .difference(job.resolved_spaces.keys().cloned().collect())
+            .difference(resolved_spaces.keys().cloned().collect())
             .is_empty();
 
         if job_is_ready {
