@@ -26,7 +26,8 @@ pub const TIMEOUT_TICKS: i64 = 8;
 // ---------------------------------------------------------------------------
 
 /// A message that the server processes, matching Quint's `Msg` type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Message {
     /// DID of the user or arbiter that initiated this message.
     pub user_did: UserDid,
@@ -48,7 +49,8 @@ pub struct Message {
 // ---------------------------------------------------------------------------
 
 /// The kind of message, matching Quint's `MsgKind`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum MessageKind {
     /// Reply to a FetchMembers request with resolved members.
     ReplyResolvedMembers {
