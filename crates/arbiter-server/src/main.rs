@@ -1,7 +1,7 @@
 //! Entry point for the Muni Town Arbiter Server.
 //!
 //! Sets up the Salvo HTTP server with all XRPC endpoints, auth middleware,
-//! persistence, and background tasks.
+//! DID web identity, persistence, and background tasks.
 
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -10,52 +10,47 @@ use std::time::Duration;
 use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
 use salvo::Router;
+use salvo::writing::Json;
 
 use arbiter_core::futures::AsyncArbiterServer;
 
+use atproto_identity::resolve::InnerIdentityResolver;
+
 mod auth;
+mod did;
 mod handlers;
 mod io;
 mod persistence;
 
 use auth::AuthConfig;
-use io::{HttpArbiterIo, PlcDidResolver};
+use io::HttpArbiterIo;
 use persistence::Persister;
 
 // ---------------------------------------------------------------------------
 // CLI arguments
 // ---------------------------------------------------------------------------
 
-/// Configuration from CLI and environment.
 struct AppConfig {
-    /// Address to listen on.
     listen: String,
-    /// Directory to store arbiter state files.
+    hostname: String,
     data_dir: PathBuf,
-    /// DID of this server instance.
-    server_did: String,
-    /// PLC directory URL for DID resolution.
     plc_url: String,
-    /// Optional unsafe auth token for development.
     unsafe_auth_token: Option<String>,
-    /// Interval between persistence flushes.
     persist_interval: Duration,
-    /// Tick interval for the background task.
     tick_interval: Duration,
 }
 
 impl AppConfig {
-    /// Load configuration from environment variables and defaults.
     fn from_env() -> Self {
         Self {
             listen: std::env::var("LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
+            hostname: std::env::var("HOSTNAME")
+                .expect("HOSTNAME environment variable is required (e.g. localhost:3001)"),
             data_dir: PathBuf::from(
                 std::env::var("DATA_DIR").unwrap_or_else(|_| "./data/arbiters".to_string()),
             ),
-            server_did: std::env::var("SERVER_DID")
-                .expect("SERVER_DID environment variable is required"),
             plc_url: std::env::var("PLC_URL")
-                .unwrap_or_else(|_| "https://plc.directory".to_string()),
+                .unwrap_or_else(|_| "http://localhost:3001".to_string()),
             unsafe_auth_token: std::env::var("UNSAFE_AUTH_TOKEN").ok(),
             persist_interval: Duration::from_secs(
                 std::env::var("PERSIST_INTERVAL")
@@ -71,19 +66,22 @@ impl AppConfig {
             ),
         }
     }
+
+    fn server_did(&self) -> String {
+        let encoded = self.hostname.replace(':', "%3A");
+        format!("did:web:{encoded}")
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Shared server data
 // ---------------------------------------------------------------------------
 
-/// Wrapper to hold the server in the depot via middleware.
 #[derive(Clone)]
 struct ServerData {
     server: Arc<AsyncArbiterServer<HttpArbiterIo>>,
 }
 
-/// Middleware that injects shared server data into the depot.
 struct ServerDataMiddleware {
     data: ServerData,
 }
@@ -103,12 +101,33 @@ impl salvo::Handler for ServerDataMiddleware {
 }
 
 // ---------------------------------------------------------------------------
+// DID document handler
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct DidDocumentHandler {
+    document: serde_json::Value,
+}
+
+#[async_trait]
+impl salvo::Handler for DidDocumentHandler {
+    async fn handle(
+        &self,
+        _req: &mut Request,
+        _depot: &mut Depot,
+        res: &mut Response,
+        _ctrl: &mut FlowCtrl,
+    ) {
+        res.render(Json(self.document.clone()));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -117,27 +136,35 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = AppConfig::from_env();
+    let server_did = config.server_did();
 
     tracing::info!(
         "Starting arbiter server on {} (DID: {})",
         config.listen,
-        config.server_did
+        server_did
     );
 
-    // Create HTTP client for outbound requests
     let client = reqwest::Client::new();
 
-    // Set up DID resolver
-    let did_resolver = Arc::new(PlcDidResolver::new(config.plc_url.clone(), client.clone()));
+    // Set up the server's signing key / DID identity
+    let key_path = config.data_dir.join("signing-key.hex");
+    let identity = Arc::new(did::Identity::load_or_generate(
+        server_did.clone(),
+        &key_path,
+    ));
+    tracing::info!("Server identity: {} (key: {:?})", identity.did, key_path);
 
-    // Create the auth token for outbound requests (our server DID)
-    let auth_token = config
-        .unsafe_auth_token
-        .clone()
-        .unwrap_or_else(|| config.server_did.clone());
+    // Create the atproto-identity resolver (handles did:plc + did:web)
+    use atproto_identity::resolve::HickoryDnsResolver;
+    let dns_resolver = Arc::new(HickoryDnsResolver::create_resolver(&[]));
+    let resolver = Arc::new(InnerIdentityResolver {
+        dns_resolver,
+        http_client: client.clone(),
+        plc_hostname: config.plc_url.clone(),
+    });
 
-    // Set up IO layer
-    let io = HttpArbiterIo::new(client, did_resolver, auth_token);
+    // Set up IO layer with the resolver and identity
+    let io = HttpArbiterIo::new(client, resolver.clone(), identity.clone());
 
     // Create the async arbiter server
     let arbiter_server = AsyncArbiterServer::with_tick_interval(io, config.tick_interval);
@@ -172,17 +199,24 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("Persistence task started (interval: {:?})", interval);
     }
 
-    // Build auth config
+    // Build auth config with the atproto-identity resolver
     let auth_config = Arc::new(
-        if let Some(token) = config.unsafe_auth_token {
-            AuthConfig::new(config.server_did).with_unsafe_token(token)
-        } else {
-            AuthConfig::new(config.server_did)
-        },
+        AuthConfig::new(server_did.clone(), resolver.clone())
+            .with_unsafe_token_if(config.unsafe_auth_token.clone()),
     );
 
+    // Build the DID document for `/.well-known/did.json`
+    let did_doc_value = serde_json::to_value(
+        identity.did_document()
+            .expect("Failed to build DID document"),
+    )
+    .expect("Failed to serialize DID document");
+    let did_doc_handler = DidDocumentHandler {
+        document: did_doc_value,
+    };
+
     // Build the router
-    let router = build_router(arbiter_server.clone(), auth_config);
+    let router = build_router(arbiter_server.clone(), auth_config, did_doc_handler);
 
     // Start serving
     tracing::info!("Listening on {}", config.listen);
@@ -196,10 +230,10 @@ async fn main() -> anyhow::Result<()> {
 // Router construction
 // ---------------------------------------------------------------------------
 
-/// Build the Salvo router with all XRPC endpoints.
 fn build_router(
     server: Arc<AsyncArbiterServer<HttpArbiterIo>>,
     auth_config: Arc<AuthConfig>,
+    did_doc_handler: DidDocumentHandler,
 ) -> Router {
     let auth_middleware = auth::AuthMiddleware::new(auth_config);
     let server_data = ServerData { server };
@@ -207,6 +241,7 @@ fn build_router(
 
     Router::new()
         .hoop(server_middleware)
+        .push(Router::with_path("/.well-known/did.json").get(did_doc_handler))
         .push(
             Router::with_path("/xrpc/town.muni.arbiter.createArbiter")
                 .hoop(auth_middleware.clone())
@@ -252,23 +287,31 @@ fn build_router(
                 .hoop(auth_middleware)
                 .post(handlers::remove_member),
         )
-        .push(
-            Router::with_path("/")
-                .get(index),
-        )
+        .push(Router::with_path("/").get(index))
 }
 
-/// Root endpoint handler.
 #[handler]
 async fn index(res: &mut Response) {
     res.render("Arbiter Server is running");
 }
 
 // ---------------------------------------------------------------------------
+// Extension
+// ---------------------------------------------------------------------------
+
+impl AuthConfig {
+    fn with_unsafe_token_if(self, token: Option<String>) -> Self {
+        match token {
+            Some(t) => self.with_unsafe_token(t),
+            None => self,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Persistence loop
 // ---------------------------------------------------------------------------
 
-/// Periodically flush dirty arbiter states to disk.
 async fn persistence_loop(
     arbiter_server: Arc<AsyncArbiterServer<HttpArbiterIo>>,
     persister: Arc<Persister>,
@@ -287,14 +330,12 @@ async fn persistence_loop(
 
         for did in &dirty {
             if let Some(state) = arbiter_server.snapshot_arbiter(did).await {
-                // Arbiter exists — persist it
                 if let Err(e) = persister.persist(did, &state) {
                     tracing::error!(%did, %e, "Failed to persist arbiter state");
                 } else {
                     persisted += 1;
                 }
             } else {
-                // Arbiter was deleted — remove its persisted state
                 if let Err(e) = persister.delete(did) {
                     tracing::error!(%did, %e, "Failed to delete arbiter state file");
                 } else {
