@@ -1,15 +1,13 @@
 //! DID web identity and signing key management for the arbiter server.
 //!
-//! Uses `atproto-identity` for key generation, JWT signing, and DID resolution.
-//! The server generates a K-256 (secp256k1) key pair, serves a DID document
-//! at `/.well-known/did.json`, and signs JWTs for inter-arbiter authentication.
+//! Uses `atproto-identity` for key generation and `atproto-oauth::jwt` for JWT minting.
 
 use std::fs;
 use std::path::Path;
 
 use atproto_identity::key::{self, KeyData, KeyType};
 use atproto_identity::model::{Document, DocumentBuilder};
-use serde_json::json;
+use atproto_oauth::jwt::{self, Header, Claims, JoseClaims};
 
 // ---------------------------------------------------------------------------
 // DID identity
@@ -17,14 +15,11 @@ use serde_json::json;
 
 /// The server's DID identity, holding the signing key and DID string.
 pub struct Identity {
-    /// The server's DID web string, e.g. `did:web:localhost%3A3001`.
     pub did: String,
-    /// The private key data for signing.
     pub key_data: KeyData,
 }
 
 impl Identity {
-    /// Create a new identity with a freshly generated K-256 key pair.
     pub fn generate(did: String) -> Self {
         let key_data = key::generate_key(KeyType::K256Private)
             .expect("Failed to generate K-256 key");
@@ -32,7 +27,6 @@ impl Identity {
         Self { did, key_data }
     }
 
-    /// Load an existing signing key from a hex-encoded file, or generate new if not found.
     pub fn load_or_generate(did: String, key_path: &Path) -> Self {
         if key_path.exists() {
             match fs::read_to_string(key_path) {
@@ -44,19 +38,14 @@ impl Identity {
                             tracing::info!("Loaded signing key from {:?}", key_path);
                             return Self { did, key_data };
                         }
-                        Err(e) => {
-                            tracing::warn!("Failed to parse signing key: {e}");
-                        }
+                        Err(e) => tracing::warn!("Failed to parse signing key: {e}"),
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to read signing key: {e}");
-                }
+                Err(e) => tracing::warn!("Failed to read signing key: {e}"),
             }
         }
 
         let identity = Self::generate(did);
-
         if let Some(parent) = key_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -66,37 +55,40 @@ impl Identity {
         } else {
             tracing::info!("Saved signing key to {:?}", key_path);
         }
-
         identity
     }
 
-    /// Sign a JWT payload, returning the encoded JWT string.
-    /// Uses ES256K algorithm (ECDSA with secp256k1).
-    pub fn sign_jwt(&self, payload: &serde_json::Value) -> Result<String, String> {
-        let header = json!({"alg": "ES256K", "typ": "JWT"});
+    /// Sign a JWT with ES256K using the server's private key.
+    pub fn sign_jwt(&self, audience_did: &str) -> Result<String, String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Time error: {e}"))?
+            .as_secs();
 
-        let header_b64 = encode_b64url(
-            &serde_json::to_vec(&header).map_err(|e| format!("Header error: {e}"))?,
-        );
-        let payload_b64 = encode_b64url(
-            &serde_json::to_vec(payload).map_err(|e| format!("Payload error: {e}"))?,
-        );
+        let header = Header {
+            algorithm: Some("ES256K".to_string()),
+            type_: Some("JWT".to_string()),
+            ..Default::default()
+        };
 
-        let message = format!("{header_b64}.{payload_b64}");
-        let signature = key::sign(&self.key_data, message.as_bytes())
-            .map_err(|e| format!("Signing error: {e}"))?;
-        let sig_b64 = encode_b64url(&signature);
+        let claims = Claims::new(JoseClaims {
+            issuer: Some(self.did.clone()),
+            audience: Some(audience_did.to_string()),
+            expiration: Some(now + 60),
+            issued_at: Some(now),
+            ..Default::default()
+        });
 
-        Ok(format!("{message}.{sig_b64}"))
+        jwt::mint(&self.key_data, &header, &claims)
+            .map_err(|e| format!("JWT minting error: {e}"))
     }
 
-    /// Build the DID document for this server.
+    /// Build the DID document for `/.well-known/did.json`.
     pub fn did_document(&self) -> Result<Document, String> {
         let public_key = key::to_public(&self.key_data)
             .map_err(|e| format!("Failed to derive public key: {e}"))?;
         let pub_key_bytes = public_key.bytes();
         let multibase = format!("z{}", bs58::encode(pub_key_bytes).into_string());
-
         let vm_id = format!("{}#atproto", self.did);
 
         DocumentBuilder::new()
@@ -104,25 +96,9 @@ impl Identity {
             .add_context("https://w3id.org/security/multikey/v1")
             .id(self.did.clone())
             .add_multikey(vm_id.clone(), self.did.clone(), multibase)
-            .add_extra(
-                "authentication",
-                json!([vm_id.clone()]),
-            )
-            .add_extra(
-                "assertionMethod",
-                json!([vm_id]),
-            )
+            .add_extra("authentication", serde_json::json!([vm_id.clone()]))
+            .add_extra("assertionMethod", serde_json::json!([vm_id]))
             .build()
             .map_err(|e| format!("Failed to build DID document: {e}"))
     }
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Base64url-encode bytes without padding.
-fn encode_b64url(data: &[u8]) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }

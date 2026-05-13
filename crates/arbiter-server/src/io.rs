@@ -42,19 +42,7 @@ impl HttpArbiterIo {
     }
 
     fn create_auth_token(&self, audience_did: &str) -> Result<String, String> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| format!("Time error: {e}"))?
-            .as_secs() as i64;
-
-        let payload = serde_json::json!({
-            "iss": self.identity.did,
-            "aud": audience_did,
-            "exp": now + 60,
-            "iat": now,
-        });
-
-        self.identity.sign_jwt(&payload)
+        self.identity.sign_jwt(audience_did)
     }
 }
 

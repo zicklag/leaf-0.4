@@ -12,6 +12,7 @@ arbiter-core = { path = "../arbiter-core" }
 anyhow = "1"
 async-trait = "0.1"
 atproto-identity = "0.14"
+atproto-oauth = { version = "0.14", default-features = false }
 base64 = "0.22"
 salvo = { version = "0.76", features = ["server"] }
 serde = { version = "1", features = ["derive"] }

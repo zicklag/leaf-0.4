@@ -1,9 +1,7 @@
 //! Authentication middleware for the arbiter server.
 //!
-//! Supports two modes:
-//! 1. **Dev mode**: An `unsafe_auth_token` that bypasses JWT verification.
-//! 2. **Production**: ES256K JWT verification using `atproto-identity` for
-//!    DID resolution and cryptographic validation.
+//! Uses `atproto-identity` for DID resolution and `atproto-oauth::jwt` for
+//! JWT verification. Supports dev mode with an unsafe token bypass.
 
 use std::sync::Arc;
 
@@ -14,21 +12,20 @@ use salvo::{
 };
 use salvo::writing::Json;
 
-use atproto_identity::key::{self, KeyType, KeyData};
+use atproto_identity::key::{KeyType, KeyData};
 use atproto_identity::resolve::InnerIdentityResolver;
+use atproto_identity::model::VerificationMethod;
+use atproto_oauth::encoding::FromBase64;
+use atproto_oauth::jwt::{self, JoseClaims};
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Authentication configuration for the server.
 #[derive(Clone)]
 pub struct AuthConfig {
-    /// If set, this token is accepted without JWT verification (dev mode).
     pub unsafe_auth_token: Option<String>,
-    /// The DID of this server (used for audience verification).
     pub server_did: String,
-    /// DID resolver for fetching DID documents and extracting verification keys.
     pub resolver: Arc<InnerIdentityResolver>,
 }
 
@@ -48,10 +45,9 @@ impl AuthConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Authenticated user extractor
+// Authenticated user
 // ---------------------------------------------------------------------------
 
-/// The authenticated user DID stored in the depot.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser(pub String);
 
@@ -59,7 +55,6 @@ pub struct AuthenticatedUser(pub String);
 // Auth middleware
 // ---------------------------------------------------------------------------
 
-/// Salvo middleware that authenticates requests.
 #[derive(Clone)]
 pub struct AuthMiddleware {
     pub config: Arc<AuthConfig>,
@@ -99,7 +94,7 @@ impl Handler for AuthMiddleware {
 }
 
 // ---------------------------------------------------------------------------
-// Token extraction and verification
+// Token verification
 // ---------------------------------------------------------------------------
 
 async fn extract_and_verify_token(
@@ -116,7 +111,7 @@ async fn extract_and_verify_token(
         .strip_prefix("Bearer ")
         .ok_or_else(|| "Authorization header must use Bearer scheme".to_string())?;
 
-    // Dev mode: unsafe token bypass
+    // Dev mode bypass
     if let Some(unsafe_token) = &config.unsafe_auth_token {
         if token == unsafe_token {
             return Ok(extract_unsafe_user(token));
@@ -134,111 +129,80 @@ fn extract_unsafe_user(token: &str) -> String {
     }
 }
 
-/// Verify an ES256K JWT.
+/// Verify an ES256K JWT using atproto-oauth.
 ///
-/// 1. Decode header/payload
-/// 2. Extract the `iss` claim
-/// 3. Resolve the issuer's DID document via atproto-identity
-/// 4. Extract the #atproto verification key
-/// 5. Verify the JWT signature
+/// Flow:
+/// 1. Decode the JWT payload (base64url) to find the `iss` claim
+/// 2. Resolve the issuer's DID document via atproto-identity
+/// 3. Extract the #atproto Multikey public key
+/// 4. Delegate full JWT verification to `atproto_oauth::jwt::verify`
 async fn verify_jwt(token: &str, config: &AuthConfig) -> Result<String, String> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return Err("Invalid JWT format".to_string());
     }
 
-    // Decode header to check algorithm
-    let header_bytes =
-        decode_b64url(parts[0]).map_err(|e| format!("Failed to decode JWT header: {e}"))?;
-    let header: serde_json::Value = serde_json::from_slice(&header_bytes)
-        .map_err(|e| format!("Failed to parse JWT header: {e}"))?;
-    let alg = header
-        .get("alg")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "JWT missing 'alg'".to_string())?;
+    // Use FromBase64 to decode the JWT payload and extract issuer
+    let jose_claims = JoseClaims::from_base64(parts[1])
+        .map_err(|e| format!("Failed to decode JWT payload: {e}"))?;
 
-    if alg != "ES256K" {
-        return Err(format!("Unsupported algorithm: {alg} (expected ES256K)"));
-    }
-
-    // Decode payload to extract issuer
-    let payload_bytes =
-        decode_b64url(parts[1]).map_err(|e| format!("Failed to decode JWT payload: {e}"))?;
-    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes)
-        .map_err(|e| format!("Failed to parse JWT payload: {e}"))?;
-
-    let issuer = payload
-        .get("iss")
-        .and_then(|v| v.as_str())
+    let issuer = jose_claims
+        .issuer
         .ok_or_else(|| "JWT missing 'iss' claim".to_string())?;
 
-    // Resolve issuer's DID document
+    // Resolve the issuer's DID document
     let doc = config
         .resolver
-        .resolve(issuer)
+        .resolve(&issuer)
         .await
         .map_err(|e| format!("Failed to resolve issuer DID {issuer}: {e}"))?;
 
     // Extract the #atproto verification key
+    let pub_key_data = extract_atproto_key(&doc, &issuer)?;
+
+    // Full JWT verification via atproto-oauth
+    let claims = jwt::verify(token, &pub_key_data)
+        .map_err(|e| format!("JWT verification failed: {e}"))?;
+
+    let verified_issuer = claims
+        .jose
+        .issuer
+        .unwrap_or(issuer);
+
+    tracing::debug!("JWT verified for issuer: {verified_issuer}");
+    Ok(verified_issuer)
+}
+
+/// Extract the #atproto Multikey from a DID document.
+fn extract_atproto_key(doc: &atproto_identity::model::Document, did: &str) -> Result<KeyData, String> {
     let pub_key_mb = doc
         .verification_method
         .iter()
-        .find(|vm| {
-            use atproto_identity::model::VerificationMethod;
-            match vm {
-                VerificationMethod::Multikey { id, .. } => id.ends_with("#atproto"),
-                _ => false,
-            }
+        .find(|vm| match vm {
+            VerificationMethod::Multikey { id, .. } => id.ends_with("#atproto"),
+            _ => false,
         })
         .and_then(|vm| match vm {
-            atproto_identity::model::VerificationMethod::Multikey {
-                public_key_multibase,
-                ..
-            } => Some(public_key_multibase.clone()),
+            VerificationMethod::Multikey { public_key_multibase, .. } => {
+                Some(public_key_multibase.clone())
+            }
             _ => None,
         })
-        .ok_or_else(|| {
-            format!("No #atproto Multikey verification method in DID document for {issuer}")
-        })?;
+        .ok_or_else(|| format!("No #atproto Multikey in DID document for {did}"))?;
 
-    // Decode the multibase public key
-    let pub_key_bytes = decode_multibase(&pub_key_mb)?;
-    let public_key = KeyData::new(KeyType::K256Public, pub_key_bytes);
-
-    // Verify the signature
-    let message = format!("{}.{}", parts[0], parts[1]);
-    let signature = decode_b64url(parts[2])?;
-
-    key::validate(&public_key, &signature, message.as_bytes())
-        .map_err(|e| format!("JWT signature verification failed: {e}"))?;
-
-    tracing::debug!("JWT verified for issuer: {issuer}");
-    Ok(issuer.to_string())
-}
-
-// ---------------------------------------------------------------------------
-// Base64url / multibase helpers
-// ---------------------------------------------------------------------------
-
-fn decode_b64url(input: &str) -> Result<Vec<u8>, String> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(input)
-        .map_err(|e| format!("Base64 decode error: {e}"))
-}
-
-/// Decode a multibase-encoded key (base58btc with 'z' prefix).
-fn decode_multibase(input: &str) -> Result<Vec<u8>, String> {
-    let encoded = input
+    let encoded = pub_key_mb
         .strip_prefix('z')
         .ok_or_else(|| "Expected base58btc multibase (z prefix)".to_string())?;
-    bs58::decode(encoded)
+
+    let bytes = bs58::decode(encoded)
         .into_vec()
-        .map_err(|e| format!("Base58 decode error: {e}"))
+        .map_err(|e| format!("Base58 decode error: {e}"))?;
+
+    Ok(KeyData::new(KeyType::K256Public, bytes))
 }
 
 // ---------------------------------------------------------------------------
-// Helper to extract the authenticated DID from a depot
+// Depot helper
 // ---------------------------------------------------------------------------
 
 pub fn get_authenticated_user(depot: &Depot) -> Result<&str, StatusError> {
