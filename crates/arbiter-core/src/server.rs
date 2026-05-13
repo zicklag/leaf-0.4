@@ -101,6 +101,10 @@ pub enum ServerEffect {
     ArbiterChanged {
         arbiter_did: ArbiterDid,
     },
+    /// An arbiter was deleted — remove its persisted state.
+    ArbiterDeleted {
+        arbiter_did: ArbiterDid,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +470,7 @@ impl Server {
                             req_id: trigger_msg.src_job_id,
                             result: Ok(JobResult::Ok),
                         },
-                        ServerEffect::ArbiterChanged {
+                        ServerEffect::ArbiterDeleted {
                             arbiter_did: arbiter_did,
                         },
                     ],
@@ -986,10 +990,10 @@ mod tests {
         // Arbiter should be removed
         assert!(!new_server.arbiters.contains_key("did:example:arb1"));
 
-        // Should have ArbiterChanged
+        // Should have ArbiterDeleted
         assert!(effects.iter().any(|e| matches!(
             e,
-            ServerEffect::ArbiterChanged { arbiter_did } if arbiter_did == "did:example:arb1"
+            ServerEffect::ArbiterDeleted { arbiter_did } if arbiter_did == "did:example:arb1"
         )));
     }
 

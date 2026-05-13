@@ -282,14 +282,29 @@ async fn persistence_loop(
             continue;
         }
 
+        let mut persisted = 0usize;
+        let mut deleted = 0usize;
+
         for did in &dirty {
             if let Some(state) = arbiter_server.snapshot_arbiter(did).await {
+                // Arbiter exists — persist it
                 if let Err(e) = persister.persist(did, &state) {
                     tracing::error!(%did, %e, "Failed to persist arbiter state");
+                } else {
+                    persisted += 1;
+                }
+            } else {
+                // Arbiter was deleted — remove its persisted state
+                if let Err(e) = persister.delete(did) {
+                    tracing::error!(%did, %e, "Failed to delete arbiter state file");
+                } else {
+                    deleted += 1;
                 }
             }
         }
 
-        tracing::debug!("Persisted {} dirty arbiter(s)", dirty.len());
+        if persisted > 0 || deleted > 0 {
+            tracing::debug!("Persisted {} and deleted {} arbiter(s)", persisted, deleted);
+        }
     }
 }

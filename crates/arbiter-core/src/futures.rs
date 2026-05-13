@@ -315,6 +315,12 @@ impl<Io: ArbiterIo> AsyncArbiterServer<Io> {
                     let mut dirty = self.dirty_arbiters.lock().await;
                     dirty.insert(arbiter_did);
                 }
+
+                ServerEffect::ArbiterDeleted { arbiter_did } => {
+                    // Mark as dirty so the persistence loop can remove the file
+                    let mut dirty = self.dirty_arbiters.lock().await;
+                    dirty.insert(arbiter_did);
+                }
             }
         }
     }
