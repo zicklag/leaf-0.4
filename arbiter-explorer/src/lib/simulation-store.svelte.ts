@@ -87,7 +87,7 @@ class AppState {
   }
 
   addUser(label: string): UserAccount {
-    const did = generateUserId();
+    const did = generateUserId(label);
     const user: UserAccount = { did, label };
     this.users = [...this.users, user];
     if (!this.currentUserId) this.currentUserId = did;

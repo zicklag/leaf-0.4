@@ -143,15 +143,14 @@ export function accessColor(access: Access): string {
 // ---------------------------------------------------------------------------
 
 let userIdCounter = 0;
-export function generateUserId(): string {
-  userIdCounter++;
-  return `did:example:user${userIdCounter}`;
+export function generateUserId(label: string): string {
+  return label.toLowerCase().replace(/\s+/g, '-');
 }
 
 let arbiterIdCounter = 0;
 export function generateArbiterDid(): string {
   arbiterIdCounter++;
-  return `did:example:arbiter${arbiterIdCounter}`;
+  return `arbiter${arbiterIdCounter}`;
 }
 
 // ---------------------------------------------------------------------------
