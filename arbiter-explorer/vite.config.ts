@@ -3,6 +3,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import wasm from "vite-plugin-wasm";
 
 export default defineConfig({
+  base: process.env.BASE_PATH || "/",
   plugins: [wasm(), svelte()],
   server: {
     port: 5199,

@@ -54,11 +54,11 @@ export function buildMemberFromEntry(entry: {
   value: string;
 }): Member | null {
   switch (entry.memberType) {
-    case "MemberUser":
+    case "User":
       return { tag: "MemberUser", value: entry.value };
-    case "MemberLocalSpace":
+    case "LocalSpace":
       return { tag: "MemberLocalSpace", value: entry.value };
-    case "MemberRemoteSpace": {
+    case "RemoteSpace": {
       const sid = parseSpaceId(entry.value);
       if (!sid) return null;
       return { tag: "MemberRemoteSpace", value: sid };
@@ -130,12 +130,13 @@ export function accessTag(access: Access): { tag: string; value: number } {
 export function accessColor(access: Access): string {
   const level = accessLevel(access);
   const total = ALL_ACCESSES.length - 1;
-  const ratio = level / total;
-  // Gradient from soft amber (low access) to warm saturated amber (Owner)
-  const h = 55 + ratio * 15; // hue shift from yellow to orange
-  const s = 20 + ratio * 60; // saturation increase
-  const l = 75 - ratio * 30; // lightness decrease
-  return `hsl(${h}, ${s}%, ${l}%)`;
+  const ratio = total > 0 ? level / total : 0;
+  // Perceptually uniform OKLCH: cool teal (low access) → warm amber (high access).
+  // Chroma and lightness stay in a range that reads clearly on light backgrounds.
+  const h = 200 - ratio * 160; // 200° (teal) → 40° (amber)
+  const c = 0.10 + ratio * 0.12; // chroma rises with level
+  const l = 0.70 - ratio * 0.15; // lightness drops slightly
+  return `oklch(${l.toFixed(2)} ${c.toFixed(2)} ${h.toFixed(0)})`;
 }
 
 // ---------------------------------------------------------------------------

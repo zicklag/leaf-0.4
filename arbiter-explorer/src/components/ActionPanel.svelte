@@ -1,14 +1,11 @@
 <script lang="ts">
   import type { Access, Member, SpaceId } from "arbiter-wasm";
   import { app } from "../lib/simulation-store.svelte";
-  import { buildMessage, buildMemberFromEntry, parseSpaceId } from "../lib/utils";
+  import { buildMessage, buildMemberFromEntry } from "../lib/utils";
   import { ALL_ACCESSES, ACCESS_LABELS } from "../lib/types";
 
-  let { currentUser, selectedArbiter, selectedSpace, serverState } =
+  let { currentUser, selectedArbiter, selectedSpace, serverState, users } =
     $derived(app);
-
-  // --- create arbiter ---
-  let newArbiterDid = $state("");
 
   // --- create space ---
   let newSpaceKey = $state("");
@@ -20,47 +17,36 @@
   >("MemberUser");
   let newMemberValue = $state("");
   let newMemberAccess = $state<Access>("ReadMemberList");
+  let remoteArbiterDid = $state("");
+  let remoteSpaceKey = $state("");
+  let memberFocusEl: HTMLElement | undefined = $state();
+
+  let remoteSpaces = $derived(
+    serverState?.arbiters.find((a) => a.did === remoteArbiterDid)?.spaces ?? [],
+  );
+
+  function resetMemberForm() {
+    newMemberValue = "";
+    remoteArbiterDid = "";
+    remoteSpaceKey = "";
+  }
 
   // --- configure space ---
   let showConfigure = $state(false);
 
-  async function handleCreateArbiter(e: Event) {
-    e.preventDefault();
-    if (!currentUser || !newArbiterDid.trim()) return;
-    const result = await app.dispatch(
-      buildMessage(currentUser.did, newArbiterDid.trim(), "$admin", {
-        type: "createArbiter",
-      }),
-    );
-    console.log("[createArbiter] effects:", JSON.stringify(result, null, 2));
-    const respond = result.find((r) => r.effectType === "respond");
-    console.log("[createArbiter] respond:", respond);
-    if (respond?.ok) {
-      app.notifications.add(
-        "success",
-        `Arbiter "${newArbiterDid.trim()}" created`,
-      );
-      newArbiterDid = "";
-    } else {
-      app.notifications.add(
-        "error",
-        respond?.error ?? "Failed to create arbiter",
-      );
-    }
-  }
-
   async function handleCreateSpace(e: Event) {
     e.preventDefault();
-    if (!currentUser || !selectedArbiter || !newSpaceKey.trim()) return;
+    const key = newSpaceKey.trim();
+    if (!currentUser || !selectedArbiter || !key) return;
+    newSpaceKey = "";
     const result = await app.dispatch(
-      buildMessage(currentUser.did, selectedArbiter.did, newSpaceKey.trim(), {
+      buildMessage(currentUser.did, selectedArbiter.did, key, {
         type: "createSpace",
       }),
     );
     const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
-      app.notifications.add("success", `Space "${newSpaceKey.trim()}" created`);
-      newSpaceKey = "";
+      app.notifications.add("success", `Space "${key}" created`);
     } else {
       app.notifications.add(
         "error",
@@ -71,35 +57,39 @@
 
   async function handleAddMember(e: Event) {
     e.preventDefault();
-    if (!currentUser || !selectedSpace || !newMemberValue.trim()) return;
+    if (!currentUser || !selectedSpace) return;
 
-    let member: Member;
+    let member: Member | null = null;
     if (newMemberType === "MemberRemoteSpace") {
-      const parsed = parseSpaceId(newMemberValue.trim());
-      if (!parsed) {
+      if (!remoteArbiterDid || !remoteSpaceKey) {
         app.notifications.add(
           "error",
-          "Invalid remote space format. Use arbiterDid:spaceKey",
+          "Please select both a remote arbiter and space",
         );
         return;
       }
-      member = { tag: "MemberRemoteSpace", value: parsed };
+      member = {
+        tag: "MemberRemoteSpace",
+        value: { arbiterDid: remoteArbiterDid, spaceKey: remoteSpaceKey },
+      };
     } else {
+      if (!newMemberValue.trim()) return;
       member = { tag: newMemberType, value: newMemberValue.trim() };
     }
 
     const result = await app.dispatch(
       buildMessage(currentUser.did, selectedArbiter!.did, selectedSpace!.key, {
         type: "setMemberAccess",
-        member,
+        member: member!,
         access: newMemberAccess,
       }),
     );
     const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
       app.notifications.add("success", "Member access set");
-      newMemberValue = "";
-      showAddMember = false;
+      resetMemberForm();
+      // Keep form open and refocus for rapid multi-add
+      setTimeout(() => memberFocusEl?.focus(), 50);
     } else {
       app.notifications.add("error", respond?.error ?? "Failed to set member");
     }
@@ -197,20 +187,6 @@
   {#if !currentUser}
     <p class="empty-hint">Select a user from the list above.</p>
   {:else}
-    <!-- Create Arbiter -->
-    <form class="action-form" onsubmit={handleCreateArbiter}>
-      <label for="arbiter-did">Create Arbiter</label>
-      <div class="input-row">
-        <input
-          id="arbiter-did"
-          type="text"
-          placeholder={app.generateArbiterDid()}
-          bind:value={newArbiterDid}
-        />
-        <button class="btn btn-primary btn-sm" type="submit">Create</button>
-      </div>
-    </form>
-
     <!-- Arbiter selected: show space actions -->
     {#if selectedArbiter}
       <div class="context-label mono">
@@ -255,29 +231,67 @@
         {#if showAddMember}
           <form class="action-form" onsubmit={handleAddMember}>
             <label for="member-type">Member Type</label>
-            <select id="member-type" bind:value={newMemberType}>
+            <select
+              id="member-type"
+              bind:value={newMemberType}
+              onchange={resetMemberForm}
+            >
               <option value="MemberUser">User (DID)</option>
               <option value="MemberLocalSpace">Local Space</option>
               <option value="MemberRemoteSpace">Remote Space</option>
             </select>
 
-            <label for="member-value">
-              {newMemberType === "MemberUser"
-                ? "User DID"
-                : newMemberType === "MemberRemoteSpace"
-                  ? "arbiterDid:spaceKey"
-                  : "Space Key"}
-            </label>
-            <input
-              id="member-value"
-              type="text"
-              placeholder={newMemberType === "MemberUser"
-                ? "did:example:…"
-                : newMemberType === "MemberRemoteSpace"
-                  ? "did:example:arb:space"
-                  : "my-space"}
-              bind:value={newMemberValue}
-            />
+            {#if newMemberType === "MemberUser"}
+              <label for="member-user">User</label>
+              <select
+                id="member-user"
+                bind:value={newMemberValue}
+                bind:this={memberFocusEl}
+              >
+                <option value="">-- Select user --</option>
+                {#each users as user}
+                  <option value={user.did}
+                    >{user.label} ({user.did})</option
+                  >
+                {/each}
+              </select>
+            {:else if newMemberType === "MemberLocalSpace"}
+              <label for="member-localspace">Space</label>
+              <select
+                id="member-localspace"
+                bind:value={newMemberValue}
+                bind:this={memberFocusEl}
+              >
+                <option value="">-- Select space --</option>
+                {#each selectedArbiter!.spaces as space}
+                  <option value={space.key}>{space.key}</option>
+                {/each}
+              </select>
+            {:else if newMemberType === "MemberRemoteSpace"}
+              <label for="member-remote-arbiter">Remote Arbiter</label>
+              <select
+                id="member-remote-arbiter"
+                bind:value={remoteArbiterDid}
+                bind:this={memberFocusEl}
+              >
+                <option value="">-- Select arbiter --</option>
+                {#each serverState?.arbiters ?? [] as arbiter}
+                  <option value={arbiter.did}>{arbiter.did}</option>
+                {/each}
+              </select>
+              {#if remoteArbiterDid}
+                <label for="member-remote-space">Remote Space</label>
+                <select
+                  id="member-remote-space"
+                  bind:value={remoteSpaceKey}
+                >
+                  <option value="">-- Select space --</option>
+                  {#each remoteSpaces as space}
+                    <option value={space.key}>{space.key}</option>
+                  {/each}
+                </select>
+              {/if}
+            {/if}
 
             <label for="member-access">Access Level</label>
             <select id="member-access" bind:value={newMemberAccess}>

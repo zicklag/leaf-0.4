@@ -1,10 +1,60 @@
 <script lang="ts">
   import { app } from '../lib/simulation-store.svelte';
-  import { accessLabel, accessLevel, accessColor, shortDid, memberTypeLabel } from '../lib/utils';
+  import { accessLabel, accessLevel, accessColor, shortDid, memberTypeLabel, buildMessage } from '../lib/utils';
   import { ALL_ACCESSES } from '../lib/types';
   import type { Access } from '../lib/types';
 
-  let { selectedSpace, selectedSpaceMembers } = $derived(app);
+  let { selectedSpace, selectedSpaceMembers, selectedSpaceError, currentUser, selectedArbiterDid } = $derived(app);
+
+  let sortedMembers = $derived(
+    selectedSpaceMembers?.resolved
+      ? [...selectedSpaceMembers.resolved].sort((a, b) => {
+          const levelDiff = accessLevel(b.access) - accessLevel(a.access);
+          if (levelDiff !== 0) return levelDiff;
+          return a.value.localeCompare(b.value);
+        })
+      : [],
+  );
+
+  let currentUserAccess = $derived(
+    currentUser && selectedSpaceMembers?.resolved
+      ? selectedSpaceMembers.resolved.find(
+          (m) => m.memberType === 'User' && m.value === currentUser.did,
+        )?.access ?? null
+      : null,
+  );
+
+  async function togglePublicMembers() {
+    if (!currentUser || !selectedSpace || !selectedArbiterDid) return;
+    const effects = await app.dispatch(
+      buildMessage(currentUser.did, selectedArbiterDid, selectedSpace.key, {
+        type: 'configureSpace',
+        public_records: selectedSpace.config.publicRecords,
+        public_members: !selectedSpace.config.publicMembers,
+      }),
+    );
+    const respond = effects.find((e) => e.effectType === 'respond');
+    if (respond && !respond.ok) {
+      const who = currentUser?.label ?? currentUser?.did ?? 'unknown';
+      app.notifications.add('error', `User "${who}": ${respond.error || 'Permission denied'}`);
+    }
+  }
+
+  async function togglePublicRecords() {
+    if (!currentUser || !selectedSpace || !selectedArbiterDid) return;
+    const effects = await app.dispatch(
+      buildMessage(currentUser.did, selectedArbiterDid, selectedSpace.key, {
+        type: 'configureSpace',
+        public_records: !selectedSpace.config.publicRecords,
+        public_members: selectedSpace.config.publicMembers,
+      }),
+    );
+    const respond = effects.find((e) => e.effectType === 'respond');
+    if (respond && !respond.ok) {
+      const who = currentUser?.label ?? currentUser?.did ?? 'unknown';
+      app.notifications.add('error', `User "${who}": ${respond.error || 'Permission denied'}`);
+    }
+  }
 </script>
 
 {#if selectedSpace}
@@ -25,39 +75,58 @@
     <!-- Space config -->
     <section class="panel-section">
       <h4>Configuration</h4>
-      <div class="config-row">
+      <button
+        class="config-toggle"
+        class:active={selectedSpace.config.publicMembers}
+        onclick={togglePublicMembers}
+      >
         <span class="config-label">Public Members</span>
-        <span
-          class="config-value"
-          class:active={selectedSpace.config.publicMembers}
-        >
-          {selectedSpace.config.publicMembers ? 'Yes' : 'No'}
+        <span class="toggle-indicator">
+          {selectedSpace.config.publicMembers ? 'On' : 'Off'}
         </span>
-      </div>
-      <div class="config-row">
+      </button>
+      <button
+        class="config-toggle"
+        class:active={selectedSpace.config.publicRecords}
+        onclick={togglePublicRecords}
+      >
         <span class="config-label">Public Records</span>
-        <span
-          class="config-value"
-          class:active={selectedSpace.config.publicRecords}
-        >
-          {selectedSpace.config.publicRecords ? 'Yes' : 'No'}
+        <span class="toggle-indicator">
+          {selectedSpace.config.publicRecords ? 'On' : 'Off'}
         </span>
-      </div>
+      </button>
     </section>
 
     <!-- Resolved Members -->
     <section class="panel-section">
       <h4>Resolved Members</h4>
+
       {#if selectedSpaceMembers}
-        {#if selectedSpaceMembers.resolved.length === 0}
+        <!-- Resolving-as badge -->
+        {#if currentUser}
+          <div class="resolving-badge">
+            <span class="badge-label">Resolving as</span>
+            <span class="badge-user mono">
+              👤 {currentUser.label ?? shortDid(currentUser.did)}
+              {#if currentUserAccess}
+                <span class="badge-access" style="color: {accessColor(currentUserAccess)}">
+                  {accessLabel(currentUserAccess)}
+                </span>
+              {:else}
+                <span class="badge-access no-access">No access</span>
+              {/if}
+            </span>
+          </div>
+        {/if}
+
+        {#if sortedMembers.length === 0}
           <p class="empty-hint">No resolved members</p>
         {:else}
           <div class="member-list">
-            {#each selectedSpaceMembers.resolved as member}
+            {#each sortedMembers as member}
               <div class="member-entry">
                 <span class="member-name mono truncate">
-                  {member.memberType === 'MemberRemoteSpace' ? '🌐' : '👤'}
-                  {shortDid(member.value)}
+                  👤 {shortDid(member.value)}
                 </span>
                 <div class="access-bar">
                   <div
@@ -73,7 +142,7 @@
           </div>
         {/if}
 
-        {#if selectedSpaceMembers.missing && selectedSpaceMembers.missing.length > 0}
+        {#if selectedSpaceMembers.missing.length > 0}
           <div class="missing-section">
             <h5>Unresolved Spaces</h5>
             {#each selectedSpaceMembers.missing as ms}
@@ -84,6 +153,8 @@
             {/each}
           </div>
         {/if}
+      {:else if selectedSpaceError}
+        <p class="error-hint">{selectedSpaceError}</p>
       {:else}
         <p class="empty-hint">Select a space to see computed members</p>
       {/if}
@@ -159,25 +230,87 @@
     font-style: italic;
   }
 
-  .config-row {
+  .error-hint {
+    color: var(--error, #c0392b);
+    font-size: 0.857rem;
+    line-height: 1.4;
+  }
+
+  .config-toggle {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 0;
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: var(--bg-base);
+    cursor: pointer;
+    transition: all 150ms var(--ease-out);
+    margin-bottom: 4px;
+  }
+
+  .config-toggle:hover {
+    border-color: var(--accent);
+    background: var(--accent-subtle);
+  }
+
+  .config-toggle.active {
+    border-color: var(--accent);
+    background: oklch(0.58 0.18 65 / 0.08);
   }
 
   .config-label {
     font-size: 0.857rem;
+    font-weight: 500;
   }
 
-  .config-value {
+  .toggle-indicator {
     font-size: 0.786rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    transition: color 150ms var(--ease-out);
+  }
+
+  .config-toggle.active .toggle-indicator {
+    color: var(--accent-text);
+  }
+
+  .resolving-badge {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    background: var(--accent-subtle);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+  }
+
+  .badge-label {
+    font-size: 0.714rem;
     font-weight: 500;
     color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
-  .config-value.active {
-    color: var(--accent-text);
+  .badge-user {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.857rem;
+    font-weight: 600;
+  }
+
+  .badge-access {
+    font-size: 0.786rem;
+    font-weight: 600;
+  }
+
+  .badge-access.no-access {
+    color: var(--text-muted);
+    font-weight: 400;
   }
 
   .member-list {

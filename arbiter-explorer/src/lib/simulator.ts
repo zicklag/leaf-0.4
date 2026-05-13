@@ -24,6 +24,16 @@ export class Simulator {
     return this.engine.get_state();
   }
 
+  saveState(): unknown {
+    if (!this.engine) throw new Error('Not initialized');
+    return this.engine.save_state();
+  }
+
+  loadState(obj: unknown): void {
+    if (!this.engine) throw new Error('Not initialized');
+    this.engine.load_state(obj);
+  }
+
   fetchMembers(arbiterDid: string, spaceKey: string, userDid: string): EffectView[] {
     return this.simulate({
       userDid, arbiterDid, spaceKey,

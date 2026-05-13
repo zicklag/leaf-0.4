@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app } from './lib/simulation-store.svelte';
   import Toolbar from './components/Toolbar.svelte';
+  import CreateArbiterBar from './components/CreateArbiterBar.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import Canvas from './components/Canvas.svelte';
   import DetailPanel from './components/DetailPanel.svelte';
@@ -28,13 +29,16 @@
   <Toolbar />
   <div class="main-layout">
     <Sidebar />
-    {#if app.serverState && app.serverState.arbiters.length > 0}
-      <Canvas />
-    {:else}
-      <div class="canvas-area">
-        <EmptyState />
-      </div>
-    {/if}
+    <div class="canvas-column">
+      <CreateArbiterBar />
+      {#if app.serverState && app.serverState.arbiters.length > 0}
+        <Canvas />
+      {:else}
+        <div class="canvas-area">
+          <EmptyState />
+        </div>
+      {/if}
+    </div>
     {#if app.selectedSpace}
       <DetailPanel />
     {/if}
@@ -94,5 +98,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .canvas-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 </style>

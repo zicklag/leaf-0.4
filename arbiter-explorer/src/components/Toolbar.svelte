@@ -1,7 +1,8 @@
 <script lang="ts">
   import { app } from '../lib/simulation-store.svelte';
+  import { userInitial } from '../lib/utils';
 
-  let { users, currentUser } = $derived(app);
+  let { currentUser } = $derived(app);
 </script>
 
 <header class="toolbar">
@@ -11,25 +12,13 @@
   </div>
 
   <div class="actions">
-    {#if users.length > 0}
-      <div class="user-select">
-        <select
-          value={app.currentUserId ?? ''}
-          onchange={(e) => app.selectUser((e.target as HTMLSelectElement).value)}
-        >
-          <option value="" disabled>Select user…</option>
-          {#each users as u}
-            <option value={u.did}>{u.label} ({u.did})</option>
-          {/each}
-        </select>
-        {#if currentUser}
-          <span class="acting-as">
-            as <strong>{currentUser.label}</strong>
-          </span>
-        {/if}
+    {#if currentUser}
+      <div class="acting-as">
+        <span class="acting-as-label">acting as</span>
+        <span class="user-avatar">{userInitial(currentUser.label)}</span>
+        <span class="user-name">{currentUser.label}</span>
       </div>
     {/if}
-
     <button class="btn btn-sm" onclick={() => app.resetAll()}>
       ↺ Reset
     </button>
@@ -67,18 +56,37 @@
     gap: 12px;
   }
 
-  .user-select {
+  .acting-as {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    padding: 2px 10px 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--accent-subtle);
+    border: 1px solid oklch(0.58 0.18 65 / 0.15);
   }
 
-  .user-select select {
-    min-width: 160px;
+  .acting-as-label {
+    font-size: 0.714rem;
+    color: var(--text-muted);
   }
 
-  .acting-as {
+  .user-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-xs);
+    background: var(--accent);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.643rem;
+    font-weight: 600;
+  }
+
+  .user-name {
     font-size: 0.857rem;
-    color: var(--text-secondary);
+    font-weight: 500;
+    color: var(--accent-text);
   }
 </style>

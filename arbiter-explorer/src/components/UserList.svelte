@@ -4,7 +4,7 @@
 
   let { users, currentUserId } = $derived(app);
   let newUserName = $state('');
-  let showAdd = $state(false);
+  let userInputEl: HTMLInputElement | undefined = $state();
 
   function handleAdd(e: Event) {
     e.preventDefault();
@@ -12,28 +12,24 @@
     if (!name) return;
     app.addUser(name);
     newUserName = '';
-    showAdd = false;
+    setTimeout(() => userInputEl?.focus(), 50);
   }
 </script>
 
 <section class="user-list">
   <div class="section-header">
     <h3>Users</h3>
-    <button class="btn btn-sm" onclick={() => (showAdd = !showAdd)}>
-      {showAdd ? '−' : '+'}
-    </button>
   </div>
 
-  {#if showAdd}
-    <form class="add-user-form" onsubmit={handleAdd}>
-      <input
-        type="text"
-        placeholder="User name (e.g. Alice)"
-        bind:value={newUserName}
-      />
-      <button class="btn btn-primary btn-sm" type="submit">Add</button>
-    </form>
-  {/if}
+  <form class="add-user-form" onsubmit={handleAdd}>
+    <input
+      type="text"
+      placeholder="User name (e.g. Alice)"
+      bind:value={newUserName}
+      bind:this={userInputEl}
+    />
+    <button class="btn btn-primary btn-sm" type="submit">Add</button>
+  </form>
 
   {#if users.length === 0}
     <p class="empty-hint">Create a user account to get started.</p>
@@ -71,6 +67,9 @@
   .user-list {
     padding: 16px;
     border-bottom: 1px solid var(--border-light);
+    max-height: calc(40vh - 17.6px);
+    overflow-y: auto;
+    flex-shrink: 0;
   }
 
   .section-header {

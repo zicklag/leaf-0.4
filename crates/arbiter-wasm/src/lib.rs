@@ -151,6 +151,32 @@ impl ArbiterEngine {
   pub fn get_state(&self) -> Result<ServerStateView, JsValue> {
     Ok(build_state(&self.server))
   }
+
+  /// Serialize the full server state to a JavaScript object.
+  pub fn save_state(&self) -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(&self.server)
+      .map_err(|e| JsValue::from_str(&e.to_string()))
+  }
+
+  /// Restore the server state from a JavaScript object, replacing all current state.
+  pub fn load_state(&mut self, obj: JsValue) -> Result<(), JsValue> {
+    let server: Server =
+      serde_wasm_bindgen::from_value(obj)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    self.server = server;
+    // Recompute next_job_id from existing jobs so IDs don't collide
+    let mut max_id = 0i64;
+    for (_, a) in &self.server.arbiters {
+      for (&id, _) in &a.job_queue {
+        if id > max_id { max_id = id; }
+      }
+    }
+    for (&id, _) in &self.server.job_info {
+      if id > max_id { max_id = id; }
+    }
+    self.next_job_id = max_id + 1;
+    Ok(())
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +239,16 @@ fn build_state(server: &Server) -> ServerStateView {
     .map(|did| {
       let a = &server.arbiters[*did];
       let mut skeys: Vec<&SpaceKey> = a.spaces.keys().collect();
-      skeys.sort();
+      skeys.sort_by(|a, b| {
+        // Always sort $admin first
+        if *a == "$admin" && *b != "$admin" {
+          return std::cmp::Ordering::Less;
+        }
+        if *a != "$admin" && *b == "$admin" {
+          return std::cmp::Ordering::Greater;
+        }
+        a.cmp(b)
+      });
       let spaces: Vec<_> = skeys
         .iter()
         .map(|key| {

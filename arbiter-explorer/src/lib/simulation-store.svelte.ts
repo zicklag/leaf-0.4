@@ -35,6 +35,29 @@ interface AppNotification {
   message: string;
 }
 
+// ---------------------------------------------------------------------------
+// Map-safe JSON round-trip: serde-wasm-bindgen produces Map objects for
+// Rust HashMaps; JSON.stringify/parse need help to handle them.
+// ---------------------------------------------------------------------------
+
+function mapReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Map) {
+    return { __t: 'M', e: Array.from(value.entries()) };
+  }
+  return value;
+}
+
+function mapReviver(_key: string, value: unknown): unknown {
+  if (
+    value &&
+    typeof value === 'object' &&
+    (value as Record<string, unknown>).__t === 'M'
+  ) {
+    return new Map((value as Record<string, unknown>).e as [unknown, unknown][]);
+  }
+  return value;
+}
+
 // --- Main state ---
 class AppState {
   simulator = new Simulator();
@@ -54,6 +77,7 @@ class AppState {
     resolved: MemberEntryView[];
     missing: MissingSpaceView[];
   } | null>(null);
+  selectedSpaceError = $state<string | null>(null);
 
   get currentUser() {
     return this.users.find((u) => u.did === this.currentUserId) ?? null;
@@ -75,6 +99,12 @@ class AppState {
     try {
       await this.simulator.init();
       this.loading = false;
+      const restored = this.restoreFromUrl();
+      if (!restored) {
+        this.addUser('Alice');
+        this.addUser('Bob');
+        this.addUser('Charlie');
+      }
       this.refreshState();
     } catch (e) {
       this.initError = String(e);
@@ -86,11 +116,52 @@ class AppState {
     this.serverState = this.simulator.getState();
   }
 
+  // -----------------------------------------------------------------------
+  // URL fragment persistence: Map-safe JSON round-trip
+  // -----------------------------------------------------------------------
+
+  private saveToUrl() {
+    const snapshot = {
+      v: 1,
+      server: this.simulator.saveState(),
+      users: this.users,
+      currentUser: this.currentUserId,
+    };
+    const json = JSON.stringify(snapshot, mapReplacer);
+    history.replaceState(null, '', '#' + btoa(encodeURIComponent(json)));
+  }
+
+  private restoreFromUrl(): boolean {
+    const hash = window.location.hash.slice(1);
+    if (!hash) return false;
+    try {
+      const json = decodeURIComponent(atob(hash));
+      const snapshot = JSON.parse(json, mapReviver);
+      if (typeof snapshot !== 'object' || !snapshot) return false;
+      if (snapshot.server && typeof snapshot.server === 'object') {
+        this.simulator.loadState(snapshot.server);
+      }
+      if (Array.isArray(snapshot.users)) {
+        this.users = snapshot.users;
+      }
+      if (typeof snapshot.currentUser === 'string') {
+        this.currentUserId = snapshot.currentUser;
+      }
+      return true;
+    } catch (e) {
+      console.warn('Failed to restore state from URL:', e);
+      return false;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+
   addUser(label: string): UserAccount {
     const did = generateUserId(label);
     const user: UserAccount = { did, label };
     this.users = [...this.users, user];
     if (!this.currentUserId) this.currentUserId = did;
+    this.saveToUrl();
     return user;
   }
 
@@ -99,14 +170,23 @@ class AppState {
     if (this.currentUserId === did) {
       this.currentUserId = this.users[0]?.did ?? null;
     }
+    this.saveToUrl();
   }
 
-  selectUser(did: string) { this.currentUserId = did; }
+  selectUser(did: string) {
+    this.currentUserId = did;
+    this.saveToUrl();
+    // Re-fetch space members for the new user if a space is already selected
+    if (this.selectedArbiterDid && this.selectedSpaceKey) {
+      this.fetchSpaceMembers();
+    }
+  }
 
   selectArbiter(did: string | null) {
     this.selectedArbiterDid = did;
     this.selectedSpaceKey = null;
     this.selectedSpaceMembers = null;
+    this.selectedSpaceError = null;
   }
 
   selectSpace(arbiterDid: string, spaceKey: string) {
@@ -119,6 +199,7 @@ class AppState {
   /// through the engine, auto-resolving delegations.
   private fetchSpaceMembers() {
     if (!this.selectedArbiterDid || !this.selectedSpaceKey) return;
+    const userDisplay = this.currentUser?.label ?? this.currentUserId ?? 'Unknown';
     try {
       const effects = this.simulator.fetchMembers(
         this.selectedArbiterDid,
@@ -134,11 +215,17 @@ class AppState {
           resolved: respond.member_list,
           missing: respond.missing_spaces,
         };
+        this.selectedSpaceError = null;
+      } else if (respond) {
+        this.selectedSpaceMembers = null;
+        this.selectedSpaceError = `The user "${userDisplay}" does not have permission to resolve the member list for this space.`;
       } else {
         this.selectedSpaceMembers = null;
+        this.selectedSpaceError = `Could not resolve members for "${userDisplay}".`;
       }
-    } catch {
+    } catch (e) {
       this.selectedSpaceMembers = null;
+      this.selectedSpaceError = `Error resolving members: ${e}`;
     }
   }
 
@@ -146,11 +233,16 @@ class AppState {
     const result = await this.simulator.dispatch(msg);
     this.serverState = result.state;
     this.fetchSpaceMembers();
+    this.saveToUrl();
     return result.effects;
   }
 
-  resetAll() { location.reload(); }
+  resetAll() {
+    history.replaceState(null, '', window.location.pathname);
+    location.reload();
+  }
   generateArbiterDid() { return generateArbiterDid(); }
 }
 
 export const app = new AppState();
+(globalThis as any).app = app;

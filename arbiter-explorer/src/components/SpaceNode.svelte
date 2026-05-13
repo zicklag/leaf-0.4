@@ -43,12 +43,12 @@
     {:else}
       {#each space.members.slice(0, 3) as m}
         <span class="member-chip mono" title={`${m.memberType}: ${m.value} → ${accessLabel(m.access)}`}>
-          {m.memberType === 'MemberUser'
+          {m.memberType === 'User'
             ? '👤'
-            : m.memberType === 'MemberRemoteSpace'
+            : m.memberType === 'RemoteSpace'
               ? '🌐'
               : '📁'}
-          {m.memberType === 'MemberRemoteSpace' ? shortDid(m.value, 20) : shortDid(m.value, 16)}
+          {m.memberType === 'RemoteSpace' ? shortDid(m.value, 20) : shortDid(m.value, 16)}
         </span>
       {/each}
       {#if space.members.length > 3}

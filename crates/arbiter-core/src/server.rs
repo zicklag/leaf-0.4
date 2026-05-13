@@ -123,7 +123,7 @@ pub enum ServerEffect {
 // ---------------------------------------------------------------------------
 
 /// Information about a queued job.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JobInfo {
     /// The message that triggered this job.
     pub msg: Message,
@@ -156,7 +156,7 @@ pub enum ServerError {
 ///
 /// This is a pure, sans-IO state machine. Every mutation returns a new `Server`
 /// plus a list of `ServerEffect`s to be performed by the caller.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Server {
     pub time: Time,
     /// Maps JobId → info about queued jobs (original message + start time).
