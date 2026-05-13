@@ -1,5 +1,11 @@
-import type { Access, Member, Message, MessageKind, SpaceId } from './types';
-import { ACCESS_LABELS, ALL_ACCESSES } from './types';
+import type {
+  Access,
+  Member,
+  Message,
+  MessageKind,
+  SpaceId,
+} from "arbiter-wasm";
+import { ALL_ACCESSES } from "./types";
 
 // ---------------------------------------------------------------------------
 // Message builders
@@ -28,24 +34,47 @@ export function buildMessage(
 
 export function parseMember(raw: string): Member | null {
   // Try User format: just a DID string
-  if (raw.includes('did:')) {
-    return { tag: 'MemberUser', value: raw };
+  if (raw.includes("did:")) {
+    return { tag: "MemberUser", value: raw };
   }
   // Try RemoteSpace format: arbiterDid:spaceKey
-  if (raw.includes(':')) {
-    return { tag: 'MemberRemoteSpace', value: raw };
+  if (raw.includes(":")) {
+    return {
+      tag: "MemberRemoteSpace",
+      value: { arbiterDid: raw.split(":")[0], spaceKey: raw.split(":")[1] },
+    };
   }
   // Otherwise treat as local space key
-  return { tag: 'MemberLocalSpace', value: raw };
+  return { tag: "MemberLocalSpace", value: raw };
+}
+
+/** Build a Member from a member entry (as stored in MemberEntryView). */
+export function buildMemberFromEntry(entry: {
+  memberType: string;
+  value: string;
+}): Member | null {
+  switch (entry.memberType) {
+    case "MemberUser":
+      return { tag: "MemberUser", value: entry.value };
+    case "MemberLocalSpace":
+      return { tag: "MemberLocalSpace", value: entry.value };
+    case "MemberRemoteSpace": {
+      const sid = parseSpaceId(entry.value);
+      if (!sid) return null;
+      return { tag: "MemberRemoteSpace", value: sid };
+    }
+    default:
+      return null;
+  }
 }
 
 export function parseSpaceId(raw: string): SpaceId | null {
-  const parts = raw.split(':');
+  const parts = raw.split(":");
   // SpaceId for remote spaces: arbiterDid:spaceKey
   // But arbiter DID contains colons too (did:example:arb1)
   // We need the last colon to split
   if (parts.length < 2) return null;
-  const lastColon = raw.lastIndexOf(':');
+  const lastColon = raw.lastIndexOf(":");
   return {
     arbiterDid: raw.substring(0, lastColon),
     spaceKey: raw.substring(lastColon + 1),
@@ -54,23 +83,23 @@ export function parseSpaceId(raw: string): SpaceId | null {
 
 export function memberDisplay(member: Member): string {
   switch (member.tag) {
-    case 'MemberUser':
+    case "MemberUser":
       return `👤 ${shortDid(member.value)}`;
-    case 'MemberLocalSpace':
+    case "MemberLocalSpace":
       return `📁 ${member.value}`;
-    case 'MemberRemoteSpace':
+    case "MemberRemoteSpace":
       return `🌐 ${member.value}`;
   }
 }
 
 export function memberTypeLabel(type: string): string {
   switch (type) {
-    case 'User':
-      return 'User';
-    case 'LocalSpace':
-      return 'Local Space';
-    case 'RemoteSpace':
-      return 'Remote Space';
+    case "User":
+      return "User";
+    case "LocalSpace":
+      return "Local Space";
+    case "RemoteSpace":
+      return "Remote Space";
     default:
       return type;
   }
@@ -82,18 +111,23 @@ export function memberTypeLabel(type: string): string {
 
 export function shortDid(did: string, maxLen = 24): string {
   if (did.length <= maxLen) return did;
-  return did.slice(0, maxLen - 3) + '…';
+  return did.slice(0, maxLen - 3) + "…";
 }
 
-export function accessLabel(access: string): string {
-  return ACCESS_LABELS[access as Access] ?? access;
+export function accessLabel(access: Access): string {
+  return access;
 }
 
-export function accessLevel(access: string): number {
-  return ALL_ACCESSES.indexOf(access as Access);
+export function accessLevel(access: Access): number {
+  return ALL_ACCESSES.lastIndexOf(access)!;
 }
 
-export function accessColor(access: string): string {
+/** Convert an Access string to Rust's adjacently tagged JSON format */
+export function accessTag(access: Access): { tag: string; value: number } {
+  return { tag: access, value: accessLevel(access) };
+}
+
+export function accessColor(access: Access): string {
   const level = accessLevel(access);
   const total = ALL_ACCESSES.length - 1;
   const ratio = level / total;

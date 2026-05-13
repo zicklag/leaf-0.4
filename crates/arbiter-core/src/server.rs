@@ -9,6 +9,11 @@
 use im::{HashMap};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "js")]
+use tsify::Tsify;
+#[cfg(feature = "js")]
+use wasm_bindgen::prelude::*;
+
 use crate::core::*;
 
 // ---------------------------------------------------------------------------
@@ -28,6 +33,8 @@ pub const TIMEOUT_TICKS: i64 = 8;
 /// A message that the server processes, matching Quint's `Msg` type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "js", derive(Tsify))]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct Message {
     /// DID of the user or arbiter that initiated this message.
     pub user_did: UserDid,
@@ -51,6 +58,8 @@ pub struct Message {
 /// The kind of message, matching Quint's `MsgKind`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(feature = "js", derive(Tsify))]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum MessageKind {
     /// Reply to a FetchMembers request with resolved members.
     ReplyResolvedMembers {

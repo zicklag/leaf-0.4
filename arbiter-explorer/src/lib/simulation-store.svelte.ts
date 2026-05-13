@@ -6,6 +6,7 @@ import type {
   UserAccount,
   ServerStateView,
   MemberEntryView,
+  MissingSpaceView,
   EffectView,
   Message,
 } from './types';
@@ -51,7 +52,7 @@ class AppState {
   selectedSpaceKey = $state<string | null>(null);
   selectedSpaceMembers = $state<{
     resolved: MemberEntryView[];
-    missing: EffectView extends { effectType: 'Respond' } ? EffectView['missingSpaces'] : never;
+    missing: MissingSpaceView[];
   } | null>(null);
 
   get currentUser() {
@@ -125,13 +126,13 @@ class AppState {
         this.currentUserId ?? '',
       );
       const respond = effects.find(
-        (e): e is Extract<EffectView, { effectType: 'Respond' }> =>
-          e.effectType === 'Respond',
+        (e): e is Extract<EffectView, { effectType: 'respond' }> =>
+          e.effectType === 'respond',
       );
       if (respond && respond.ok) {
         this.selectedSpaceMembers = {
-          resolved: respond.memberList,
-          missing: respond.missingSpaces,
+          resolved: respond.member_list,
+          missing: respond.missing_spaces,
         };
       } else {
         this.selectedSpaceMembers = null;

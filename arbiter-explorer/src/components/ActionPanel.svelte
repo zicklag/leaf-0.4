@@ -1,22 +1,25 @@
 <script lang="ts">
-  import { app } from '../lib/simulation-store.svelte';
-  import { buildMessage, parseSpaceId } from '../lib/utils';
-  import { ALL_ACCESSES, ACCESS_LABELS } from '../lib/types';
-  import type { Access, Member } from '../lib/types';
+  import type { Access, Member, SpaceId } from "arbiter-wasm";
+  import { app } from "../lib/simulation-store.svelte";
+  import { buildMessage, buildMemberFromEntry, parseSpaceId } from "../lib/utils";
+  import { ALL_ACCESSES, ACCESS_LABELS } from "../lib/types";
 
-  let { currentUser, selectedArbiter, selectedSpace, serverState } = $derived(app);
+  let { currentUser, selectedArbiter, selectedSpace, serverState } =
+    $derived(app);
 
   // --- create arbiter ---
-  let newArbiterDid = $state('');
+  let newArbiterDid = $state("");
 
   // --- create space ---
-  let newSpaceKey = $state('');
+  let newSpaceKey = $state("");
 
   // --- add member ---
   let showAddMember = $state(false);
-  let newMemberType = $state<'MemberUser' | 'MemberLocalSpace' | 'MemberRemoteSpace'>('MemberUser');
-  let newMemberValue = $state('');
-  let newMemberAccess = $state<Access>('ReadMemberList');
+  let newMemberType = $state<
+    "MemberUser" | "MemberLocalSpace" | "MemberRemoteSpace"
+  >("MemberUser");
+  let newMemberValue = $state("");
+  let newMemberAccess = $state<Access>("ReadMemberList");
 
   // --- configure space ---
   let showConfigure = $state(false);
@@ -25,20 +28,23 @@
     e.preventDefault();
     if (!currentUser || !newArbiterDid.trim()) return;
     const result = await app.dispatch(
-      buildMessage(currentUser.did, newArbiterDid.trim(), '$admin', {
-        type: 'createArbiter',
+      buildMessage(currentUser.did, newArbiterDid.trim(), "$admin", {
+        type: "createArbiter",
       }),
     );
-    console.log('[createArbiter] effects:', JSON.stringify(result, null, 2));
-    const respond = result.find((r) => r.effectType === 'Respond');
-    console.log('[createArbiter] respond:', respond);
+    console.log("[createArbiter] effects:", JSON.stringify(result, null, 2));
+    const respond = result.find((r) => r.effectType === "respond");
+    console.log("[createArbiter] respond:", respond);
     if (respond?.ok) {
-      app.notifications.add('success', `Arbiter "${newArbiterDid.trim()}" created`);
-      newArbiterDid = '';
+      app.notifications.add(
+        "success",
+        `Arbiter "${newArbiterDid.trim()}" created`,
+      );
+      newArbiterDid = "";
     } else {
       app.notifications.add(
-        'error',
-        respond?.error ?? 'Failed to create arbiter',
+        "error",
+        respond?.error ?? "Failed to create arbiter",
       );
     }
   }
@@ -48,17 +54,17 @@
     if (!currentUser || !selectedArbiter || !newSpaceKey.trim()) return;
     const result = await app.dispatch(
       buildMessage(currentUser.did, selectedArbiter.did, newSpaceKey.trim(), {
-        type: 'createSpace',
+        type: "createSpace",
       }),
     );
-    const respond = result.find((r) => r.effectType === 'Respond');
+    const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
-      app.notifications.add('success', `Space "${newSpaceKey.trim()}" created`);
-      newSpaceKey = '';
+      app.notifications.add("success", `Space "${newSpaceKey.trim()}" created`);
+      newSpaceKey = "";
     } else {
       app.notifications.add(
-        'error',
-        respond?.error ?? 'Failed to create space',
+        "error",
+        respond?.error ?? "Failed to create space",
       );
     }
   }
@@ -68,61 +74,59 @@
     if (!currentUser || !selectedSpace || !newMemberValue.trim()) return;
 
     let member: Member;
-    if (newMemberType === 'MemberRemoteSpace') {
+    if (newMemberType === "MemberRemoteSpace") {
       const parsed = parseSpaceId(newMemberValue.trim());
       if (!parsed) {
-        app.notifications.add('error', 'Invalid remote space format. Use arbiterDid:spaceKey');
+        app.notifications.add(
+          "error",
+          "Invalid remote space format. Use arbiterDid:spaceKey",
+        );
         return;
       }
-      member = { tag: 'MemberRemoteSpace', value: newMemberValue.trim() };
+      member = { tag: "MemberRemoteSpace", value: parsed };
     } else {
       member = { tag: newMemberType, value: newMemberValue.trim() };
     }
 
     const result = await app.dispatch(
-      buildMessage(
-        currentUser.did,
-        selectedArbiter!.did,
-        selectedSpace!.key,
-        {
-          type: 'setMemberAccess',
-          member,
-          access: newMemberAccess,
-        },
-      ),
+      buildMessage(currentUser.did, selectedArbiter!.did, selectedSpace!.key, {
+        type: "setMemberAccess",
+        member,
+        access: newMemberAccess,
+      }),
     );
-    const respond = result.find((r) => r.effectType === 'Respond');
+    const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
-      app.notifications.add('success', 'Member access set');
-      newMemberValue = '';
+      app.notifications.add("success", "Member access set");
+      newMemberValue = "";
       showAddMember = false;
     } else {
-      app.notifications.add('error', respond?.error ?? 'Failed to set member');
+      app.notifications.add("error", respond?.error ?? "Failed to set member");
     }
   }
 
-  async function handleRemoveMember(memberEntry: { memberType: string; value: string }) {
+  async function handleRemoveMember(memberEntry: {
+    memberType: string;
+    value: string;
+  }) {
     if (!currentUser || !selectedSpace) return;
-    const member: Member = {
-      tag: memberEntry.memberType as Member['tag'],
-      value: memberEntry.value,
-    };
+
+    const member = buildMemberFromEntry(memberEntry);
+    if (!member) return;
     const result = await app.dispatch(
-      buildMessage(
-        currentUser.did,
-        selectedArbiter!.did,
-        selectedSpace!.key,
-        {
-          type: 'removeMember',
-          member,
-        },
-      ),
+      buildMessage(currentUser.did, selectedArbiter!.did, selectedSpace!.key, {
+        type: "removeMember",
+        member,
+      }),
     );
-    const respond = result.find((r) => r.effectType === 'Respond');
+    const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
-      app.notifications.add('success', 'Member removed');
+      app.notifications.add("success", "Member removed");
     } else {
-      app.notifications.add('error', respond?.error ?? 'Failed to remove member');
+      app.notifications.add(
+        "error",
+        respond?.error ?? "Failed to remove member",
+      );
     }
   }
 
@@ -130,53 +134,57 @@
     if (!currentUser || !selectedSpace) return;
     const result = await app.dispatch(
       buildMessage(currentUser.did, selectedArbiter!.did, selectedSpace!.key, {
-        type: 'deleteSpace',
+        type: "deleteSpace",
       }),
     );
-    const respond = result.find((r) => r.effectType === 'Respond');
+    const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
-      app.notifications.add('success', 'Space deleted');
+      app.notifications.add("success", "Space deleted");
       app.selectArbiter(selectedArbiter!.did);
     } else {
-      app.notifications.add('error', respond?.error ?? 'Failed to delete space');
+      app.notifications.add(
+        "error",
+        respond?.error ?? "Failed to delete space",
+      );
     }
   }
 
   async function handleDeleteArbiter() {
     if (!currentUser || !selectedArbiter) return;
     const result = await app.dispatch(
-      buildMessage(currentUser.did, selectedArbiter.did, '$admin', {
-        type: 'deleteArbiter',
+      buildMessage(currentUser.did, selectedArbiter.did, "$admin", {
+        type: "deleteArbiter",
       }),
     );
-    const respond = result.find((r) => r.effectType === 'Respond');
+    const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
-      app.notifications.add('success', 'Arbiter deleted');
+      app.notifications.add("success", "Arbiter deleted");
       app.selectArbiter(null);
     } else {
-      app.notifications.add('error', respond?.error ?? 'Failed to delete arbiter');
+      app.notifications.add(
+        "error",
+        respond?.error ?? "Failed to delete arbiter",
+      );
     }
   }
 
   async function handleConfigureSpace() {
     if (!currentUser || !selectedSpace) return;
     const result = await app.dispatch(
-      buildMessage(
-        currentUser.did,
-        selectedArbiter!.did,
-        selectedSpace!.key,
-        {
-          type: 'configureSpace',
-          publicRecords: selectedSpace.config.publicRecords,
-          publicMembers: selectedSpace.config.publicMembers,
-        },
-      ),
+      buildMessage(currentUser.did, selectedArbiter!.did, selectedSpace!.key, {
+        type: "configureSpace",
+        public_records: selectedSpace.config.publicRecords,
+        public_members: selectedSpace.config.publicMembers,
+      }),
     );
-    const respond = result.find((r) => r.effectType === 'Respond');
+    const respond = result.find((r) => r.effectType === "respond");
     if (respond?.ok) {
-      app.notifications.add('success', 'Space configured');
+      app.notifications.add("success", "Space configured");
     } else {
-      app.notifications.add('error', respond?.error ?? 'Failed to configure space');
+      app.notifications.add(
+        "error",
+        respond?.error ?? "Failed to configure space",
+      );
     }
   }
 </script>
@@ -241,38 +249,33 @@
           style="width: 100%; margin-bottom: 8px"
           onclick={() => (showAddMember = !showAddMember)}
         >
-          {showAddMember ? 'Cancel' : '+ Add Member'}
+          {showAddMember ? "Cancel" : "+ Add Member"}
         </button>
 
         {#if showAddMember}
           <form class="action-form" onsubmit={handleAddMember}>
             <label for="member-type">Member Type</label>
-            <select
-              id="member-type"
-              bind:value={newMemberType}
-            >
+            <select id="member-type" bind:value={newMemberType}>
               <option value="MemberUser">User (DID)</option>
               <option value="MemberLocalSpace">Local Space</option>
               <option value="MemberRemoteSpace">Remote Space</option>
             </select>
 
             <label for="member-value">
-              {newMemberType === 'MemberUser'
-                ? 'User DID'
-                : newMemberType === 'MemberRemoteSpace'
-                  ? 'arbiterDid:spaceKey'
-                  : 'Space Key'}
+              {newMemberType === "MemberUser"
+                ? "User DID"
+                : newMemberType === "MemberRemoteSpace"
+                  ? "arbiterDid:spaceKey"
+                  : "Space Key"}
             </label>
             <input
               id="member-value"
               type="text"
-              placeholder={
-                newMemberType === 'MemberUser'
-                  ? 'did:example:…'
-                  : newMemberType === 'MemberRemoteSpace'
-                    ? 'did:example:arb:space'
-                    : 'my-space'
-              }
+              placeholder={newMemberType === "MemberUser"
+                ? "did:example:…"
+                : newMemberType === "MemberRemoteSpace"
+                  ? "did:example:arb:space"
+                  : "my-space"}
               bind:value={newMemberValue}
             />
 

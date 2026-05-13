@@ -1,19 +1,20 @@
-import { defineConfig } from 'vite';
-import { svelte } from '@sveltejs/vite-plugin-svelte';
+import { defineConfig } from "vite";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import wasm from "vite-plugin-wasm";
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [wasm(), svelte()],
   server: {
     port: 5199,
-    host: '127.0.0.1',
+    host: "127.0.0.1",
     fs: {
-      allow: ['..'],
+      allow: [".."],
     },
   },
   optimizeDeps: {
-    exclude: ['arbiter-wasm'],
+    exclude: ["arbiter-wasm"],
   },
   build: {
-    target: 'esnext',
+    target: "esnext",
   },
 });

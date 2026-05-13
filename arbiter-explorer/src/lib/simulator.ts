@@ -1,9 +1,4 @@
-// Orchestrator wrapping the wasm ArbiterEngine.
-// Sends JSON-serialized Messages to wasm, receives JS objects via
-// serde-wasm-bindgen. Handles the simulation loop: routes SendMessage
-// effects by driving the engine recursively through message exchanges.
-
-import init, { ArbiterEngine } from 'arbiter-wasm';
+import { ArbiterEngine } from 'arbiter-wasm';
 import type { Message, EffectView, ServerStateView } from './types';
 
 export class Simulator {
@@ -13,7 +8,6 @@ export class Simulator {
 
   async init(): Promise<void> {
     if (this.initialized) return;
-    await init({ module_or_path: '/wasm/arbiter_wasm_bg.wasm' });
     this.engine = new ArbiterEngine();
     this.initialized = true;
   }
@@ -27,21 +21,20 @@ export class Simulator {
 
   getState(): ServerStateView {
     if (!this.engine) throw new Error('Not initialized');
-    return this.engine.get_state() as unknown as ServerStateView;
+    return this.engine.get_state();
   }
 
   fetchMembers(arbiterDid: string, spaceKey: string, userDid: string): EffectView[] {
-    const msg: Message = {
+    return this.simulate({
       userDid, arbiterDid, spaceKey,
       srcJobId: this.nextJobId++, resolverDepth: 5,
       kind: { type: 'fetchMembers' },
-    };
-    return this.simulate(msg);
+    });
   }
 
   tick(): EffectView[] {
     if (!this.engine) throw new Error('Not initialized');
-    return this.engine.tick() as unknown as EffectView[];
+    return this.engine.tick();
   }
 
   // --- simulation loop ---
@@ -55,20 +48,21 @@ export class Simulator {
       const effects = this.sendRaw(current);
 
       for (const eff of effects) {
-        if (eff.effectType === 'SendMessage') {
+        if (eff.effectType === 'sendMessage') {
           const resolved = this.resolveRemote(eff);
-          const respond = resolved.find((e): e is Extract<EffectView, { effectType: 'Respond' }> =>
-            e.effectType === 'Respond',
+          const respond = resolved.find(
+            (e): e is Extract<EffectView, { effectType: 'respond' }> =>
+              e.effectType === 'respond',
           );
           if (respond?.ok) {
             queue.push({
-              userDid: '', arbiterDid: eff.arbiterDid, spaceKey: eff.spaceKey,
-              srcJobId: eff.srcJobId, resolverDepth: eff.resolverDepth,
+              userDid: '', arbiterDid: eff.arbiter_did, spaceKey: eff.space_key,
+              srcJobId: eff.src_job_id, resolverDepth: eff.resolver_depth,
               kind: {
                 type: 'replyResolvedMembers',
                 members: {
-                  memberList: Object.fromEntries(respond.memberList.map(m => [m.value, m.access])),
-                  missingSpaces: {},
+                  memberList: new Map(respond.member_list.map(m => [m.value, m.access])),
+                  missingSpaces: new Map(),
                 },
               },
             });
@@ -83,19 +77,17 @@ export class Simulator {
     return all;
   }
 
-  private resolveRemote(send: EffectView & { effectType: 'SendMessage' }): EffectView[] {
+  private resolveRemote(send: EffectView & { effectType: 'sendMessage' }): EffectView[] {
     return this.simulate({
-      userDid: '', arbiterDid: send.arbiterDid, spaceKey: send.spaceKey,
-      srcJobId: this.nextJobId++, resolverDepth: send.resolverDepth,
+      userDid: '', arbiterDid: send.arbiter_did, spaceKey: send.space_key,
+      srcJobId: this.nextJobId++, resolverDepth: send.resolver_depth,
       kind: { type: 'fetchMembers' },
     });
   }
 
   private sendRaw(msg: Message): EffectView[] {
     console.log('[sim] →', msg);
-    const result = this.engine!.handle_message(JSON.stringify(msg));
-    console.log('[sim] ←', result);
-    return result as unknown as EffectView[];
+    return this.engine!.handle_message(msg);
   }
 }
 

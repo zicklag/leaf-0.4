@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use im::{HashMap, HashSet};
 
+#[cfg(feature = "js")]
+use tsify::Tsify;
+#[cfg(feature = "js")]
+use wasm_bindgen::prelude::*;
+
 // ---------------------------------------------------------------------------
 // Type aliases
 // ---------------------------------------------------------------------------
@@ -31,7 +36,8 @@ pub const ADMIN_SPACE_KEY: &str = "$admin";
 ///
 /// In the ITF trace format Quint serialises sum types as `{ tag, value }`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(tag = "tag", content = "value")]
+#[cfg_attr(feature = "js", derive(Tsify))]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum Access {
     #[serde(rename = "ReadMemberList")]
     ReadMemberList = 0,
@@ -92,6 +98,8 @@ impl Access {
 /// A member in a space may be a user with a DID, another local space, or a remote space.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "tag", content = "value")]
+#[cfg_attr(feature = "js", derive(Tsify))]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub enum Member {
     #[serde(rename = "MemberUser")]
     User(UserDid),
@@ -108,6 +116,8 @@ pub enum Member {
 /// A reference to a space, qualified by the arbiter that owns it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "js", derive(Tsify))]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct SpaceId {
     pub arbiter_did: ArbiterDid,
     pub space_key: SpaceKey,
@@ -156,6 +166,8 @@ pub type UnresolvedMemberList = HashMap<UnresolvedMemberListItem, Access>;
 /// A fully resolved member list, plus any spaces that are still missing.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "js", derive(Tsify))]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 pub struct ResolvedMemberList {
     pub member_list: HashMap<UserDid, Access>,
     pub missing_spaces: HashMap<SpaceId, Access>,
