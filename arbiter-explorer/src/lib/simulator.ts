@@ -59,15 +59,21 @@ export class Simulator {
 
       for (const eff of effects) {
         if (eff.effectType === 'sendMessage') {
-          const resolved = this.resolveRemote(eff);
+          // The originating arbiter is the one the current message was sent to.
+          // Forward the resolution request as coming from that arbiter, not the
+          // original user — the remote arbiter needs to check the arbiter's access.
+          const resolved = this.resolveRemote(eff, current.arbiterDid);
           const respond = resolved.find(
             (e): e is Extract<EffectView, { effectType: 'respond' }> =>
               e.effectType === 'respond',
           );
           if (respond?.ok) {
             queue.push({
-              userDid: '', arbiterDid: eff.arbiter_did, spaceKey: eff.space_key,
-              srcJobId: eff.src_job_id, resolverDepth: eff.resolver_depth,
+              userDid: current.arbiterDid,
+              arbiterDid: eff.arbiter_did,
+              spaceKey: eff.space_key,
+              srcJobId: eff.src_job_id,
+              resolverDepth: eff.resolver_depth,
               kind: {
                 type: 'replyResolvedMembers',
                 members: {
@@ -87,9 +93,12 @@ export class Simulator {
     return all;
   }
 
-  private resolveRemote(send: EffectView & { effectType: 'sendMessage' }): EffectView[] {
+  private resolveRemote(
+    send: EffectView & { effectType: 'sendMessage' },
+    origArbiterDid: string,
+  ): EffectView[] {
     return this.simulate({
-      userDid: send.user_did,
+      userDid: origArbiterDid,
       arbiterDid: send.arbiter_did,
       spaceKey: send.space_key,
       srcJobId: this.nextJobId++,

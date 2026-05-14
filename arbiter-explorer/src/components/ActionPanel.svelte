@@ -242,16 +242,21 @@
             </select>
 
             {#if newMemberType === "MemberUser"}
-              <label for="member-user">User</label>
+              <label for="member-user">DID</label>
               <select
                 id="member-user"
                 bind:value={newMemberValue}
                 bind:this={memberFocusEl}
               >
-                <option value="">-- Select user --</option>
+                <option value="">-- Select DID --</option>
                 {#each users as user}
                   <option value={user.did}
-                    >{user.label} ({user.did})</option
+                    >👤 {user.label} ({user.did})</option
+                  >
+                {/each}
+                {#each serverState?.arbiters ?? [] as arbiter}
+                  <option value={arbiter.did}
+                    >🏛️ {arbiter.did}</option
                   >
                 {/each}
               </select>
