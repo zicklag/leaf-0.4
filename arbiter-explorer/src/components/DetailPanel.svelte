@@ -147,7 +147,7 @@
             <h5>Unresolved Spaces</h5>
             {#each selectedSpaceMembers.missing as ms}
               <div class="member-entry missing">
-                <span class="member-name mono truncate">❓ {ms.arbiterDid}:{ms.spaceKey}</span>
+                <span class="member-name mono truncate">❓ {ms.arbiterDid}/{ms.spaceKey}</span>
                 <span class="access-label muted">{accessLabel(ms.access)}</span>
               </div>
             {/each}

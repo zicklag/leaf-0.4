@@ -8,8 +8,13 @@ export class Simulator {
 
   async init(): Promise<void> {
     if (this.initialized) return;
-    this.engine = new ArbiterEngine();
-    this.initialized = true;
+    try {
+      this.engine = new ArbiterEngine();
+      this.initialized = true;
+    } catch (e) {
+      console.error('[sim] failed to create ArbiterEngine:', e);
+      throw e;
+    }
   }
 
   async dispatch(msg: Message): Promise<SimulationResult> {

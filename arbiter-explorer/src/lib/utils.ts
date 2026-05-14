@@ -37,11 +37,12 @@ export function parseMember(raw: string): Member | null {
   if (raw.includes("did:")) {
     return { tag: "MemberUser", value: raw };
   }
-  // Try RemoteSpace format: arbiterDid:spaceKey
-  if (raw.includes(":")) {
+  // Try RemoteSpace format: arbiterDid/spaceKey
+  if (raw.includes("/")) {
+    const slash = raw.indexOf("/");
     return {
       tag: "MemberRemoteSpace",
-      value: { arbiterDid: raw.split(":")[0], spaceKey: raw.split(":")[1] },
+      value: { arbiterDid: raw.substring(0, slash), spaceKey: raw.substring(slash + 1) },
     };
   }
   // Otherwise treat as local space key
@@ -69,15 +70,12 @@ export function buildMemberFromEntry(entry: {
 }
 
 export function parseSpaceId(raw: string): SpaceId | null {
-  const parts = raw.split(":");
-  // SpaceId for remote spaces: arbiterDid:spaceKey
-  // But arbiter DID contains colons too (did:example:arb1)
-  // We need the last colon to split
-  if (parts.length < 2) return null;
-  const lastColon = raw.lastIndexOf(":");
+  // SpaceId for remote spaces: arbiterDid/spaceKey
+  const slash = raw.lastIndexOf("/");
+  if (slash < 0) return null;
   return {
-    arbiterDid: raw.substring(0, lastColon),
-    spaceKey: raw.substring(lastColon + 1),
+    arbiterDid: raw.substring(0, slash),
+    spaceKey: raw.substring(slash + 1),
   };
 }
 

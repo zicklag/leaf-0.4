@@ -264,7 +264,7 @@ fn build_state(server: &Server) -> ServerStateView {
                 Member::LocalSpace(k) => ("LocalSpace".into(), k.clone()),
                 Member::RemoteSpace(id) => (
                   "RemoteSpace".into(),
-                  format!("{}:{}", id.arbiter_did, id.space_key),
+                  format!("{}/{}", id.arbiter_did, id.space_key),
                 ),
               };
               MemberEntryView {

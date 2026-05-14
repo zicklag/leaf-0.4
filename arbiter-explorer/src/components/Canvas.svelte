@@ -28,9 +28,9 @@
         {#each arbiter.spaces as space}
           {#each space.members as member}
             {#if member.memberType === 'RemoteSpace'}
-              {@const colonIdx = member.value.lastIndexOf(':')}
-              {@const targetArb = member.value.slice(0, colonIdx)}
-              {@const targetSpace = member.value.slice(colonIdx + 1)}
+              {@const slashIdx = member.value.indexOf('/')}
+              {@const targetArb = member.value.slice(0, slashIdx)}
+              {@const targetSpace = member.value.slice(slashIdx + 1)}
               <DelegationEdge
                 fromArbiter={arbiter.did}
                 fromSpace={space.key}
