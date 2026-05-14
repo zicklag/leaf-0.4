@@ -4,7 +4,7 @@
 
 <div class="empty-state">
   <div class="empty-illustration">⚖️</div>
-  <h2>Welcome to Arbiter Explorer</h2>
+  <h2>Welcome to Arbiter Simulator</h2>
   <p class="empty-desc">
     Design and explore authorization structures with the real Arbiter state
     machine running in your browser.

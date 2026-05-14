@@ -1,4 +1,4 @@
-# PLAN: Arbiter Web Explorer
+# PLAN: Arbiter Web Simulator
 
 **Status:** Planning Phase
 **Last updated:** 2026-05-13
@@ -16,7 +16,7 @@ The project has two deliverables:
 1. **`crates/arbiter-wasm/`** — A Rust crate that compiles the sans-IO `Server` state
    machine from `arbiter-core` to WebAssembly, exposing a JSON-based API for the JS
    side to drive.
-2. **`arbiter-explorer/`** — A Svelte 5 SPA (Vite + TypeScript) that imports the wasm
+2. **`arbiter-simulator/`** — A Svelte 5 SPA (Vite + TypeScript) that imports the wasm
    module and provides the interactive UI: sidebar for user/arbiter management, a
    graph canvas showing the arbiter/space/delegation structure, and a detail panel
    showing computed member lists and access levels.
@@ -25,7 +25,7 @@ The project has two deliverables:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  arbiter-explorer/ (Svelte 5 SPA)                           │
+│  arbiter-simulator/ (Svelte 5 SPA)                           │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────┐    │
 │  │  App.svelte (layout: sidebar | canvas | detail panel) │    │
@@ -260,13 +260,13 @@ This produces `pkg/` with:
 - `arbiter_wasm.js` — JS glue (loads wasm, provides `ArbiterEngine` class)
 - `arbiter_wasm.d.ts` — TypeScript declarations
 
-## Phase 2 — Svelte 5 SPA (`arbiter-explorer/`)
+## Phase 2 — Svelte 5 SPA (`arbiter-simulator/`)
 
 ### 2.1 Project setup
 
 ```bash
-mkdir -p arbiter-explorer
-cd arbiter-explorer
+mkdir -p arbiter-simulator
+cd arbiter-simulator
 pnpm create vite@latest . --template svelte-ts
 pnpm add -D @sveltejs/vite-plugin-svelte
 ```
@@ -280,7 +280,7 @@ pnpm add -D @sveltejs/vite-plugin-svelte
 
 **Directory layout:**
 ```
-arbiter-explorer/
+arbiter-simulator/
 ├── package.json
 ├── vite.config.ts
 ├── svelte.config.js
@@ -682,7 +682,7 @@ Allow users to:
 
 ### 3.5 Deployment
 
-- Build with `pnpm build` → outputs to `arbiter-explorer/dist/`
+- Build with `pnpm build` → outputs to `arbiter-simulator/dist/`
 - Can be deployed to any static hosting (GitHub Pages, Netlify, etc.)
 - The wasm binary is loaded dynamically by Vite's wasm plugin
 
@@ -695,32 +695,32 @@ Allow users to:
 | `crates/arbiter-wasm/Cargo.toml` | New: wasm crate with arbiter-core dep |
 | `crates/arbiter-wasm/src/lib.rs` | New: ArbiterEngine wasm-bindgen API |
 
-### arbiter-explorer/
+### arbiter-simulator/
 
 | File | Action |
 |------|--------|
-| `arbiter-explorer/package.json` | New: Svelte 5 + Vite + wasm deps |
-| `arbiter-explorer/vite.config.ts` | New: Vite config with wasm plugin |
-| `arbiter-explorer/svelte.config.js` | New: Svelte config |
-| `arbiter-explorer/tsconfig.json` | New: TypeScript config |
-| `arbiter-explorer/index.html` | New: Entry HTML |
-| `arbiter-explorer/src/main.ts` | New: App initialization |
-| `arbiter-explorer/src/App.svelte` | New: Main layout component |
-| `arbiter-explorer/src/app.css` | New: Global styles |
-| `arbiter-explorer/src/lib/types.ts` | New: TypeScript type definitions |
-| `arbiter-explorer/src/lib/simulator.ts` | New: Simulation orchestrator |
-| `arbiter-explorer/src/lib/simulation-store.ts` | New: Svelte stores |
-| `arbiter-explorer/src/lib/utils.ts` | New: Utility functions |
-| `arbiter-explorer/src/components/Toolbar.svelte` | New: Top toolbar |
-| `arbiter-explorer/src/components/Sidebar.svelte` | New: Left sidebar |
-| `arbiter-explorer/src/components/UserList.svelte` | New: User management |
-| `arbiter-explorer/src/components/ActionPanel.svelte` | New: Action buttons |
-| `arbiter-explorer/src/components/Canvas.svelte` | New: Graph visualization |
-| `arbiter-explorer/src/components/ArbiterNode.svelte` | New: Arbiter display |
-| `arbiter-explorer/src/components/SpaceNode.svelte` | New: Space display |
-| `arbiter-explorer/src/components/DelegationEdge.svelte` | New: Edge rendering |
-| `arbiter-explorer/src/components/DetailPanel.svelte` | New: Detail view |
-| `arbiter-explorer/src/components/Notification.svelte` | New: Toast notifications |
+| `arbiter-simulator/package.json` | New: Svelte 5 + Vite + wasm deps |
+| `arbiter-simulator/vite.config.ts` | New: Vite config with wasm plugin |
+| `arbiter-simulator/svelte.config.js` | New: Svelte config |
+| `arbiter-simulator/tsconfig.json` | New: TypeScript config |
+| `arbiter-simulator/index.html` | New: Entry HTML |
+| `arbiter-simulator/src/main.ts` | New: App initialization |
+| `arbiter-simulator/src/App.svelte` | New: Main layout component |
+| `arbiter-simulator/src/app.css` | New: Global styles |
+| `arbiter-simulator/src/lib/types.ts` | New: TypeScript type definitions |
+| `arbiter-simulator/src/lib/simulator.ts` | New: Simulation orchestrator |
+| `arbiter-simulator/src/lib/simulation-store.ts` | New: Svelte stores |
+| `arbiter-simulator/src/lib/utils.ts` | New: Utility functions |
+| `arbiter-simulator/src/components/Toolbar.svelte` | New: Top toolbar |
+| `arbiter-simulator/src/components/Sidebar.svelte` | New: Left sidebar |
+| `arbiter-simulator/src/components/UserList.svelte` | New: User management |
+| `arbiter-simulator/src/components/ActionPanel.svelte` | New: Action buttons |
+| `arbiter-simulator/src/components/Canvas.svelte` | New: Graph visualization |
+| `arbiter-simulator/src/components/ArbiterNode.svelte` | New: Arbiter display |
+| `arbiter-simulator/src/components/SpaceNode.svelte` | New: Space display |
+| `arbiter-simulator/src/components/DelegationEdge.svelte` | New: Edge rendering |
+| `arbiter-simulator/src/components/DetailPanel.svelte` | New: Detail view |
+| `arbiter-simulator/src/components/Notification.svelte` | New: Toast notifications |
 
 ## Test Criteria
 

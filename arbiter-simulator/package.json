@@ -1,5 +1,5 @@
 {
-  "name": "arbiter-explorer",
+  "name": "arbiter-simulator",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "build:wasm": "cd ../crates/arbiter-wasm && wasm-pack build --target web && cd ../../arbiter-explorer && pnpm rebuild arbiter-wasm"
+    "build:wasm": "cd ../crates/arbiter-wasm && wasm-pack build --target web && cd ../../arbiter-simulator && pnpm rebuild arbiter-wasm"
   },
   "dependencies": {
     "arbiter-wasm": "file:../crates/arbiter-wasm/pkg"

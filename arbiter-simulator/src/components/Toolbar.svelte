@@ -8,7 +8,7 @@
 <header class="toolbar">
   <div class="brand">
     <span class="logo">⚖️</span>
-    <span class="title">Arbiter Explorer</span>
+    <span class="title">Arbiter Simulator</span>
   </div>
 
   <div class="actions">

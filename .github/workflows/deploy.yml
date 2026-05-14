@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "arbiter-explorer/**"
+      - "arbiter-simulator/**"
       - "crates/arbiter-core/**"
       - "crates/arbiter-server/**"
       - "crates/arbiter-wasm/**"
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: arbiter-explorer
+        working-directory: arbiter-simulator
 
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +63,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: arbiter-explorer/_site
+          path: arbiter-simulator/_site
 
   deploy:
     needs: build

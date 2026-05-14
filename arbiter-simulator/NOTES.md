@@ -1,11 +1,11 @@
-# Arbiter Explorer — Next Steps
+# Arbiter Simulator — Next Steps
 
 **Last updated: 2026-05-13**
 
 ## Current State
 
 - **`crates/arbiter-wasm/`**: Wasm crate with tsify (`js` feature). All view types and Message types auto-generate `.d.ts` via wasm-bindgen's `typescript_custom_section`.
-- **`arbiter-explorer/`**: Svelte 5 SPA, builds with Vite + `vite-plugin-wasm`. Uses typed imports from `arbiter-wasm`.
+- **`arbiter-simulator/`**: Svelte 5 SPA, builds with Vite + `vite-plugin-wasm`. Uses typed imports from `arbiter-wasm`.
 
 ## Remaining Type Issues
 
