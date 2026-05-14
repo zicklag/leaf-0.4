@@ -83,7 +83,26 @@ export class Simulator {
               },
             });
           } else {
-            all.push(eff);
+            // Remote arbiter couldn't resolve — send reply with the space in
+            // missingSpaces so the original arbiter marks it unresolved and
+            // continues with whatever members it already resolved.
+            queue.push({
+              userDid: current.arbiterDid,
+              arbiterDid: eff.arbiter_did,
+              spaceKey: eff.space_key,
+              srcJobId: eff.src_job_id,
+              resolverDepth: eff.resolver_depth,
+              kind: {
+                type: 'replyResolvedMembers',
+                members: {
+                  memberList: new Map(),
+                  missingSpaces: new Map([[
+                    { arbiterDid: eff.arbiter_did, spaceKey: eff.space_key },
+                    'ReadMemberList' as const,
+                  ]]),
+                },
+              },
+            });
           }
         } else {
           all.push(eff);
