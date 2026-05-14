@@ -1,11 +1,15 @@
 <script lang="ts">
   import UserList from './UserList.svelte';
-  import ActionPanel from './ActionPanel.svelte';
+  import ArbiterActions from './ArbiterActions.svelte';
+  import AccessLegend from './AccessLegend.svelte';
 </script>
 
 <aside class="sidebar">
-  <UserList />
-  <ActionPanel />
+  <div class="sidebar-scroll">
+    <UserList />
+    <ArbiterActions />
+  </div>
+  <AccessLegend />
 </aside>
 
 <style>
@@ -16,6 +20,11 @@
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-scroll {
+    flex: 1;
     overflow-y: auto;
   }
 </style>

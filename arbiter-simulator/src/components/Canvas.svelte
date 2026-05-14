@@ -4,6 +4,43 @@
   import DelegationEdge from './DelegationEdge.svelte';
 
   let { serverState, selectedArbiterDid, selectedSpaceKey } = $derived(app);
+
+  // Find the selected space's remote delegations to know which edges to show
+  let delegateEdges = $derived.by(() => {
+    if (!serverState || !selectedArbiterDid || !selectedSpaceKey) return [];
+
+    // Find the selected space
+    const arbiter = serverState.arbiters.find(a => a.did === selectedArbiterDid);
+    if (!arbiter) return [];
+    const space = arbiter.spaces.find(s => s.key === selectedSpaceKey);
+    if (!space) return [];
+
+    // Find all RemoteSpace members in the selected space
+    const edges: Array<{
+      fromArbiter: string;
+      fromSpace: string;
+      toArbiter: string;
+      toSpace: string;
+      access: string;
+    }> = [];
+
+    for (const member of space.members) {
+      if (member.memberType === 'RemoteSpace') {
+        const slashIdx = member.value.indexOf('/');
+        if (slashIdx > 0) {
+          edges.push({
+            fromArbiter: selectedArbiterDid,
+            fromSpace: selectedSpaceKey,
+            toArbiter: member.value.slice(0, slashIdx),
+            toSpace: member.value.slice(slashIdx + 1),
+            access: member.access,
+          });
+        }
+      }
+    }
+
+    return edges;
+  });
 </script>
 
 <div class="canvas">
@@ -14,36 +51,27 @@
           <ArbiterNode
             {arbiter}
             isSelected={arbiter.did === selectedArbiterDid}
-            selectedSpace={selectedSpaceKey}
+            selectedSpace={arbiter.did === selectedArbiterDid ? selectedSpaceKey : null}
           />
         {/each}
       </div>
     {/if}
   </div>
 
-  <!-- SVG overlay for delegation edges -->
-  <svg class="edges-overlay">
-    {#if serverState}
-      {#each serverState.arbiters as arbiter}
-        {#each arbiter.spaces as space}
-          {#each space.members as member}
-            {#if member.memberType === 'RemoteSpace'}
-              {@const slashIdx = member.value.indexOf('/')}
-              {@const targetArb = member.value.slice(0, slashIdx)}
-              {@const targetSpace = member.value.slice(slashIdx + 1)}
-              <DelegationEdge
-                fromArbiter={arbiter.did}
-                fromSpace={space.key}
-                toArbiter={targetArb}
-                toSpace={targetSpace}
-                access={member.access}
-              />
-            {/if}
-          {/each}
-        {/each}
+  <!-- SVG overlay for delegation edges — only shown when a space with delegations is selected -->
+  {#if delegateEdges.length > 0}
+    <svg class="edges-overlay">
+      {#each delegateEdges as edge}
+        <DelegationEdge
+          fromArbiter={edge.fromArbiter}
+          fromSpace={edge.fromSpace}
+          toArbiter={edge.toArbiter}
+          toSpace={edge.toSpace}
+          access={edge.access}
+        />
       {/each}
-    {/if}
-  </svg>
+    </svg>
+  {/if}
 </div>
 
 <style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
 
   interface Props {
     fromArbiter: string;
@@ -36,50 +36,50 @@
     const fromRect = fromEl.getBoundingClientRect();
     const toRect = toEl.getBoundingClientRect();
 
-    x1 = fromRect.right - canvasRect.left;
-    y1 = fromRect.top + fromRect.height / 2 - canvasRect.top;
-    x2 = toRect.left - canvasRect.left;
-    y2 = toRect.top + toRect.height / 2 - canvasRect.top;
+    // Top-middle of source space
+    x1 = fromRect.left + fromRect.width / 2 - canvasRect.left;
+    y1 = fromRect.top - canvasRect.top;
+    // Top-middle of target space
+    x2 = toRect.left + toRect.width / 2 - canvasRect.left;
+    y2 = toRect.top - canvasRect.top;
     visible = true;
   }
 
+  let cleanup: () => void;
+
   onMount(() => {
     updatePositions();
-    // Recalculate on resize or scroll
     const observer = new ResizeObserver(updatePositions);
     const canvas = document.querySelector('.canvas');
     if (canvas) {
       observer.observe(canvas);
-      // Also observe scroll
       const scrollEl = canvas.querySelector('.canvas-scroll');
       if (scrollEl) {
         scrollEl.addEventListener('scroll', updatePositions);
       }
     }
-    return () => {
+
+    cleanup = () => {
       observer.disconnect();
     };
   });
-</script>
 
-{#if visible}
-  <g>
-    <line
-      class="edge"
-      x1={x1} y1={y1} x2={x2} y2={y2}
-    />
-    <!-- Arrowhead -->
-    <polygon
-      class="arrow"
-      points={arrowPoints(x1, y1, x2, y2)}
-    />
-  </g>
-{/if}
+  onDestroy(() => {
+    cleanup?.();
+  });
 
-<!-- Logic to compute arrowhead is in the module context -->
-<script lang="ts" module>
-  function arrowPoints(x1: number, y1: number, x2: number, y2: number): string {
-    const angle = Math.atan2(y2 - y1, x2 - x1);
+  // Compute quadratic bezier control point above the midpoint
+  function bezierPath(): string {
+    const mx = (x1 + x2) / 2;
+    const my = Math.min(y1, y2) - 60; // control point above both nodes
+    return `M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`;
+  }
+
+  // Compute arrowhead at the target (pointing in from top)
+  function arrowPoints(): string {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const angle = Math.atan2(dy, dx);
     const size = 8;
     const xa = x2 - size * Math.cos(angle - Math.PI / 6);
     const ya = y2 - size * Math.sin(angle - Math.PI / 6);
@@ -89,15 +89,62 @@
   }
 </script>
 
+{#if visible}
+  <g>
+    <!-- Glow line behind for depth -->
+    <path
+      d={bezierPath()}
+      class="edge-glow"
+    />
+    <!-- Main stroke -->
+    <path
+      d={bezierPath()}
+      class="edge"
+    />
+    <!-- Arrowhead -->
+    <polygon
+      class="arrow"
+      points={arrowPoints()}
+    />
+    <!-- Access label at midpoint -->
+    <text
+      x={(x1 + x2) / 2}
+      y={Math.min(y1, y2) - 68}
+      class="edge-label"
+      text-anchor="middle"
+    >
+      {access}
+    </text>
+  </g>
+{/if}
+
 <style>
+  .edge-glow {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 6;
+    opacity: 0.08;
+    stroke-linecap: round;
+  }
+
   .edge {
+    fill: none;
     stroke: var(--accent);
     stroke-width: 2;
-    opacity: 0.6;
+    opacity: 0.65;
+    stroke-linecap: round;
   }
 
   .arrow {
     fill: var(--accent);
-    opacity: 0.6;
+    opacity: 0.65;
+  }
+
+  .edge-label {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    fill: var(--accent);
+    opacity: 0.85;
+    font-weight: 500;
   }
 </style>
