@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BASE_PATH: /arbiter-simulator
+  BASE_PATH: /${{ github.event.repository.name }}/arbiter-simulator
 
 jobs:
   build:
@@ -55,10 +55,15 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Stage for Pages
+        run: |
+          mkdir -p _site
+          mv dist _site/arbiter-simulator
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: arbiter-explorer/dist
+          path: arbiter-explorer/_site
 
   deploy:
     needs: build

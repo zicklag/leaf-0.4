@@ -98,6 +98,7 @@ pub enum EffectView {
   },
   SendMessage {
     to_did: String,
+    user_did: String,
     arbiter_did: String,
     space_key: String,
     src_job_id: i64,
@@ -221,6 +222,7 @@ fn to_effect(effect: ServerEffect) -> EffectView {
     }
     ServerEffect::SendMessage { to_did, msg } => EffectView::SendMessage {
       to_did,
+      user_did: msg.user_did,
       arbiter_did: msg.arbiter_did,
       space_key: msg.space_key,
       src_job_id: msg.src_job_id,

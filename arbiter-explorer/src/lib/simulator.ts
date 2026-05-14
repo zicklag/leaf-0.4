@@ -89,8 +89,11 @@ export class Simulator {
 
   private resolveRemote(send: EffectView & { effectType: 'sendMessage' }): EffectView[] {
     return this.simulate({
-      userDid: '', arbiterDid: send.arbiter_did, spaceKey: send.space_key,
-      srcJobId: this.nextJobId++, resolverDepth: send.resolver_depth,
+      userDid: send.user_did,
+      arbiterDid: send.arbiter_did,
+      spaceKey: send.space_key,
+      srcJobId: this.nextJobId++,
+      resolverDepth: send.resolver_depth,
       kind: { type: 'fetchMembers' },
     });
   }
