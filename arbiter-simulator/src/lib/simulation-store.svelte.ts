@@ -307,6 +307,10 @@ class AppState {
       s.add(did);
     }
     this.refreshState();
+    // Re-resolve members for the currently selected space
+    if (this.selectedArbiterDid && this.selectedSpaceKey) {
+      this.fetchSpaceMembers();
+    }
   }
   isArbiterOffline(did: string): boolean {
     return this.simulator.disabledArbiters.has(did);

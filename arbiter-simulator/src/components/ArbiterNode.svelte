@@ -10,12 +10,15 @@
   }
 
   let { arbiter, isSelected, selectedSpace }: Props = $props();
+
+  let offline = $derived(app.isArbiterOffline(arbiter.did));
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
 <div
   class="arbiter-node"
   class:selected={isSelected}
+  class:offline
   onclick={() => app.selectArbiter(arbiter.did)}
   role="region"
   aria-label={`Arbiter ${arbiter.did}`}
@@ -28,6 +31,17 @@
       <span class="arbiter-version">v{arbiter.version}</span>
     </div>
     <span class="space-count">{arbiter.spaces.length} space{arbiter.spaces.length !== 1 ? 's' : ''}</span>
+    <button
+      class="power-toggle"
+      class:offline
+      onclick="{(e) => { e.stopPropagation(); app.toggleArbiterOffline(arbiter.did); }}"
+      title={offline ? 'Bring arbiter online' : 'Take arbiter offline'}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2v8"/>
+        <path d="M18.36 4.64a9 9 0 1 1-12.73 0"/>
+      </svg>
+    </button>
   </div>
 
   <div class="spaces-list">
@@ -62,6 +76,16 @@
     box-shadow: 0 0 0 2px oklch(0.58 0.18 65 / 0.2);
   }
 
+  .arbiter-node.offline {
+    opacity: 0.55;
+    border-color: var(--border-light);
+  }
+
+  .arbiter-node.offline.selected {
+    border-color: var(--text-muted);
+    box-shadow: 0 0 0 2px var(--border);
+  }
+
   .arbiter-header {
     display: flex;
     align-items: center;
@@ -88,6 +112,10 @@
     color: var(--text-primary);
   }
 
+  .arbiter-node.offline .arbiter-did {
+    color: var(--text-muted);
+  }
+
   .arbiter-version {
     font-size: 0.714rem;
     color: var(--text-muted);
@@ -106,5 +134,39 @@
     flex-direction: column;
     padding: 8px;
     gap: 4px;
+  }
+
+  .power-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: var(--bg-base);
+    cursor: pointer;
+    color: var(--accent);
+    transition: all 150ms var(--ease-out);
+    flex-shrink: 0;
+  }
+
+  .power-toggle:hover {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+  }
+
+  .power-toggle.offline {
+    color: oklch(0.55 0.18 25);
+    opacity: 1;
+    border-color: oklch(0.55 0.18 25 / 0.4);
+    background: oklch(0.55 0.18 25 / 0.08);
+  }
+
+  .power-toggle.offline:hover {
+    color: oklch(0.6 0.2 145);
+    border-color: oklch(0.55 0.15 145 / 0.5);
+    background: oklch(0.55 0.15 145 / 0.12);
   }
 </style>
