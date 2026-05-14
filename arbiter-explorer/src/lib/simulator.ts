@@ -1,4 +1,4 @@
-import { ArbiterEngine } from 'arbiter-wasm';
+import init, { ArbiterEngine } from 'arbiter-wasm';
 import type { Message, EffectView, ServerStateView } from './types';
 
 export class Simulator {
@@ -8,6 +8,7 @@ export class Simulator {
 
   async init(): Promise<void> {
     if (this.initialized) return;
+    await init();
     try {
       this.engine = new ArbiterEngine();
       this.initialized = true;
