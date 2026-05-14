@@ -12,10 +12,19 @@
       app.notifications.add('error', 'Failed to copy link');
     });
   }
+
+  function copyCleanLink() {
+    const url = window.location.origin + window.location.pathname;
+    navigator.clipboard.writeText(url).then(() => {
+      app.notifications.add('success', 'Copied link to Arbiter Simulator.');
+    }).catch(() => {
+      app.notifications.add('error', 'Failed to copy link');
+    });
+  }
 </script>
 
 <header class="toolbar">
-  <div class="brand">
+  <div class="brand" onclick={copyCleanLink} title="Copy clean link (without config)">
     <span class="logo">⚖️</span>
     <span class="title">Arbiter Simulator</span>
   </div>
@@ -56,6 +65,8 @@
     font-weight: 600;
     font-size: 0.929rem;
     color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
   }
 
   .logo {
