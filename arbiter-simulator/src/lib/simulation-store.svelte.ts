@@ -136,6 +136,16 @@ class AppState {
         this.addUser('Charlie');
       }
       this.refreshState();
+
+      // Re-import configuration from URL hash changes (shared links, back/forward)
+      window.addEventListener('hashchange', async () => {
+        this.selectedArbiterDid = null;
+        this.selectedSpaceKey = null;
+        this.selectedSpaceMembers = null;
+        this.selectedSpaceError = null;
+        await this.restoreFromUrl();
+        this.refreshState();
+      });
     } catch (e) {
       this.initError = String(e);
       this.loading = false;
