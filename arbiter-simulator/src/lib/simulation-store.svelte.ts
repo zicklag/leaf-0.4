@@ -90,6 +90,21 @@ async function decompressFromBase64(encoded: string): Promise<string> {
 
 // --- Main state ---
 class AppState {
+  darkTheme = $state(
+    localStorage.getItem('arbiter-dark-theme') !== null
+      ? localStorage.getItem('arbiter-dark-theme') === 'true'
+      : window.matchMedia('(prefers-color-scheme: dark)').matches
+  );
+
+  toggleTheme() {
+    this.darkTheme = !this.darkTheme;
+    localStorage.setItem('arbiter-dark-theme', String(this.darkTheme));
+    this.applyTheme();
+  }
+
+  applyTheme() {
+    document.documentElement.classList.toggle('dark', this.darkTheme);
+  }
   simulator = new Simulator();
   notifications = new NotificationStore();
 
@@ -129,6 +144,7 @@ class AppState {
     try {
       await this.simulator.init();
       this.loading = false;
+      this.applyTheme();
       const restored = await this.restoreFromUrl();
       if (!restored) {
         this.addUser('Alice');

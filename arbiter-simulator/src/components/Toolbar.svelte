@@ -43,6 +43,9 @@
     <button class="btn btn-sm" onclick={shareLink}>
       ↗ Share
     </button>
+    <button class="btn btn-sm theme-toggle" onclick={() => app.toggleTheme()} title={app.darkTheme ? 'Switch to light mode' : 'Switch to dark mode'}>
+      {app.darkTheme ? '☀️' : '🌙'}
+    </button>
   </div>
 </header>
 
