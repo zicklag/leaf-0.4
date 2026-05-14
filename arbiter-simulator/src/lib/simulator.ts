@@ -5,6 +5,7 @@ export class Simulator {
   private engine: ArbiterEngine | null = null;
   private initialized = false;
   private nextJobId = 1;
+  disabledArbiters: Set<string> = new Set();
 
   async init(): Promise<void> {
     if (this.initialized) return;
@@ -65,6 +66,29 @@ export class Simulator {
 
       for (const eff of effects) {
         if (eff.effectType === 'sendMessage') {
+          // Check if the target arbiter is disabled (simulates going offline)
+          if (this.disabledArbiters.has(eff.arbiter_did)) {
+            // Arbiter is offline — treat as unresolvable
+            queue.push({
+              userDid: current.arbiterDid,
+              arbiterDid: eff.arbiter_did,
+              spaceKey: eff.space_key,
+              srcJobId: eff.src_job_id,
+              resolverDepth: eff.resolver_depth,
+              kind: {
+                type: 'replyResolvedMembers',
+                members: {
+                  memberList: new Map(),
+                  missingSpaces: new Map([[
+                    { arbiterDid: eff.arbiter_did, spaceKey: eff.space_key },
+                    'ReadMemberList' as const,
+                  ]]),
+                },
+              },
+            });
+            continue;
+          }
+
           // The originating arbiter is the one the current message was sent to.
           // Forward the resolution request as coming from that arbiter, not the
           // original user — the remote arbiter needs to check the arbiter's access.

@@ -162,10 +162,11 @@ class AppState {
 
   private async saveToUrl() {
     const snapshot = {
-      v: 1,
+      v: 2,
       server: this.simulator.saveState(),
       users: this.users,
       currentUser: this.currentUserId,
+      disabled: Array.from(this.simulator.disabledArbiters),
     };
     const json = JSON.stringify(snapshot, mapReplacer);
     try {
@@ -199,6 +200,9 @@ class AppState {
       }
       if (typeof snapshot.currentUser === 'string') {
         this.currentUserId = snapshot.currentUser;
+      }
+      if (Array.isArray(snapshot.disabled)) {
+        this.simulator.disabledArbiters = new Set(snapshot.disabled);
       }
       return true;
     } catch (e) {
@@ -295,6 +299,18 @@ class AppState {
     location.reload();
   }
   generateArbiterDid() { return generateArbiterDid(); }
+  toggleArbiterOffline(did: string) {
+    const s = this.simulator.disabledArbiters;
+    if (s.has(did)) {
+      s.delete(did);
+    } else {
+      s.add(did);
+    }
+    this.refreshState();
+  }
+  isArbiterOffline(did: string): boolean {
+    return this.simulator.disabledArbiters.has(did);
+  }
 }
 
 export const app = new AppState();

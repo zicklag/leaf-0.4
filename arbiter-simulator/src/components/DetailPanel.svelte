@@ -5,17 +5,21 @@
   import { ALL_ACCESSES, ACCESS_LABELS } from '../lib/types';
 
   let {
-    selectedSpace,
     selectedSpaceMembers,
     selectedSpaceError,
     currentUser,
     selectedArbiterDid,
+    selectedSpaceKey,
     serverState,
     users,
   } = $derived(app);
 
   let selectedArbiter = $derived(
     serverState?.arbiters.find((a) => a.did === selectedArbiterDid) ?? null,
+  );
+
+  let selectedSpace = $derived(
+    selectedArbiter?.spaces.find((s) => s.key === selectedSpaceKey) ?? null,
   );
 
   let sortedMembers = $derived(
@@ -246,7 +250,16 @@
 
         {#if selectedSpaceMembers.missing.length > 0}
           <div class="missing-section">
-            <h5>Unresolved Spaces</h5>
+            <h5>
+              Unresolved Spaces
+              <span class="info-tip" data-tooltip="The remote arbiter could not provide its member list for this space. This happens when the requesting arbiter doesn't have permission to read the remote space's members, or when the remote arbiter is offline.">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="16" x2="12" y2="12"/>
+                  <line x1="12" y1="8" x2="12.01" y2="8"/>
+                </svg>
+              </span>
+            </h5>
             {#each selectedSpaceMembers.missing as ms}
               <div class="missing-row">
                 <span class="row-name mono truncate">❓ {ms.arbiterDid}/{ms.spaceKey}</span>
@@ -610,6 +623,53 @@
   }
 
   .missing-row {
+    opacity: 1;
+  }
+
+  .missing-section h5 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .info-tip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    cursor: help;
+    position: relative;
+  }
+
+  .info-tip:hover {
+    color: var(--accent);
+  }
+
+  .info-tip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 240px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--text-primary);
+    color: var(--bg-raised);
+    font-size: 0.786rem;
+    font-weight: 400;
+    line-height: 1.4;
+    text-transform: none;
+    letter-spacing: normal;
+    white-space: normal;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 150ms var(--ease-out);
+    z-index: 20;
+    box-shadow: var(--shadow-md);
+  }
+
+  .info-tip:hover::after {
     opacity: 1;
   }
 

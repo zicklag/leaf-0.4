@@ -5,17 +5,17 @@
 
   let { serverState, selectedArbiterDid, selectedSpaceKey } = $derived(app);
 
-  // Find the selected space's remote delegations to know which edges to show
   let delegateEdges = $derived.by(() => {
-    if (!serverState || !selectedArbiterDid || !selectedSpaceKey) return [];
+    const ss = serverState;
+    const arbDid = selectedArbiterDid;
+    const spKey = selectedSpaceKey;
+    if (!ss || !arbDid || !spKey) return [];
 
-    // Find the selected space
-    const arbiter = serverState.arbiters.find(a => a.did === selectedArbiterDid);
+    const arbiter = ss.arbiters.find(a => a.did === arbDid);
     if (!arbiter) return [];
-    const space = arbiter.spaces.find(s => s.key === selectedSpaceKey);
+    const space = arbiter.spaces.find(s => s.key === spKey);
     if (!space) return [];
 
-    // Find all RemoteSpace members in the selected space
     const edges: Array<{
       fromArbiter: string;
       fromSpace: string;
@@ -29,8 +29,8 @@
         const slashIdx = member.value.indexOf('/');
         if (slashIdx > 0) {
           edges.push({
-            fromArbiter: selectedArbiterDid,
-            fromSpace: selectedSpaceKey,
+            fromArbiter: arbDid,
+            fromSpace: spKey,
             toArbiter: member.value.slice(0, slashIdx),
             toSpace: member.value.slice(slashIdx + 1),
             access: member.access,
@@ -58,7 +58,6 @@
     {/if}
   </div>
 
-  <!-- SVG overlay for delegation edges — only shown when a space with delegations is selected -->
   {#if delegateEdges.length > 0}
     <svg class="edges-overlay">
       {#each delegateEdges as edge}
