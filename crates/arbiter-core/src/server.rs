@@ -461,14 +461,15 @@ impl Server {
                 let server = self
                     .put_arbiter(arbiter_did.clone(), upd_arbiter)
                     .remove_job_info(id);
-                let mut effects = Vec::new();
-                effects.push(ServerEffect::Respond {
-                    req_id: id,
-                    result: Ok(job_result),
-                });
-                effects.push(ServerEffect::ArbiterChanged {
-                    arbiter_did: arbiter_did,
-                });
+                let effects = vec![
+                    ServerEffect::Respond {
+                        req_id: id,
+                        result: Ok(job_result),
+                    },
+                    ServerEffect::ArbiterChanged {
+                        arbiter_did,
+                    },
+                ];
                 (server, effects)
             }
 
@@ -482,7 +483,7 @@ impl Server {
                             result: Ok(JobResult::Ok),
                         },
                         ServerEffect::ArbiterDeleted {
-                            arbiter_did: arbiter_did,
+                            arbiter_did,
                         },
                     ],
                 )
@@ -539,10 +540,10 @@ impl Server {
     fn find_timed_out_job(&self) -> Option<JobId> {
         for (_arbiter_did, arbiter) in &self.arbiters {
             for job_id in arbiter.job_queue.keys() {
-                if let Some(info) = self.job_info.get(job_id) {
-                    if self.time - info.start_time >= TIMEOUT_TICKS {
-                        return Some(*job_id);
-                    }
+                if let Some(info) = self.job_info.get(job_id)
+                    && self.time - info.start_time >= TIMEOUT_TICKS
+                {
+                    return Some(*job_id);
                 }
             }
         }

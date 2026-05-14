@@ -124,6 +124,7 @@ pub struct ArbiterEngine {
 
 #[wasm_bindgen]
 impl ArbiterEngine {
+  #[allow(clippy::new_without_default)]
   #[wasm_bindgen(constructor)]
   pub fn new() -> Self {
     ArbiterEngine {
@@ -196,7 +197,7 @@ fn to_effect(effect: ServerEffect) -> EffectView {
             .map(|(did, a)| MemberEntryView {
               member_type: "User".into(),
               value: did.clone(),
-              access: a.clone(),
+              access: *a,
             })
             .collect();
           let missing: Vec<_> = list
@@ -205,7 +206,7 @@ fn to_effect(effect: ServerEffect) -> EffectView {
             .map(|(id, a)| MissingSpaceView {
               arbiter_did: id.arbiter_did.clone(),
               space_key: id.space_key.clone(),
-              access: a.clone(),
+              access: *a,
             })
             .collect();
           (true, members, missing, String::new())

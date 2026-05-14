@@ -25,15 +25,13 @@ use atproto_oauth::jwt::{self, JoseClaims};
 #[derive(Clone)]
 pub struct AuthConfig {
     pub unsafe_auth_token: Option<String>,
-    pub server_did: String,
     pub resolver: Arc<InnerIdentityResolver>,
 }
 
 impl AuthConfig {
-    pub fn new(server_did: String, resolver: Arc<InnerIdentityResolver>) -> Self {
+    pub fn new(resolver: Arc<InnerIdentityResolver>) -> Self {
         Self {
             unsafe_auth_token: None,
-            server_did,
             resolver,
         }
     }
@@ -112,10 +110,10 @@ async fn extract_and_verify_token(
         .ok_or_else(|| "Authorization header must use Bearer scheme".to_string())?;
 
     // Dev mode bypass
-    if let Some(unsafe_token) = &config.unsafe_auth_token {
-        if token == unsafe_token {
-            return Ok(extract_unsafe_user(token));
-        }
+    if let Some(unsafe_token) = &config.unsafe_auth_token
+        && token == unsafe_token
+    {
+        return Ok(extract_unsafe_user(token));
     }
 
     verify_jwt(token, config).await

@@ -201,7 +201,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build auth config with the atproto-identity resolver
     let auth_config = Arc::new(
-        AuthConfig::new(server_did.clone(), resolver.clone())
+        AuthConfig::new(resolver.clone())
             .with_unsafe_token_if(config.unsafe_auth_token.clone()),
     );
 
@@ -335,12 +335,10 @@ async fn persistence_loop(
                 } else {
                     persisted += 1;
                 }
+            } else if let Err(e) = persister.delete(did) {
+                tracing::error!(%did, %e, "Failed to delete arbiter state file");
             } else {
-                if let Err(e) = persister.delete(did) {
-                    tracing::error!(%did, %e, "Failed to delete arbiter state file");
-                } else {
-                    deleted += 1;
-                }
+                deleted += 1;
             }
         }
 

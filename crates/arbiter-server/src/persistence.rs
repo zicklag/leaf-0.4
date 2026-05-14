@@ -51,7 +51,7 @@ impl Persister {
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(true, |ext| ext != "yaml") {
+            if path.extension().is_none_or(|ext| ext != "yaml") {
                 continue;
             }
 
@@ -81,7 +81,7 @@ impl Persister {
 
         let path = self.file_path(arbiter_did);
         let yaml = serde_yaml::to_string(state)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
 
         // Atomically write to a temp file, then rename
         let tmp_path = path.with_extension("yaml.tmp");
@@ -90,11 +90,6 @@ impl Persister {
 
         tracing::debug!("Persisted arbiter state: {arbiter_did}");
         Ok(())
-    }
-
-    /// Check if a persisted file exists for the given arbiter DID.
-    pub fn exists(&self, arbiter_did: &str) -> bool {
-        self.file_path(arbiter_did).exists()
     }
 
     /// Delete the persisted file for an arbiter.
