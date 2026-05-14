@@ -3,6 +3,15 @@
   import { userInitial } from '../lib/utils';
 
   let { currentUser } = $derived(app);
+
+  function shareLink() {
+    const url = window.location.href;
+    navigator.clipboard.writeText(url).then(() => {
+      app.notifications.add('success', 'Link copied to clipboard!');
+    }).catch(() => {
+      app.notifications.add('error', 'Failed to copy link');
+    });
+  }
 </script>
 
 <header class="toolbar">
@@ -21,6 +30,9 @@
     {/if}
     <button class="btn btn-sm" onclick={() => app.resetAll()}>
       ↺ Reset
+    </button>
+    <button class="btn btn-sm" onclick={shareLink}>
+      ↗ Share
     </button>
   </div>
 </header>
