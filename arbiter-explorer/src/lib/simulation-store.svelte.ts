@@ -58,6 +58,36 @@ function mapReviver(_key: string, value: unknown): unknown {
   return value;
 }
 
+// ---------------------------------------------------------------------------
+// Deflate compression helpers (native Compression Streams API)
+// ---------------------------------------------------------------------------
+
+async function compressToBase64(text: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const compressed = await new Response(
+    new Blob([encoder.encode(text)]).stream().pipeThrough(new CompressionStream('deflate-raw')),
+  ).arrayBuffer();
+  const bytes = new Uint8Array(compressed);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+async function decompressFromBase64(encoded: string): Promise<string> {
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const decompressed = await new Response(
+    new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')),
+  ).arrayBuffer();
+  const decoder = new TextDecoder();
+  return decoder.decode(decompressed);
+}
+
 // --- Main state ---
 class AppState {
   simulator = new Simulator();
@@ -99,7 +129,7 @@ class AppState {
     try {
       await this.simulator.init();
       this.loading = false;
-      const restored = this.restoreFromUrl();
+      const restored = await this.restoreFromUrl();
       if (!restored) {
         this.addUser('Alice');
         this.addUser('Bob');
@@ -116,11 +146,11 @@ class AppState {
     this.serverState = this.simulator.getState();
   }
 
-  // -----------------------------------------------------------------------
-  // URL fragment persistence: Map-safe JSON round-trip
-  // -----------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // URL fragment persistence: deflate-compressed, Map-safe JSON round-trip
+  // ---------------------------------------------------------------------------
 
-  private saveToUrl() {
+  private async saveToUrl() {
     const snapshot = {
       v: 1,
       server: this.simulator.saveState(),
@@ -128,14 +158,27 @@ class AppState {
       currentUser: this.currentUserId,
     };
     const json = JSON.stringify(snapshot, mapReplacer);
-    history.replaceState(null, '', '#' + btoa(encodeURIComponent(json)));
+    try {
+      const compressed = await compressToBase64(json);
+      history.replaceState(null, '', '#' + compressed);
+    } catch (e) {
+      // Fallback: store uncompressed if compression is unsupported
+      console.warn('Deflate compression failed, falling back to base64:', e);
+      history.replaceState(null, '', '#' + btoa(encodeURIComponent(json)));
+    }
   }
 
-  private restoreFromUrl(): boolean {
+  private async restoreFromUrl(): Promise<boolean> {
     const hash = window.location.hash.slice(1);
     if (!hash) return false;
     try {
-      const json = decodeURIComponent(atob(hash));
+      let json: string;
+      // Try deflate-decompressed first, then fall back to plain base64
+      try {
+        json = await decompressFromBase64(hash);
+      } catch {
+        json = decodeURIComponent(atob(hash));
+      }
       const snapshot = JSON.parse(json, mapReviver);
       if (typeof snapshot !== 'object' || !snapshot) return false;
       if (snapshot.server && typeof snapshot.server === 'object') {
@@ -161,7 +204,7 @@ class AppState {
     const user: UserAccount = { did, label };
     this.users = [...this.users, user];
     if (!this.currentUserId) this.currentUserId = did;
-    this.saveToUrl();
+    void this.saveToUrl();
     return user;
   }
 
@@ -170,12 +213,12 @@ class AppState {
     if (this.currentUserId === did) {
       this.currentUserId = this.users[0]?.did ?? null;
     }
-    this.saveToUrl();
+    void this.saveToUrl();
   }
 
   selectUser(did: string) {
     this.currentUserId = did;
-    this.saveToUrl();
+    void this.saveToUrl();
     // Re-fetch space members for the new user if a space is already selected
     if (this.selectedArbiterDid && this.selectedSpaceKey) {
       this.fetchSpaceMembers();
@@ -233,7 +276,7 @@ class AppState {
     const result = await this.simulator.dispatch(msg);
     this.serverState = result.state;
     this.fetchSpaceMembers();
-    this.saveToUrl();
+    await this.saveToUrl();
     return result.effects;
   }
 
