@@ -501,6 +501,7 @@
     cursor: pointer;
     transition: all 150ms var(--ease-out);
     margin-bottom: 4px;
+    color: var(--text-primary);
   }
 
   .config-toggle:hover {

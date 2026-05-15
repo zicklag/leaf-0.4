@@ -80,7 +80,6 @@
   .space-node.admin {
     border-color: var(--accent);
     border-width: 1.5px;
-    background: oklch(0.94 0.04 65 / 0.3);
   }
 
   .space-header {
