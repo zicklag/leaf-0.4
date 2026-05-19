@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arbiter Lexicons ( Draft )</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root {
+    --surface: oklch(15% 0.008 260);
+    --card: oklch(18% 0.01 260);
+    --border: oklch(28% 0.012 260);
+    --text: oklch(85% 0.01 260);
+    --text-secondary: oklch(62% 0.015 260);
+    --text-tertiary: oklch(48% 0.01 260);
+    --accent: oklch(65% 0.18 260);
+    --accent-hover: oklch(72% 0.18 260);
+    --accent-bg: oklch(28% 0.05 260);
+    --accent-bg-hover: oklch(33% 0.06 260);
+    --query: oklch(65% 0.14 200);
+    --query-bg: oklch(24% 0.04 200);
+    --procedure: oklch(65% 0.16 30);
+    --procedure-bg: oklch(24% 0.04 30);
+    --error: oklch(65% 0.18 25);
+    --required: oklch(65% 0.15 200);
+    --union: oklch(65% 0.08 280);
+    --union-bg: oklch(24% 0.03 280);
+    --shadow: 0 1px 3px oklch(0% 0 0 / 0.3), 0 1px 2px oklch(0% 0 0 / 0.2);
+    --radius: 6px;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text);
+    background: var(--surface);
+    display: flex;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 280px;
+    min-width: 280px;
+    background: var(--card);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sidebar-header {
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin-bottom: 10px;
+    color: var(--text);
+  }
+
+  .search-box {
+    position: relative;
+  }
+
+  .search-box svg {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    color: var(--text-tertiary);
+    pointer-events: none;
+  }
+
+  .search-box input {
+    width: 100%;
+    padding: 6px 8px 6px 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    font-size: 13px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 150ms ease-out;
+  }
+
+  .search-box input::placeholder { color: var(--text-tertiary); }
+  .search-box input:focus { border-color: var(--accent); }
+
+  .sidebar-counts {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .sidebar-counts span { white-space: nowrap; }
+
+  .endpoint-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0 16px;
+  }
+
+  .endpoint-group-label {
+    padding: 10px 16px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+  }
+
+  .endpoint-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 16px;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    transition: background 150ms ease-out, color 150ms ease-out;
+    line-height: 1.4;
+  }
+
+  .endpoint-item:hover { background: var(--accent-bg-hover); }
+  .endpoint-item.active { background: var(--accent-bg); color: var(--accent-hover); font-weight: 500; }
+
+  .endpoint-item .name {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    font-size: 12px;
+    word-break: break-all;
+  }
+
+  .endpoint-item .type-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: middle;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .type-badge.query { background: var(--query-bg); color: var(--query); }
+  .type-badge.procedure { background: var(--procedure-bg); color: var(--procedure); }
+
+  /* Empty state */
+  .empty-search {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 13px;
+  }
+
+  /* Main content */
+  .main-wrap {
+    flex: 1;
+    overflow-y: auto;
+    min-width: 0;
+  }
+
+  .main {
+    padding: 32px 40px;
+    max-width: 900px;
+  }
+
+  /* Welcome */
+  .welcome {
+    padding-top: 40px;
+    max-width: 600px;
+  }
+
+  .welcome h2 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+  }
+
+  .welcome p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }
+
+  .welcome-stats {
+    display: flex;
+    gap: 24px;
+  }
+
+  .welcome-stats .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .welcome-stats .stat strong {
+    font-size: 16px;
+    color: var(--text);
+  }
+
+  /* Detail */
+  .detail-header {
+    margin-bottom: 24px;
+  }
+
+  .detail-header .name-line {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+
+  .detail-header .nsid {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    font-size: 13px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+  }
+
+  .detail-header h2 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+  }
+
+  .detail-header .description {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.7;
+    white-space: normal;
+  }
+
+  .detail-header .description p {
+    margin-bottom: 0.5em;
+  }
+
+  .detail-header .description p:last-child {
+    margin-bottom: 0;
+  }
+
+  .detail-section {
+    margin-bottom: 24px;
+  }
+
+  .detail-section h3 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    margin-bottom: 10px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Schema table */
+  .schema-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .schema-table th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    padding: 4px 8px 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .schema-table td {
+    padding: 6px 8px 6px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+
+  .schema-table td:last-child {
+    padding-right: 0;
+  }
+
+  .schema-table .prop-name {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .schema-table .prop-required {
+    color: var(--required);
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .schema-table .prop-desc {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: normal;
+    text-align: justify;
+  }
+
+  .schema-table .prop-desc p {
+    margin-bottom: 0.3em;
+  }
+
+  .schema-table .prop-desc p:last-child {
+    margin-bottom: 0;
+  }
+
+  .schema-table .prop-empty {
+    color: var(--text-tertiary);
+    font-style: italic;
+  }
+
+  .no-props {
+    color: var(--text-tertiary);
+    font-size: 13px;
+    font-style: italic;
+    padding: 8px 0;
+  }
+
+  /* Type badges in table */
+  .type-label {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 500;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--card);
+    color: var(--text-secondary);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+  }
+
+  .type-label.string { background: oklch(25% 0.03 160); color: oklch(68% 0.12 160); }
+  .type-label.integer { background: oklch(25% 0.03 80); color: oklch(68% 0.12 80); }
+  .type-label.boolean { background: oklch(25% 0.03 300); color: oklch(68% 0.12 300); }
+  .type-label.object { background: oklch(25% 0.03 220); color: oklch(68% 0.12 220); }
+  .type-label.array { background: oklch(25% 0.03 180); color: oklch(68% 0.12 180); }
+  .type-label.union { background: var(--union-bg); color: var(--union); }
+  .type-label.open-union { background: oklch(24% 0.04 280); color: oklch(68% 0.14 280); cursor: help; }
+  .type-label.ref { background: var(--accent-bg); color: var(--accent); }
+  .type-label.params { background: oklch(25% 0.03 260); color: oklch(68% 0.12 260); }
+
+  /* Format badge */
+  .format-label {
+    font-size: 10px;
+    padding: 1px 4px;
+    border-radius: 2px;
+    background: var(--card);
+    color: var(--text-tertiary);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    margin-left: 4px;
+  }
+
+  /* Union refs */
+  .union-refs {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .union-ref {
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: var(--union-bg);
+    color: var(--union);
+    cursor: pointer;
+    transition: background 150ms ease-out;
+    border: none;
+    font: inherit;
+  }
+
+  .union-ref:hover { background: oklch(33% 0.06 280); }
+
+  /* Sub-schema (nested array items) */
+  .sub-schema {
+    margin: 6px 0 2px;
+    padding: 6px 8px;
+    background: oklch(14% 0.006 260);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .sub-schema-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    margin-bottom: 4px;
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+  }
+
+  .sub-schema-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .sub-schema-table th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    padding: 3px 6px 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sub-schema-table td {
+    padding: 3px 6px 3px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    line-height: 1.4;
+  }
+
+  .sub-schema-table .prop-name {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .sub-schema-table .prop-required { color: var(--required); font-weight: 600; font-size: 12px; }
+  .sub-schema-table .prop-desc { color: var(--text-secondary); font-size: 11px; white-space: normal; text-align: justify; }
+  .sub-schema-table .prop-empty { color: var(--text-tertiary); font-style: italic; }
+
+  /* Errors */
+  .error-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .error-table th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    padding: 4px 8px 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .error-table td {
+    padding: 6px 8px 6px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+
+  .error-table td:last-child {
+    padding-right: 0;
+  }
+
+  .error-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .error-name {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--error);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .error-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    white-space: normal;
+  }
+
+  .error-desc p {
+    margin-bottom: 0.3em;
+  }
+
+  .error-desc p:last-child {
+    margin-bottom: 0;
+  }
+
+  .no-errors {
+    color: var(--text-tertiary);
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  /* Defs section */
+  .defs-section {
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 2px solid var(--border);
+  }
+
+  .defs-section h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+
+  .defs-section .defs-subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+  }
+
+  .def-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 12px;
+  }
+
+  .def-card h4 {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .def-card .def-description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+
+  .def-card .used-by {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 8px;
+  }
+
+  .def-card .used-by code {
+    font-size: 11px;
+    background: var(--accent-bg);
+    color: var(--accent);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  /* Encoding badge */
+  .encoding-badge {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: var(--card);
+    color: var(--text-secondary);
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+    margin-bottom: 10px;
+    display: inline-block;
+  }
+
+  /* Loading state */
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    width: 100%;
+    color: var(--text-tertiary);
+    font-size: 14px;
+  }
+
+  .loading::after {
+    content: "";
+    width: 16px;
+    height: 16px;
+    margin-left: 8px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Responsive */
+  @media (max-width: 720px) {
+    .sidebar {
+      width: 100%;
+      min-width: 100%;
+      max-height: 40vh;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+    }
+    .main {
+      padding: 20px;
+      max-width: 100%;
+    }
+    body { flex-direction: column; }
+  }
+
+  /* Scrollbar styling */
+  .endpoint-list::-webkit-scrollbar { width: 4px; }
+  .endpoint-list::-webkit-scrollbar-track { background: transparent; }
+  .endpoint-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .main-wrap::-webkit-scrollbar { width: 6px; }
+  .main-wrap::-webkit-scrollbar-track { background: transparent; }
+  .main-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="#" id="homeLink" style="color:inherit;text-decoration:none">Arbiter Lexicons ( Draft )</a></h1>
+    <div class="search-box">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="7" cy="7" r="4.5"/>
+        <path d="M10.5 10.5l3.5 3.5"/>
+      </svg>
+      <input type="text" id="search" placeholder="Filter endpoints..." autocomplete="off">
+    </div>
+  </div>
+  <div class="sidebar-counts" id="counts"></div>
+  <div class="endpoint-list" id="endpointList"></div>
+</div>
+
+<div class="main-wrap">
+<div class="main" id="main">
+  <div class="loading">Loading lexicons</div>
+</div>
+</div>
+
+<script>
+(async function() {
+
+// ─── Fetch all lexicon files ───────────────────────────────────────────────
+
+const LEXICON_DIR = 'town/muni/arbiter';
+
+const lexiconFiles = [
+  'defs.json',
+  'createArbiter.json', 'createSpace.json', 'deleteArbiter.json',
+  'deleteSpace.json', 'getArbiterConfig.json', 'getSpaceConfig.json',
+  'getSpaceMembers.json', 'listSpaces.json', 'removeSpaceMember.json',
+  'resolveSpaceMembers.json', 'setArbiterConfig.json',
+  'setSpaceConfig.json', 'setSpaceMemberAccess.json'
+];
+
+async function loadLexicons() {
+  const raw = await Promise.all(lexiconFiles.map(async file => {
+    const res = await fetch(`${LEXICON_DIR}/${file}`);
+    if (!res.ok) throw new Error(`Failed to fetch ${file}: ${res.status}`);
+    return res.json();
+  }));
+
+  // Separate defs from endpoints
+  let defsData = null;
+  const endpoints = [];
+
+  for (const doc of raw) {
+    if (doc.id === 'town.muni.arbiter.defs') {
+      defsData = doc.defs;
+    } else if (doc.defs && doc.defs.main) {
+      endpoints.push({
+        id: doc.id,
+        file: lexiconFiles[raw.indexOf(doc)],
+        ...doc.defs.main
+      });
+    }
+  }
+
+  return { endpoints, defs: defsData };
+}
+
+// ─── Data ──────────────────────────────────────────────────────────────────
+
+let endpoints, defs;
+try {
+  ({ endpoints, defs } = await loadLexicons());
+} catch (e) {
+  document.getElementById('main').innerHTML =
+    `<div class="welcome"><h2>Error loading lexicons</h2><p>${e.message}</p><p>Make sure the lexicons directory is accessible via HTTP (serve this page with a local server, not file://).</p></div>`;
+  document.querySelector('.loading').classList.remove('loading');
+  return;
+}
+
+const queries = endpoints.filter(e => e.type === 'query');
+const procedures = endpoints.filter(e => e.type === 'procedure');
+
+// Track which defs are referenced by which endpoints
+const defUsage = {};
+for (const ep of endpoints) {
+  const refs = new Set();
+  function walk(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    if (obj.ref) refs.add(obj.ref);
+    if (obj.refs) obj.refs.forEach(r => refs.add(r));
+    if (Array.isArray(obj.items)) obj.items.forEach(walk);
+    for (const v of Object.values(obj)) walk(v);
+  }
+  walk(ep);
+  if (refs.size > 0) {
+    for (const r of refs) {
+      if (!defUsage[r]) defUsage[r] = [];
+      defUsage[r].push(ep.id);
+    }
+  }
+}
+
+// ─── Render helpers ────────────────────────────────────────────────────────
+
+function renderTypeBadge(prop) {
+  if (prop.type === 'union' && prop.refs && prop.refs.length === 0) {
+    return '<span class="type-label open-union" title="Open union: this type has no predefined variants and is meant to be extended by the server implementation.">open union</span>';
+  }
+  return typeLabel(prop.type);
+}
+
+function typeLabel(type) {
+  const cls = type || 'unknown';
+  return `<span class="type-label ${cls}">${type || 'unknown'}</span>`;
+}
+
+function formatLabel(format) {
+  if (!format) return '';
+  return `<span class="format-label">${format}</span>`;
+}
+
+function renderSchemaTable(props, required) {
+  const reqSet = new Set(required || []);
+  const entries = Object.entries(props || {});
+  if (entries.length === 0) return '<div class="no-props">No properties</div>';
+
+  return `<table class="schema-table">
+    <thead><tr>
+      <th>Name</th><th>Type</th><th style="width:28px">Req.</th><th>Description</th>
+    </tr></thead>
+    <tbody>
+      ${entries.map(([name, prop]) => `
+        <tr>
+          <td class="prop-name">${name}</td>
+          <td>${renderTypeBadge(prop)}${formatLabel(prop.format)}${renderRef(prop)}${renderUnionRefs(prop)}${renderNestedItems(prop, reqSet.has(name))}</td>
+          <td class="prop-required">${reqSet.has(name) ? '*' : ''}</td>
+          <td class="prop-desc">${prop.description ? descHtml(prop.description) : '<span class="prop-empty">no description</span>'}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>`;
+}
+
+function renderNestedItems(prop) {
+  if (!prop.items || prop.items.type !== 'object' || !prop.items.properties) return '';
+  const items = prop.items;
+  const subReq = items.required || [];
+  const subEntries = Object.entries(items.properties);
+  if (subEntries.length === 0) return '';
+
+  return `<div class="sub-schema">
+    <div class="sub-schema-label">array items (object):</div>
+    <table class="sub-schema-table">
+      <thead><tr>
+        <th>Name</th><th>Type</th><th style="width:22px">Req.</th><th>Description</th>
+      </tr></thead>
+      <tbody>
+        ${subEntries.map(([n, p]) => `
+          <tr>
+            <td class="prop-name">${n}</td>
+            <td>${renderTypeBadge(p)}${formatLabel(p.format)}${renderRef(p)}${renderUnionRefs(p)}${renderNestedItems(p)}</td>
+            <td class="prop-required">${subReq.includes(n) ? '*' : ''}</td>
+            <td class="prop-desc">${p.description ? descHtml(p.description) : '<span class="prop-empty">no description</span>'}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderUnionRefs(prop) {
+  if (!prop.refs || prop.refs.length === 0) return '';
+  return `<div class="union-refs">${prop.refs.map(r =>
+    `<button class="union-ref" data-ref="${r}">${shortRef(r)}</button>`
+  ).join('')}</div>`;
+}
+
+function renderRef(prop) {
+  if (!prop.ref) return '';
+  return `<div style="margin-top:4px"><button class="union-ref" data-ref="${prop.ref}">${shortRef(prop.ref)}</button></div>`;
+}
+
+function shortRef(ref) {
+  // e.g. "town.muni.arbiter.defs#memberDid" -> "#memberDid"
+  const hash = ref.indexOf('#');
+  return hash >= 0 ? ref.slice(hash) : ref;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function descHtml(s) {
+  if (!s) return '';
+  // Double newlines become paragraph breaks, single newlines become spaces
+  const normalized = s
+    .replace(/\n{3,}/g, '\n\n')  // triple+ → double
+    .split('\n\n')                // split on paragraphs
+    .map(p => p.replace(/\n/g, ' ').replace(/ +/g, ' ').trim())
+    .filter(p => p)
+    .map(p => escapeHtml(p));
+  if (normalized.length === 0) return '';
+  return '<p>' + normalized.join('</p><p>') + '</p>';
+}
+
+function renderErrors(errors) {
+  if (!errors || errors.length === 0) return '<div class="no-errors">No defined errors</div>';
+  return `<table class="error-table">
+    <thead><tr><th style="width:30%">Error</th><th>Description</th></tr></thead>
+    <tbody>
+      ${errors.map(e => `
+        <tr>
+          <td><span class="error-name">${escapeHtml(e.name)}</span></td>
+          <td class="error-desc">${e.description ? descHtml(e.description) : ''}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>`;
+}
+
+function renderEndpointDetail(ep) {
+  const hasParams = ep.parameters && ep.parameters.properties && Object.keys(ep.parameters.properties).length > 0;
+  const hasInput = ep.input && ep.input.schema && ep.input.schema.properties;
+  const hasOutput = ep.output && ep.output.schema;
+  const isOpenUnionOutput = hasOutput && ep.output.schema.type === 'union' && (!ep.output.schema.properties || Object.keys(ep.output.schema.properties).length === 0);
+  const hasErrors = ep.errors && ep.errors.length > 0;
+
+  return `
+    <div class="detail-header">
+      <div class="name-line">
+        <span class="type-badge ${ep.type}">${ep.type}</span>
+        <span class="nsid">${escapeHtml(ep.id)}</span>
+      </div>
+      <h2>${ep.id.split('.').pop()}</h2>
+      ${ep.description ? `<div class="description">${descHtml(ep.description)}</div>` : ''}
+    </div>
+
+    ${ep.type === 'query' && hasParams ? `
+      <div class="detail-section">
+        <h3>Parameters</h3>
+        ${ep.input && ep.input.encoding ? `<span class="encoding-badge">${ep.input.encoding}</span>` : ''}
+        ${renderSchemaTable(ep.parameters.properties, ep.parameters.required)}
+      </div>
+    ` : ''}
+
+    ${ep.type === 'procedure' && hasInput ? `
+      <div class="detail-section">
+        <h3>Input</h3>
+        ${ep.input.encoding ? `<span class="encoding-badge">${ep.input.encoding}</span>` : ''}
+        ${renderSchemaTable(ep.input.schema.properties, ep.input.schema.required)}
+      </div>
+    ` : ''}
+
+    ${hasOutput && !isOpenUnionOutput ? `
+      <div class="detail-section">
+        <h3>Output</h3>
+        ${ep.output.encoding ? `<span class="encoding-badge">${ep.output.encoding}</span>` : ''}
+        ${renderSchemaTable(ep.output.schema.properties, ep.output.schema.required)}
+      </div>
+    ` : ''}
+
+    ${isOpenUnionOutput ? `
+      <div class="detail-section">
+        <h3>Output</h3>
+        ${ep.output.encoding ? `<span class="encoding-badge">${ep.output.encoding}</span>` : ''}
+        <div class="no-props" style="margin-top:8px">
+          <span class="type-label open-union" title="Open union: this type has no predefined variants and is meant to be extended by the server implementation." style="font-size:12px;padding:2px 8px">open union</span>
+          — The server may return any type. The response will contain a <code>$type</code> key identifying the specific type returned.
+        </div>
+      </div>
+    ` : ''}
+
+    ${hasErrors ? `
+      <div class="detail-section">
+        <h3>Errors</h3>
+        ${renderErrors(ep.errors)}
+      </div>
+    ` : ''}
+  `;
+}
+
+// ─── Defs detail ───────────────────────────────────────────────────────────
+
+function renderDefsSection() {
+  if (!defs) return '';
+  const entries = Object.entries(defs);
+  if (entries.length === 0) return '';
+
+  return `<div class="defs-section" id="defs">
+    <h3>Shared Type Definitions</h3>
+    <p class="defs-subtitle">Reusable types from <code>defs.json</code>, referenced by multiple endpoints.</p>
+    ${entries.map(([name, def]) => `
+      <div class="def-card" id="def-${name}">
+        <h4>${name}</h4>
+        ${def.description ? `<div class="def-description">${descHtml(def.description)}</div>` : ''}
+        ${defUsage[`town.muni.arbiter.defs#${name}`] ? `
+          <div class="used-by">Used by: ${defUsage[`town.muni.arbiter.defs#${name}`].map(id =>
+            `<code>${escapeHtml(id)}</code>`
+          ).join(', ')}</div>
+        ` : ''}
+        ${renderSchemaTable(def.properties, def.required)}
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+// ─── Sidebar rendering ─────────────────────────────────────────────────────
+
+function renderSidebar() {
+  const list = document.getElementById('endpointList');
+  const sections = [];
+
+  if (queries.length > 0) {
+    sections.push(`<div class="endpoint-group-label">Queries (${queries.length})</div>` +
+      queries.map(ep => makeItem(ep)).join(''));
+  }
+
+  if (procedures.length > 0) {
+    sections.push(`<div class="endpoint-group-label">Procedures (${procedures.length})</div>` +
+      procedures.map(ep => makeItem(ep)).join(''));
+  }
+
+  if (defs && Object.keys(defs).length > 0) {
+    sections.push(`<div class="endpoint-group-label">Definitions</div>` +
+      `<button class="endpoint-item defs-link" data-target="defs"><span class="type-badge" style="background:var(--union-bg);color:var(--union)">defs</span> <span class="name">Shared types (${Object.keys(defs).length})</span></button>`);
+  }
+
+  list.innerHTML = sections.join('') || '<div class="empty-search">No endpoints match your search</div>';
+  document.getElementById('counts').innerHTML =
+    `<span>${endpoints.length} endpoints</span>`;
+}
+
+function makeItem(ep) {
+  const shortName = ep.id.split('.').pop();
+  return `<button class="endpoint-item" data-id="${escapeHtml(ep.id)}">
+    <span class="type-badge ${ep.type}">${ep.type}</span>
+    <span class="name">${escapeHtml(shortName)}</span>
+  </button>`;
+}
+
+// ─── Main content ──────────────────────────────────────────────────────────
+
+function showWelcome() {
+  const main = document.getElementById('main');
+  location.hash = '';
+  document.querySelectorAll('.endpoint-item').forEach(el => el.classList.remove('active'));
+  main.innerHTML = `
+    <div class="welcome">
+      <h2>Arbiter Lexicons</h2>
+      <p>
+        This is the lexicon definition for a draft <strong>arbiter</strong> service with the intention
+        of standardizing on how applications can access "who" is a part of spaces and roles, while
+        still allowing different arbiter servers to implement custom access control policies over
+        those interoperable groups.
+      </p>
+      <div class="welcome-stats">
+        <div class="stat"><strong>${queries.length}</strong> queries</div>
+        <div class="stat"><strong>${procedures.length}</strong> procedures</div>
+        <div class="stat"><strong>${defs ? Object.keys(defs).length : 0}</strong> shared type definitions</div>
+      </div>
+    </div>`;
+}
+
+function showDetail(id) {
+  const main = document.getElementById('main');
+  const ep = endpoints.find(e => e.id === id);
+  if (!ep) return;
+
+  location.hash = `#${id}`;
+
+  // Update sidebar active state
+  document.querySelectorAll('.endpoint-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`.endpoint-item[data-id="${id}"]`)?.classList.add('active');
+
+  main.innerHTML = renderEndpointDetail(ep) + renderDefsSection();
+
+  // Wire union ref buttons
+  main.querySelectorAll('.union-ref').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ref = btn.dataset.ref;
+      const hashIdx = ref.indexOf('#');
+      if (hashIdx >= 0) {
+        const defName = ref.slice(hashIdx + 1);
+        const defEl = document.getElementById(`def-${defName}`);
+        if (defEl) defEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+  });
+}
+
+function showDefs() {
+  const main = document.getElementById('main');
+  location.hash = '#defs';
+  document.querySelectorAll('.endpoint-item').forEach(el => el.classList.remove('active'));
+  document.querySelector(`.endpoint-item.defs-link`)?.classList.add('active');
+
+  main.innerHTML = renderDefsSection();
+
+  // Wire union ref buttons
+  main.querySelectorAll('.union-ref').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const ref = btn.dataset.ref;
+      const hashIdx = ref.indexOf('#');
+      if (hashIdx >= 0) {
+        const defName = ref.slice(hashIdx + 1);
+        const defEl = document.getElementById(`def-${defName}`);
+        if (defEl) defEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+  });
+}
+
+// ─── Search ────────────────────────────────────────────────────────────────
+
+function filterEndpoints(query) {
+  const q = query.toLowerCase().trim();
+  const items = document.querySelectorAll('.endpoint-item');
+  const groups = document.querySelectorAll('.endpoint-group-label');
+  let visible = 0;
+
+  items.forEach(el => {
+    const id = el.dataset.id || '';
+    const text = el.textContent.toLowerCase();
+    const match = !q || id.includes(q) || text.includes(q);
+    el.style.display = match ? '' : 'none';
+    if (match) visible++;
+  });
+
+  groups.forEach(g => {
+    const next = g.nextElementSibling;
+    let hasVisible = next && next.style.display !== 'none';
+    if (!hasVisible && next) {
+      let sib = next.nextElementSibling;
+      while (sib && sib.tagName === 'BUTTON') {
+        if (sib.style.display !== 'none') { hasVisible = true; break; }
+        sib = sib.nextElementSibling;
+      }
+    }
+    g.style.display = hasVisible ? '' : 'none';
+  });
+
+  // Show empty state
+  const empty = document.querySelector('.empty-search');
+  if (visible === 0 && q) {
+    if (!empty) {
+      const list = document.getElementById('endpointList');
+      list.insertAdjacentHTML('beforeend', `<div class="empty-search">No endpoints match "${escapeHtml(q)}"</div>`);
+    }
+  } else if (empty) {
+    empty.remove();
+  }
+}
+
+function navigateFromHash() {
+  const hash = location.hash.slice(1);
+  if (!hash || hash === '/') {
+    showWelcome();
+    return;
+  }
+  if (hash === 'defs') {
+    showDefs();
+    return;
+  }
+  const ep = endpoints.find(e => e.id === hash);
+  if (ep) {
+    showDetail(hash);
+  } else {
+    showWelcome();
+  }
+}
+
+// ─── Init ──────────────────────────────────────────────────────────────────
+
+renderSidebar();
+navigateFromHash();
+
+// Event delegation for sidebar clicks
+document.getElementById('endpointList').addEventListener('click', e => {
+  const btn = e.target.closest('.endpoint-item');
+  if (!btn) return;
+  if (btn.dataset.target === 'defs') {
+    showDefs();
+  } else if (btn.dataset.id) {
+    showDetail(btn.dataset.id);
+  }
+});
+
+document.getElementById('homeLink').addEventListener('click', e => {
+  e.preventDefault();
+  showWelcome();
+});
+
+document.getElementById('search').addEventListener('input', e => {
+  filterEndpoints(e.target.value);
+});
+
+window.addEventListener('hashchange', navigateFromHash);
+
+})();
+</script>
+</body>
+</html>

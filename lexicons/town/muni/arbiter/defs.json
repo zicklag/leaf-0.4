@@ -7,9 +7,11 @@
       "properties": {
         "did": {
           "type": "string",
-          "format": "did"
+          "format": "did",
+          "description": "The DID of the member."
         }
       },
+      "description": "A member specified directly by their DID.",
       "required": [
         "did"
       ]
@@ -19,9 +21,11 @@
       "properties": {
         "spaceKey": {
           "type": "string",
-          "maxLength": 1024
+          "maxLength": 1024,
+          "description": "The key of the space on this arbiter."
         }
       },
+      "description": "A member representing all of the members of another space that is on this arbiter.",
       "required": [
         "spaceKey"
       ]
@@ -31,13 +35,16 @@
       "properties": {
         "arbiterDid": {
           "type": "string",
-          "format": "did"
+          "format": "did",
+          "description": "The DID of the remote arbiter."
         },
         "spaceKey": {
           "type": "string",
-          "maxLength": 1024
+          "maxLength": 1024,
+          "description": "The key of the space on the remote arbiter."
         }
       },
+      "description": "A member representing all of the members of another space on another arbiter.",
       "required": [
         "arbiterDid",
         "spaceKey"

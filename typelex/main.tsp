@@ -5,12 +5,6 @@ import "./externals.tsp";
 alias OpenUnion = unknown | never;
 
 namespace town.muni.arbiter.defs {
-  @inline union Member {
-    MemberDid,
-    MemberLocalSpace,
-    MemberRemoteSpace,
-  }
-
   @inline
   @maxLength(1024)
   scalar SpaceKey extends string;
@@ -31,16 +25,29 @@ namespace town.muni.arbiter.defs {
   @minValue(0)
   scalar ResolverDepth extends integer;
 
+  @inline union Member {
+    MemberDid,
+    MemberLocalSpace,
+    MemberRemoteSpace,
+  }
+
+  /** A member specified directly by their DID. */
   model MemberDid {
+    /** The DID of the member. */
     @required did: did,
   }
 
+  /** A member representing all of the members of another space that is on this arbiter. */
   model MemberLocalSpace {
+    /** The key of the space on this arbiter. */
     @required spaceKey: SpaceKey,
   }
 
+  /** A member representing all of the members of another space on another arbiter. */
   model MemberRemoteSpace {
+    /** The DID of the remote arbiter. */
     @required arbiterDid: did,
+    /** The key of the space on the remote arbiter. */
     @required spaceKey: SpaceKey,
   }
 
