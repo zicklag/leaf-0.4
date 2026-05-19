@@ -1,10 +1,10 @@
 {
   "lexicon": 1,
-  "id": "town.muni.arbiter.createSpace",
+  "id": "town.muni.arbiter.setSpaceConfig",
   "defs": {
     "main": {
       "type": "procedure",
-      "description": "Create a new space on an arbiter.",
+      "description": "Configure a space on the arbiter.",
       "input": {
         "encoding": "application/json",
         "schema": {
@@ -13,22 +13,22 @@
             "arbiterDid": {
               "type": "string",
               "format": "did",
-              "description": "The DID of the arbiter to create the space in."
-            },
-            "spaceType": {
-              "type": "string",
-              "format": "nsid",
-              "description": "The NSID of the space type."
+              "description": "The DID of the arbiter that the space is in."
             },
             "spaceKey": {
               "type": "string",
               "maxLength": 1024,
-              "description": "The key of the space to create."
+              "description": "The key of the space to configure."
+            },
+            "spaceType": {
+              "type": "string",
+              "format": "nsid",
+              "description": "The new type of the space."
             },
             "config": {
               "type": "union",
               "refs": [],
-              "description": "The space configuration.\n\nDifferent servers will support different space config lexicons. Which\nlexicons are supported will also likely depend on the arbiter's config type."
+              "description": "The new space configuration."
             },
             "resolverDepth": {
               "type": "integer",
@@ -37,8 +37,8 @@
           },
           "required": [
             "arbiterDid",
-            "spaceType",
             "spaceKey",
+            "spaceType",
             "config"
           ]
         }
@@ -56,8 +56,8 @@
           "description": "The specified arbiter does not exist on this server."
         },
         {
-          "name": "ErrSpaceExists",
-          "description": "The specified space already exists on this arbiter."
+          "name": "ErrSpaceNotExists",
+          "description": "The specified space does not exist on this arbiter."
         },
         {
           "name": "ErrPermissionDenied",

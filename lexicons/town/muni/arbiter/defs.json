@@ -1,0 +1,47 @@
+{
+  "lexicon": 1,
+  "id": "town.muni.arbiter.defs",
+  "defs": {
+    "memberDid": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "format": "did"
+        }
+      },
+      "required": [
+        "did"
+      ]
+    },
+    "memberLocalSpace": {
+      "type": "object",
+      "properties": {
+        "spaceKey": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "required": [
+        "spaceKey"
+      ]
+    },
+    "memberRemoteSpace": {
+      "type": "object",
+      "properties": {
+        "arbiterDid": {
+          "type": "string",
+          "format": "did"
+        },
+        "spaceKey": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "required": [
+        "arbiterDid",
+        "spaceKey"
+      ]
+    }
+  }
+}

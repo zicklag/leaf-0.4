@@ -1,48 +1,52 @@
 {
   "lexicon": 1,
   "id": "town.muni.arbiter.deleteSpace",
-  "revision": 3,
-  "description": "Delete a permissioned space. The authenticated user must have RemoveSpace access. The $admin space cannot be deleted.",
   "defs": {
     "main": {
       "type": "procedure",
+      "description": "Delete a space from the arbiter.",
       "input": {
         "encoding": "application/json",
         "schema": {
           "type": "object",
-          "required": ["arbiterDid", "spaceKey"],
           "properties": {
             "arbiterDid": {
               "type": "string",
-              "description": "DID of the arbiter managing the space."
+              "format": "did",
+              "description": "The DID of the arbiter to delete the space from."
             },
             "spaceKey": {
               "type": "string",
-              "description": "Key of the space to delete. Must not be '$admin'."
+              "maxLength": 1024,
+              "description": "The space key of the space to delete."
             },
             "resolverDepth": {
               "type": "integer",
-              "default": 3,
-              "minimum": 0,
-              "description": "Maximum depth for resolving remote space members. Defaults to 3."
+              "description": "The maximum depth to allow when doing remote resolutions.\n\nBecause spaces are allowed to have members resolved from remote spaces,\nall of the arbiter endpoints have an optional resolution depth parameter\nthat can be used to limit how many chained remote calls can be resolved.\n\nThis applies both to queries and procedures. Queries may need to resolve\nexternal members to complete the member list, and procedures may need\nto resolve external members if the requesting member is not in the local\nmember list, to see if the member has access through a remote list."
             }
-          }
+          },
+          "required": [
+            "arbiterDid",
+            "spaceKey"
+          ]
         }
       },
       "output": {
         "encoding": "application/json",
         "schema": {
-          "type": "object",
-          "required": [],
-          "properties": {}
+          "type": "union",
+          "refs": []
         }
       },
       "errors": [
-        { "name": "ArbiterNotExists", "description": "No arbiter with this DID exists." },
-        { "name": "SpaceNotExists", "description": "The referenced space does not exist." },
-        { "name": "PermissionDenied", "description": "The user does not have RemoveSpace access." },
-        { "name": "CannotDeleteAdminSpace", "description": "The $admin space cannot be deleted." },
-        { "name": "PermissionChanged", "description": "The arbiter state changed since the request was submitted." }
+        {
+          "name": "ErrPermissionDenied",
+          "description": "The requesting user is not allowed to make the request."
+        },
+        {
+          "name": "ErrSpaceNotExists",
+          "description": "The specified space does not exist on this arbiter."
+        }
       ]
     }
   }

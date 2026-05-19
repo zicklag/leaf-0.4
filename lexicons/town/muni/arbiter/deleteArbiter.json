@@ -1,42 +1,41 @@
 {
   "lexicon": 1,
   "id": "town.muni.arbiter.deleteArbiter",
-  "revision": 3,
-  "description": "Delete an arbiter. The authenticated user must be the sole Owner in the $admin space.",
   "defs": {
     "main": {
       "type": "procedure",
+      "description": "Delete an arbiter from the server.",
       "input": {
         "encoding": "application/json",
         "schema": {
           "type": "object",
-          "required": ["arbiterDid"],
           "properties": {
             "arbiterDid": {
               "type": "string",
-              "description": "DID of the arbiter to delete."
+              "format": "did"
             },
             "resolverDepth": {
               "type": "integer",
-              "default": 3,
-              "minimum": 0,
-              "description": "Maximum depth for resolving remote space members. Defaults to 3."
+              "description": "The maximum depth to allow when doing remote resolutions.\n\nBecause spaces are allowed to have members resolved from remote spaces,\nall of the arbiter endpoints have an optional resolution depth parameter\nthat can be used to limit how many chained remote calls can be resolved.\n\nThis applies both to queries and procedures. Queries may need to resolve\nexternal members to complete the member list, and procedures may need\nto resolve external members if the requesting member is not in the local\nmember list, to see if the member has access through a remote list."
             }
-          }
+          },
+          "required": [
+            "arbiterDid"
+          ]
         }
       },
       "output": {
         "encoding": "application/json",
         "schema": {
-          "type": "object",
-          "required": [],
-          "properties": {}
+          "type": "union",
+          "refs": []
         }
       },
       "errors": [
-        { "name": "ArbiterNotExists", "description": "No arbiter with this DID exists." },
-        { "name": "PermissionDenied", "description": "The authenticated user does not have Owner access." },
-        { "name": "OnlyLastOwnerCanDeleteArbiter", "description": "There are multiple owners — remove other admins first." }
+        {
+          "name": "ErrPermissionDenied",
+          "description": "The requesting user is not allowed to make the request."
+        }
       ]
     }
   }
