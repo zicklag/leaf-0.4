@@ -1,0 +1,13 @@
+[package]
+name = "arbiter-wasm2"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+arbiter-core2 = { path = "../arbiter-core2", default-features = false }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

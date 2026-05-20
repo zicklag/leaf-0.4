@@ -8,9 +8,9 @@ importers:
 
   .:
     dependencies:
-      arbiter-wasm:
-        specifier: file:../crates/arbiter-wasm/pkg
-        version: file:../crates/arbiter-wasm/pkg
+      arbiter-wasm2:
+        specifier: file:../crates/arbiter-wasm2/pkg
+        version: pkg@file:../crates/arbiter-wasm2/pkg
     devDependencies:
       '@sveltejs/vite-plugin-svelte':
         specifier: ^7.1.2
@@ -455,9 +455,6 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  arbiter-wasm@file:../crates/arbiter-wasm/pkg:
-    resolution: {directory: ../crates/arbiter-wasm/pkg, type: directory}
-
   aria-query@5.3.1:
     resolution: {integrity: sha512-Z/ZeOgVl7bcSYZ/u/rh0fOpvEpq//LZmdbkXyc7syVzjPAhfOa9ebsdTSjEBDU4vs5nC98Kfduj1uFo0qyET3g==}
     engines: {node: '>= 0.4'}
@@ -611,6 +608,9 @@ packages:
   picomatch@4.0.4:
     resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
+
+  pkg@file:../crates/arbiter-wasm2/pkg:
+    resolution: {directory: ../crates/arbiter-wasm2/pkg, type: directory}
 
   postcss@8.5.14:
     resolution: {integrity: sha512-SoSL4+OSEtR99LHFZQiJLkT59C5B1amGO1NzTwj7TT1qCUgUO6hxOvzkOYxD+vMrXBM3XJIKzokoERdqQq/Zmg==}
@@ -1003,8 +1003,6 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  arbiter-wasm@file:../crates/arbiter-wasm/pkg: {}
-
   aria-query@5.3.1: {}
 
   axobject-query@4.1.0: {}
@@ -1102,6 +1100,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.4: {}
+
+  pkg@file:../crates/arbiter-wasm2/pkg: {}
 
   postcss@8.5.14:
     dependencies:

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { app } from '../lib/simulation-store.svelte';
-  import { buildMessage } from '../lib/utils';
 
   let newArbiterDid = $state('');
   let inputEl: HTMLInputElement | undefined = $state();
@@ -10,23 +9,17 @@
   async function handleCreateArbiter(e: Event) {
     e.preventDefault();
     if (!currentUser || !newArbiterDid.trim()) return;
-    const result = await app.dispatch(
-      buildMessage(currentUser.did, newArbiterDid.trim(), '$admin', {
-        type: 'createArbiter',
-      }),
-    );
-    const respond = result.find((r) => r.effectType === 'respond');
-    if (respond?.ok) {
+
+    try {
       const arbiterDid = newArbiterDid.trim();
+      app.simulator.createArbiter(arbiterDid, currentUser.did);
       newArbiterDid = '';
+      app.refreshState();
       app.notifications.add('success', `Arbiter "${arbiterDid}" created`);
       app.selectSpace(arbiterDid, '$admin');
       setTimeout(() => inputEl?.focus(), 50);
-    } else {
-      app.notifications.add(
-        'error',
-        respond?.error ?? 'Failed to create arbiter',
-      );
+    } catch (err) {
+      app.notifications.add('error', `Failed to create arbiter: ${err}`);
     }
   }
 </script>

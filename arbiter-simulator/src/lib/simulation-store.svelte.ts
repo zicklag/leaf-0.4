@@ -5,10 +5,12 @@ import { generateUserId, generateArbiterDid } from './utils';
 import type {
   UserAccount,
   ServerStateView,
+  ArbiterView,
+  SpaceView,
   MemberEntryView,
-  MissingSpaceView,
-  EffectView,
-  Message,
+  JobArgs,
+  OperationOk,
+  OperationResult,
 } from './types';
 
 // --- Notifications ---
@@ -35,59 +37,6 @@ interface AppNotification {
   message: string;
 }
 
-// ---------------------------------------------------------------------------
-// Map-safe JSON round-trip: serde-wasm-bindgen produces Map objects for
-// Rust HashMaps; JSON.stringify/parse need help to handle them.
-// ---------------------------------------------------------------------------
-
-function mapReplacer(_key: string, value: unknown): unknown {
-  if (value instanceof Map) {
-    return { __t: 'M', e: Array.from(value.entries()) };
-  }
-  return value;
-}
-
-function mapReviver(_key: string, value: unknown): unknown {
-  if (
-    value &&
-    typeof value === 'object' &&
-    (value as Record<string, unknown>).__t === 'M'
-  ) {
-    return new Map((value as Record<string, unknown>).e as [unknown, unknown][]);
-  }
-  return value;
-}
-
-// ---------------------------------------------------------------------------
-// Deflate compression helpers (native Compression Streams API)
-// ---------------------------------------------------------------------------
-
-async function compressToBase64(text: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const compressed = await new Response(
-    new Blob([encoder.encode(text)]).stream().pipeThrough(new CompressionStream('deflate-raw')),
-  ).arrayBuffer();
-  const bytes = new Uint8Array(compressed);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-async function decompressFromBase64(encoded: string): Promise<string> {
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  const decompressed = await new Response(
-    new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')),
-  ).arrayBuffer();
-  const decoder = new TextDecoder();
-  return decoder.decode(decompressed);
-}
-
 // --- Main state ---
 class AppState {
   darkTheme = $state(
@@ -105,6 +54,7 @@ class AppState {
   applyTheme() {
     document.documentElement.classList.toggle('dark', this.darkTheme);
   }
+
   simulator = new Simulator();
   notifications = new NotificationStore();
 
@@ -118,23 +68,23 @@ class AppState {
 
   selectedArbiterDid = $state<string | null>(null);
   selectedSpaceKey = $state<string | null>(null);
-  selectedSpaceMembers = $state<{
-    resolved: MemberEntryView[];
-    missing: MissingSpaceView[];
-  } | null>(null);
+  selectedSpaceMembers = $state<OperationOk['members'] | null>(null);
   selectedSpaceError = $state<string | null>(null);
+
+  private lastSpaceRefresh = '';
+  private lastRefreshUser = '';
 
   get currentUser() {
     return this.users.find((u) => u.did === this.currentUserId) ?? null;
   }
 
-  get selectedArbiter() {
+  get selectedArbiter(): ArbiterView | null {
     return this.serverState?.arbiters.find(
       (a) => a.did === this.selectedArbiterDid,
     ) ?? null;
   }
 
-  get selectedSpace() {
+  get selectedSpace(): SpaceView | null {
     return this.selectedArbiter?.spaces.find(
       (s) => s.key === this.selectedSpaceKey,
     ) ?? null;
@@ -145,23 +95,10 @@ class AppState {
       await this.simulator.init();
       this.loading = false;
       this.applyTheme();
-      const restored = await this.restoreFromUrl();
-      if (!restored) {
-        this.addUser('Alice');
-        this.addUser('Bob');
-        this.addUser('Charlie');
-      }
+      this.addUser('Alice');
+      this.addUser('Bob');
+      this.addUser('Charlie');
       this.refreshState();
-
-      // Re-import configuration from URL hash changes (shared links, back/forward)
-      window.addEventListener('hashchange', async () => {
-        this.selectedArbiterDid = null;
-        this.selectedSpaceKey = null;
-        this.selectedSpaceMembers = null;
-        this.selectedSpaceError = null;
-        await this.restoreFromUrl();
-        this.refreshState();
-      });
     } catch (e) {
       this.initError = String(e);
       this.loading = false;
@@ -172,69 +109,11 @@ class AppState {
     this.serverState = this.simulator.getState();
   }
 
-  // ---------------------------------------------------------------------------
-  // URL fragment persistence: deflate-compressed, Map-safe JSON round-trip
-  // ---------------------------------------------------------------------------
-
-  private async saveToUrl() {
-    const snapshot = {
-      v: 2,
-      server: this.simulator.saveState(),
-      users: this.users,
-      currentUser: this.currentUserId,
-      disabled: Array.from(this.simulator.disabledArbiters),
-    };
-    const json = JSON.stringify(snapshot, mapReplacer);
-    try {
-      const compressed = await compressToBase64(json);
-      history.replaceState(null, '', '#' + compressed);
-    } catch (e) {
-      // Fallback: store uncompressed if compression is unsupported
-      console.warn('Deflate compression failed, falling back to base64:', e);
-      history.replaceState(null, '', '#' + btoa(encodeURIComponent(json)));
-    }
-  }
-
-  private async restoreFromUrl(): Promise<boolean> {
-    const hash = window.location.hash.slice(1);
-    if (!hash) return false;
-    try {
-      let json: string;
-      // Try deflate-decompressed first, then fall back to plain base64
-      try {
-        json = await decompressFromBase64(hash);
-      } catch {
-        json = decodeURIComponent(atob(hash));
-      }
-      const snapshot = JSON.parse(json, mapReviver);
-      if (typeof snapshot !== 'object' || !snapshot) return false;
-      if (snapshot.server && typeof snapshot.server === 'object') {
-        this.simulator.loadState(snapshot.server);
-      }
-      if (Array.isArray(snapshot.users)) {
-        this.users = snapshot.users;
-      }
-      if (typeof snapshot.currentUser === 'string') {
-        this.currentUserId = snapshot.currentUser;
-      }
-      if (Array.isArray(snapshot.disabled)) {
-        this.simulator.disabledArbiters = new Set(snapshot.disabled);
-      }
-      return true;
-    } catch (e) {
-      console.warn('Failed to restore state from URL:', e);
-      return false;
-    }
-  }
-
-  // -----------------------------------------------------------------------
-
   addUser(label: string): UserAccount {
     const did = generateUserId(label);
     const user: UserAccount = { did, label };
     this.users = [...this.users, user];
     if (!this.currentUserId) this.currentUserId = did;
-    void this.saveToUrl();
     return user;
   }
 
@@ -243,13 +122,10 @@ class AppState {
     if (this.currentUserId === did) {
       this.currentUserId = this.users[0]?.did ?? null;
     }
-    void this.saveToUrl();
   }
 
   selectUser(did: string) {
     this.currentUserId = did;
-    void this.saveToUrl();
-    // Re-fetch space members for the new user if a space is already selected
     if (this.selectedArbiterDid && this.selectedSpaceKey) {
       this.fetchSpaceMembers();
     }
@@ -259,6 +135,7 @@ class AppState {
     this.selectedArbiterDid = did;
     this.selectedSpaceKey = null;
     this.selectedSpaceMembers = null;
+    this.selectedSpaceMissing = null;
     this.selectedSpaceError = null;
   }
 
@@ -268,53 +145,71 @@ class AppState {
     this.fetchSpaceMembers();
   }
 
-  /// Fetch resolved members for the selected space by sending FetchMembers
-  /// through the engine, auto-resolving delegations.
-  private fetchSpaceMembers() {
+  /// Fetch resolved members for the selected space.
+  private async fetchSpaceMembers() {
     if (!this.selectedArbiterDid || !this.selectedSpaceKey) return;
-    const userDisplay = this.currentUser?.label ?? this.currentUserId ?? 'Unknown';
+    if (!this.currentUserId) return;
+
+    const key = `${this.selectedArbiterDid}/${this.selectedSpaceKey}/${this.currentUserId}`;
+    if (key === this.lastSpaceRefresh) return;
+    this.lastSpaceRefresh = key;
+
     try {
-      const effects = this.simulator.fetchMembers(
+      const result = await this.simulator.processOperation(
         this.selectedArbiterDid,
+        this.currentUserId,
         this.selectedSpaceKey,
-        this.currentUserId ?? '',
+        { type: 'ResolveMembers' },
       );
-      const respond = effects.find(
-        (e): e is Extract<EffectView, { effectType: 'respond' }> =>
-          e.effectType === 'respond',
-      );
-      if (respond && respond.ok) {
-        this.selectedSpaceMembers = {
-          resolved: respond.member_list,
-          missing: respond.missing_spaces,
-        };
+
+      if (result.result.status === 'ok') {
+        this.selectedSpaceMembers = result.result.members ?? null;
+        this.selectedSpaceMissing = result.result.missingSpaces ?? null;
         this.selectedSpaceError = null;
-      } else if (respond) {
+      } else if (result.result.status === 'error') {
         this.selectedSpaceMembers = null;
-        this.selectedSpaceError = `The user "${userDisplay}" does not have permission to resolve the member list for this space.`;
+        this.selectedSpaceMissing = null;
+        this.selectedSpaceError = `Permission denied for "${this.currentUser?.label}": ${result.result.error}`;
       } else {
         this.selectedSpaceMembers = null;
-        this.selectedSpaceError = `Could not resolve members for "${userDisplay}".`;
+        this.selectedSpaceMissing = null;
+        this.selectedSpaceError = `Could not resolve members.`;
       }
+
+      // Update the full state
+      this.serverState = result.state;
     } catch (e) {
       this.selectedSpaceMembers = null;
-      this.selectedSpaceError = `Error resolving members: ${e}`;
+      this.selectedSpaceError = `Error: ${e}`;
     }
   }
 
-  async dispatch(msg: Message): Promise<EffectView[]> {
-    const result = await this.simulator.dispatch(msg);
+  /// Process an operation and update state.
+  async processOperation(
+    arbiterDid: string,
+    userDid: string,
+    spaceKey: string,
+    args: JobArgs,
+  ): Promise<OperationResult> {
+    const result = await this.simulator.processOperation(
+      arbiterDid, userDid, spaceKey, args,
+    );
     this.serverState = result.state;
-    this.fetchSpaceMembers();
-    await this.saveToUrl();
-    return result.effects;
+
+    // Re-fetch members if a space is selected
+    if (this.selectedArbiterDid && this.selectedSpaceKey) {
+      this.lastSpaceRefresh = '';
+      this.fetchSpaceMembers();
+    }
+
+    return result.result;
   }
 
   resetAll() {
     history.replaceState(null, '', window.location.pathname);
     location.reload();
   }
-  generateArbiterDid() { return generateArbiterDid(); }
+
   toggleArbiterOffline(did: string) {
     const s = this.simulator.disabledArbiters;
     if (s.has(did)) {
@@ -323,14 +218,16 @@ class AppState {
       s.add(did);
     }
     this.refreshState();
-    // Re-resolve members for the currently selected space
     if (this.selectedArbiterDid && this.selectedSpaceKey) {
       this.fetchSpaceMembers();
     }
   }
+
   isArbiterOffline(did: string): boolean {
     return this.simulator.disabledArbiters.has(did);
   }
+
+  generateArbiterDid() { return generateArbiterDid(); }
 }
 
 export const app = new AppState();

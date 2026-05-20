@@ -13,7 +13,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ["arbiter-wasm"],
+    exclude: ["arbiter-wasm2"],
   },
   build: {
     target: "esnext",

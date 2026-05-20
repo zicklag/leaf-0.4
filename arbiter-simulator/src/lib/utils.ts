@@ -1,106 +1,63 @@
 import type {
-  Access,
   Member,
-  Message,
-  MessageKind,
-  SpaceId,
-} from "arbiter-wasm";
+  Access,
+  ServerStateView,
+  MemberEntryView,
+} from "./types";
 import { ALL_ACCESSES } from "./types";
 
 // ---------------------------------------------------------------------------
-// Message builders
+// Member building
 // ---------------------------------------------------------------------------
 
-export function buildMessage(
-  userDid: string,
-  arbiterDid: string,
-  spaceKey: string,
-  kind: MessageKind,
-  resolverDepth = 5,
-): Message {
-  return {
-    userDid,
-    arbiterDid,
-    spaceKey,
-    srcJobId: 0,
-    resolverDepth,
-    kind,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Member parsing
-// ---------------------------------------------------------------------------
-
-export function parseMember(raw: string): Member | null {
-  // Try User format: just a DID string
-  if (raw.includes("did:")) {
-    return { tag: "MemberUser", value: raw };
-  }
-  // Try RemoteSpace format: arbiterDid/spaceKey
-  if (raw.includes("/")) {
-    const slash = raw.indexOf("/");
-    return {
-      tag: "MemberRemoteSpace",
-      value: { arbiterDid: raw.substring(0, slash), spaceKey: raw.substring(slash + 1) },
-    };
-  }
-  // Otherwise treat as local space key
-  return { tag: "MemberLocalSpace", value: raw };
-}
-
-/** Build a Member from a member entry (as stored in MemberEntryView). */
-export function buildMemberFromEntry(entry: {
-  memberType: string;
-  value: string;
-}): Member | null {
-  switch (entry.memberType) {
-    case "User":
-      return { tag: "MemberUser", value: entry.value };
-    case "LocalSpace":
-      return { tag: "MemberLocalSpace", value: entry.value };
-    case "RemoteSpace": {
-      const sid = parseSpaceId(entry.value);
-      if (!sid) return null;
-      return { tag: "MemberRemoteSpace", value: sid };
-    }
+/** Build a Member from a MemberEntryView for remove operations. */
+export function buildMemberFromEntry(entry: MemberEntryView): Member | null {
+  const m = entry.member;
+  switch (m.tag) {
+    case "MemberDid":
+      return { tag: "MemberDid", value: m.value as string };
+    case "MemberLocalSpace":
+      return { tag: "MemberLocalSpace", value: m.value as string };
+    case "MemberRemoteSpace":
+      return { tag: "MemberRemoteSpace", value: m.value as { arbiterDid: string; spaceKey: string } };
     default:
       return null;
   }
 }
 
-export function parseSpaceId(raw: string): SpaceId | null {
-  // SpaceId for remote spaces: arbiterDid/spaceKey
-  const slash = raw.lastIndexOf("/");
-  if (slash < 0) return null;
-  return {
-    arbiterDid: raw.substring(0, slash),
-    spaceKey: raw.substring(slash + 1),
-  };
+// ---------------------------------------------------------------------------
+// Access level helpers
+// ---------------------------------------------------------------------------
+
+/** Extract access level string from an access config object. */
+export function accessLevelStr(access: Record<string, unknown>): string {
+  if (typeof access.level === 'string') return access.level;
+  if (typeof access === 'string') return access;
+  return 'ReadMemberList';
 }
 
-export function memberDisplay(member: Member): string {
-  switch (member.tag) {
-    case "MemberUser":
-      return `👤 ${shortDid(member.value)}`;
-    case "MemberLocalSpace":
-      return `📁 ${member.value}`;
-    case "MemberRemoteSpace":
-      return `🌐 ${member.value}`;
-  }
+/** Get numeric access level index. */
+export function accessLevelNum(access: Record<string, unknown>): number {
+  const str = accessLevelStr(access);
+  const idx = ALL_ACCESSES.indexOf(str as Access);
+  return idx >= 0 ? idx : 0;
 }
 
-export function memberTypeLabel(type: string): string {
-  switch (type) {
-    case "User":
-      return "User";
-    case "LocalSpace":
-      return "Local Space";
-    case "RemoteSpace":
-      return "Remote Space";
-    default:
-      return type;
-  }
+/** Get a human-readable label for an access config. */
+export function accessLabel(access: Record<string, unknown>): string {
+  const str = accessLevelStr(access);
+  return str;
+}
+
+/** Get a color for an access level. */
+export function accessColor(access: Record<string, unknown>): string {
+  const level = accessLevelNum(access);
+  const total = ALL_ACCESSES.length - 1;
+  const ratio = total > 0 ? level / total : 0;
+  const h = 200 - ratio * 160;
+  const c = 0.10 + ratio * 0.12;
+  const l = 0.70 - ratio * 0.15;
+  return `oklch(${l.toFixed(2)} ${c.toFixed(2)} ${h.toFixed(0)})`;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,44 +69,48 @@ export function shortDid(did: string, maxLen = 24): string {
   return did.slice(0, maxLen - 3) + "…";
 }
 
-export function accessLabel(access: Access): string {
-  return access;
+/** Get a human-readable label for a member entry in the state view. */
+export function memberDisplay(member: MemberEntryView): string {
+  const m = member.member;
+  switch (m.tag) {
+    case "MemberDid":
+      return `👤 ${shortDid(m.value as string)}`;
+    case "MemberLocalSpace":
+      return `📁 ${m.value}`;
+    case "MemberRemoteSpace":
+      return `🌐 ${(m.value as { arbiterDid: string }).arbiterDid}/${(m.value as { spaceKey: string }).spaceKey}`;
+    default:
+      return `? ${m.tag}`;
+  }
 }
 
-export function accessLevel(access: Access): number {
-  return ALL_ACCESSES.lastIndexOf(access)!;
+/** Get a short label for a member type. */
+export function memberTypeLabel(tag: string): string {
+  switch (tag) {
+    case "MemberDid": return "User";
+    case "MemberLocalSpace": return "Local Space";
+    case "MemberRemoteSpace": return "Remote Space";
+    default: return tag;
+  }
 }
 
-/** Convert an Access string to Rust's adjacently tagged JSON format */
-export function accessTag(access: Access): { tag: string; value: number } {
-  return { tag: access, value: accessLevel(access) };
-}
-
-export function accessColor(access: Access): string {
-  const level = accessLevel(access);
-  const total = ALL_ACCESSES.length - 1;
-  const ratio = total > 0 ? level / total : 0;
-  // Perceptually uniform OKLCH: cool teal (low access) → warm amber (high access).
-  // Chroma and lightness stay in a range that reads clearly on light backgrounds.
-  const h = 200 - ratio * 160; // 200° (teal) → 40° (amber)
-  const c = 0.10 + ratio * 0.12; // chroma rises with level
-  const l = 0.70 - ratio * 0.15; // lightness drops slightly
-  return `oklch(${l.toFixed(2)} ${c.toFixed(2)} ${h.toFixed(0)})`;
+/** Get spaces from the server state for a given arbiter. */
+export function getArbiterSpaces(state: ServerStateView, arbiterDid: string) {
+  return state.arbiters.find((a) => a.did === arbiterDid)?.spaces ?? [];
 }
 
 // ---------------------------------------------------------------------------
 // ID generation
 // ---------------------------------------------------------------------------
 
-let userIdCounter = 0;
-export function generateUserId(label: string): string {
-  return label.toLowerCase().replace(/\s+/g, '-');
-}
-
 let arbiterIdCounter = 0;
 export function generateArbiterDid(): string {
   arbiterIdCounter++;
   return `arbiter${arbiterIdCounter}`;
+}
+
+export function generateUserId(label: string): string {
+  return label.toLowerCase().replace(/\s+/g, '-');
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +126,6 @@ export function userInitial(label: string): string {
 }
 
 export function userColor(label: string): string {
-  // Deterministic color based on the name
   let hash = 0;
   for (let i = 0; i < label.length; i++) {
     hash = label.charCodeAt(i) + ((hash << 5) - hash);

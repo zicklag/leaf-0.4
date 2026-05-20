@@ -25,17 +25,15 @@
     }> = [];
 
     for (const member of space.members) {
-      if (member.memberType === 'RemoteSpace') {
-        const slashIdx = member.value.indexOf('/');
-        if (slashIdx > 0) {
-          edges.push({
-            fromArbiter: arbDid,
-            fromSpace: spKey,
-            toArbiter: member.value.slice(0, slashIdx),
-            toSpace: member.value.slice(slashIdx + 1),
-            access: member.access,
-          });
-        }
+      if (member.member.tag === 'MemberRemoteSpace') {
+        const remoteValue = member.member.value as { arbiterDid: string; spaceKey: string };
+        edges.push({
+          fromArbiter: arbDid,
+          fromSpace: spKey,
+          toArbiter: remoteValue.arbiterDid,
+          toSpace: remoteValue.spaceKey,
+          access: typeof member.access.level === 'string' ? member.access.level : 'ReadMemberList',
+        });
       }
     }
 

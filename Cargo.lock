@@ -84,6 +84,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbiter-core2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "im",
+ "regorus",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tsify",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "arbiter-server"
 version = "0.1.0"
 dependencies = [
@@ -115,6 +132,16 @@ dependencies = [
  "serde-wasm-bindgen",
  "serde_json",
  "tsify",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "arbiter-wasm2"
+version = "0.1.0"
+dependencies = [
+ "arbiter-core2",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
 ]
 
@@ -1769,7 +1796,7 @@ dependencies = [
  "httparse",
  "memchr",
  "mime",
- "spin",
+ "spin 0.9.8",
  "version_check",
 ]
 
@@ -2332,6 +2359,22 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "regorus"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63642e663bb81698ab7160735bdc831f580022194922d3f24d5c40a913ff3fab"
+dependencies = [
+ "anyhow",
+ "lazy_static",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "spin 0.10.0",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "reqwest"
@@ -3000,6 +3043,12 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+
+[[package]]
+name = "spin"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
 
 [[package]]
 name = "spki"

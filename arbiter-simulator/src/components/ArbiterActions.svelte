@@ -1,6 +1,5 @@
 <script lang="ts">
   import { app } from '../lib/simulation-store.svelte';
-  import { buildMessage } from '../lib/utils';
 
   let { currentUser, selectedArbiter } = $derived(app);
 
@@ -11,32 +10,36 @@
     const key = newSpaceKey.trim();
     if (!currentUser || !selectedArbiter || !key) return;
     newSpaceKey = '';
-    const result = await app.dispatch(
-      buildMessage(currentUser.did, selectedArbiter.did, key, {
-        type: 'createSpace',
-      }),
+    const result = await app.processOperation(
+      selectedArbiter.did, currentUser.did, key,
+      {
+        type: 'CreateSpace',
+        spaceType: 'town.muni.arbiter.config.space',
+        config: {
+          $type: 'town.muni.arbiter.config.space',
+          publicRecords: false,
+          publicMembers: false,
+        },
+      },
     );
-    const respond = result.find((r) => r.effectType === 'respond');
-    if (respond?.ok) {
+    if (result.status === 'ok') {
       app.notifications.add('success', `Space "${key}" created`);
     } else {
-      app.notifications.add('error', respond?.error ?? 'Failed to create space');
+      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to create space');
     }
   }
 
   async function handleDeleteArbiter() {
     if (!currentUser || !selectedArbiter) return;
-    const result = await app.dispatch(
-      buildMessage(currentUser.did, selectedArbiter.did, '$admin', {
-        type: 'deleteArbiter',
-      }),
+    const result = await app.processOperation(
+      selectedArbiter.did, currentUser.did, '$admin',
+      { type: 'DeleteArbiter' },
     );
-    const respond = result.find((r) => r.effectType === 'respond');
-    if (respond?.ok) {
+    if (result.status === 'deleted') {
       app.notifications.add('success', 'Arbiter deleted');
       app.selectArbiter(null);
     } else {
-      app.notifications.add('error', respond?.error ?? 'Failed to delete arbiter');
+      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to delete arbiter');
     }
   }
 </script>
@@ -88,87 +91,17 @@
 </section>
 
 <style>
-  .arbiter-actions {
-    padding: 0;
-    border-bottom: 1px solid var(--border-light);
-    flex-shrink: 0;
-  }
-
-  .arbiter-actions-body {
-    padding: 16px;
-  }
-
-  .section-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-
-  .section-header h3 {
-    font-weight: 600;
-  }
-
-  .delete-arbiter-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: 1px solid transparent;
-    border-radius: var(--radius-xs);
-    background: none;
-    cursor: pointer;
-    color: oklch(0.5 0.15 20);
-    transition: all 150ms var(--ease-out);
-    flex-shrink: 0;
-  }
-
-  .delete-arbiter-btn:hover {
-    background: oklch(0.95 0.04 20);
-    border-color: oklch(0.7 0.08 20);
-    color: oklch(0.42 0.18 20);
-  }
-
-  .delete-arbiter-btn:active {
-    transform: scale(0.92);
-  }
-
-  .empty-hint {
-    color: var(--text-muted);
-    font-size: 0.857rem;
-    font-style: italic;
-  }
-
-  .context-label {
-    font-size: 0.714rem;
-    font-weight: 600;
-    color: var(--accent-text);
-    background: var(--accent-subtle);
-    padding: 4px 8px;
-    border-radius: var(--radius-xs);
-    margin-bottom: 12px;
-  }
-
-  .action-form {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .action-form label {
-    font-size: 0.857rem;
-    font-weight: 500;
-    color: var(--text-secondary);
-  }
-
-  .input-row {
-    display: flex;
-    gap: 6px;
-  }
-
-  .input-row input {
-    flex: 1;
-  }
+  .arbiter-actions { padding: 0; border-bottom: 1px solid var(--border-light); flex-shrink: 0; }
+  .arbiter-actions-body { padding: 16px; }
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .section-header h3 { font-weight: 600; }
+  .delete-arbiter-btn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-xs); background: none; cursor: pointer; color: oklch(0.5 0.15 20); transition: all 150ms var(--ease-out); flex-shrink: 0; }
+  .delete-arbiter-btn:hover { background: oklch(0.95 0.04 20); border-color: oklch(0.7 0.08 20); color: oklch(0.42 0.18 20); }
+  .delete-arbiter-btn:active { transform: scale(0.92); }
+  .empty-hint { color: var(--text-muted); font-size: 0.857rem; font-style: italic; }
+  .context-label { font-size: 0.714rem; font-weight: 600; color: var(--accent-text); background: var(--accent-subtle); padding: 4px 8px; border-radius: var(--radius-xs); margin-bottom: 12px; }
+  .action-form { display: flex; flex-direction: column; gap: 4px; }
+  .action-form label { font-size: 0.857rem; font-weight: 500; color: var(--text-secondary); }
+  .input-row { display: flex; gap: 6px; }
+  .input-row input { flex: 1; }
 </style>

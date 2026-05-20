@@ -42,13 +42,17 @@
       <span class="no-members">No direct members</span>
     {:else}
       {#each space.members.slice(0, 3) as m}
-        <span class="member-chip mono" title={`${m.memberType}: ${m.value} → ${accessLabel(m.access)}`}>
-          {m.memberType === 'User'
+        <span class="member-chip mono" title={`${m.member.tag}: ${JSON.stringify(m.member.value)} → ${accessLabel(m.access)}`}>
+          {m.member.tag === 'MemberDid'
             ? '👤'
-            : m.memberType === 'RemoteSpace'
+            : m.member.tag === 'MemberRemoteSpace'
               ? '🌐'
               : '📁'}
-          {m.memberType === 'RemoteSpace' ? shortDid(m.value, 20) : shortDid(m.value, 16)}
+          {m.member.tag === 'MemberDid'
+            ? shortDid(m.member.value as string, 16)
+            : m.member.tag === 'MemberRemoteSpace'
+              ? shortDid((m.member.value as {arbiterDid: string}).arbiterDid, 16)
+              : shortDid(m.member.value as string, 16)}
         </span>
       {/each}
       {#if space.members.length > 3}

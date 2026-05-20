@@ -75,9 +75,9 @@
         class:expanded={isOpen}
         onclick={() => toggle(access)}
       >
-        <div class="legend-swatch" style="background: {accessColor(access)}"></div>
-        <span class="legend-label" style="color: {accessColor(access)}">
-          {accessLabel(access)}
+        <div class="legend-swatch" style="background: {accessColor({level: access})}"></div>
+        <span class="legend-label" style="color: {accessColor({level: access})}">
+          {accessLabel({level: access})}
         </span>
         <span class="expand-icon">{isOpen ? '▾' : '▸'}</span>
       </button>
@@ -92,7 +92,7 @@
                   {@const incKey = LABEL_TO_KEY[inc]}
                   <button
                     class="include-chip"
-                    style="color: {accessColor(incKey)}"
+                    style="color: {accessColor({level: incKey})}"
                     onclick={(e) => { e.stopPropagation(); toggle(incKey); }}
                   >
                     {inc}

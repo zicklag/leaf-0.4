@@ -7,6 +7,10 @@
   import DetailPanel from './components/DetailPanel.svelte';
   import Notifications from './components/Notifications.svelte';
   import EmptyState from './components/EmptyState.svelte';
+  import PolicyEditor from './components/PolicyEditor.svelte';
+
+  type Tab = 'visual' | 'policy';
+  let activeTab = $state<Tab>('visual');
 
   let { loading, initError } = $derived(app);
 
@@ -30,16 +34,39 @@
   <div class="main-layout">
     <Sidebar />
     <div class="canvas-column">
-      <CreateArbiterBar />
-      {#if app.serverState && app.serverState.arbiters.length > 0}
-        <Canvas />
+      <div class="tab-bar">
+        <button
+          class="tab"
+          class:active={activeTab === 'visual'}
+          onclick={() => (activeTab = 'visual')}
+        >
+          <span class="tab-icon">🌐</span>
+          <span>Visual</span>
+        </button>
+        <button
+          class="tab"
+          class:active={activeTab === 'policy'}
+          onclick={() => (activeTab = 'policy')}
+        >
+          <span class="tab-icon">📝</span>
+          <span>Policy</span>
+        </button>
+      </div>
+
+      {#if activeTab === 'visual'}
+        <CreateArbiterBar />
+        {#if app.serverState && app.serverState.arbiters.length > 0}
+          <Canvas />
+        {:else}
+          <div class="canvas-area">
+            <EmptyState />
+          </div>
+        {/if}
       {:else}
-        <div class="canvas-area">
-          <EmptyState />
-        </div>
+        <PolicyEditor />
       {/if}
     </div>
-    {#if app.selectedSpace}
+    {#if activeTab === 'visual' && app.selectedSpace}
       <DetailPanel />
     {/if}
   </div>
@@ -105,5 +132,44 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .tab-bar {
+    display: flex;
+    gap: 0;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    padding: 0 16px;
+  }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.857rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: all 150ms var(--ease-out);
+  }
+
+  .tab:hover {
+    color: var(--text-secondary);
+    background: var(--accent-subtle);
+  }
+
+  .tab.active {
+    color: var(--accent-text);
+    border-bottom-color: var(--accent);
+  }
+
+  .tab-icon {
+    font-size: 1rem;
   }
 </style>
