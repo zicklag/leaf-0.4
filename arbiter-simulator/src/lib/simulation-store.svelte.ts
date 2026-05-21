@@ -69,6 +69,7 @@ class AppState {
   selectedArbiterDid = $state<string | null>(null);
   selectedSpaceKey = $state<string | null>(null);
   selectedSpaceMembers = $state<OperationOk['members'] | null>(null);
+  selectedSpaceMissing = $state<OperationOk['missingSpaces'] | null>(null);
   selectedSpaceError = $state<string | null>(null);
 
   private lastSpaceRefresh = '';
@@ -180,6 +181,7 @@ class AppState {
       this.serverState = result.state;
     } catch (e) {
       this.selectedSpaceMembers = null;
+      this.selectedSpaceMissing = null;
       this.selectedSpaceError = `Error: ${e}`;
     }
   }
@@ -219,6 +221,7 @@ class AppState {
     }
     this.refreshState();
     if (this.selectedArbiterDid && this.selectedSpaceKey) {
+      this.lastSpaceRefresh = '';
       this.fetchSpaceMembers();
     }
   }
