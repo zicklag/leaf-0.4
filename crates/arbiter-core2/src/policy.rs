@@ -245,7 +245,7 @@ impl PolicyEngine {
         );
         self.set_json_input(&input);
 
-        // Get resolved members
+        // Get resolved members (deduplicated by the policy)
         let members = self
             .engine
             .eval_query("data.arbiter.resolved_members".to_string(), false)

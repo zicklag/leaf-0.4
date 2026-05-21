@@ -202,7 +202,7 @@ impl Arbiter {
         // Validate the config has a valid policy
         let policy = extract_policy(&config)?;
         // Quick validation that the policy parses
-        let _ = validate_policy(policy)?;
+        validate_policy(policy)?;
 
         let mut admin = Space::admin_space();
         admin.members.insert(

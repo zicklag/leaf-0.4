@@ -1,21 +1,4 @@
 # Default access-level authorization policy for the Muni Town Arbiter.
-#
-# Replicates the Quint specification's authorization behavior using Rego.
-# Queries arbiter state lazily via custom builtins:
-#
-#   arbiter.get_space_members(space_key) -> array of { member, access }
-#
-# Input:
-#   input.requester          - DID of the requesting user
-#   input.action             - Endpoint name (resolveSpaceMembers, createSpace, etc.)
-#   input.resource           - { spaceKey }
-#   input.params             - { targetMember?, targetAccess? }
-#   input.resolved_remotes   - Map of "arbiterDid|spaceKey" -> resolved member arrays
-#
-# Outputs:
-#   data.arbiter.allow              -> boolean
-#   data.arbiter.resolved_members   -> set of { did, access, via } for input.resource.spaceKey
-#   data.arbiter.needs_resolution   -> set of { remoteArbiterDid, spaceKey }
 
 package arbiter
 
@@ -49,11 +32,11 @@ member_rank(member) := rank if {
 }
 
 # ---------------------------------------------------------------------------
-# Resolved members: walk delegation tree for input.resource.spaceKey
+# Resolved members (raw, may contain duplicates via different delegation paths)
 # ---------------------------------------------------------------------------
 
 # Direct member in the target space
-resolved_members contains member if {
+resolved_members_raw contains member if {
     raw := arbiter.get_space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member.tag == "MemberDid"
@@ -61,7 +44,7 @@ resolved_members contains member if {
 }
 
 # Direct member inherited from $admin space
-resolved_members contains member if {
+resolved_members_raw contains member if {
     input.resource.spaceKey != "$admin"
     raw := arbiter.get_space_members("$admin")
     entry := raw[_]
@@ -70,7 +53,7 @@ resolved_members contains member if {
 }
 
 # Delegated from a local space member in the target space
-resolved_members contains member if {
+resolved_members_raw contains member if {
     raw := arbiter.get_space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member.tag == "MemberLocalSpace"
@@ -86,7 +69,7 @@ resolved_members contains member if {
 }
 
 # Delegated from a local space member in the admin space
-resolved_members contains member if {
+resolved_members_raw contains member if {
     input.resource.spaceKey != "$admin"
     raw := arbiter.get_space_members("$admin")
     entry := raw[_]
@@ -103,7 +86,7 @@ resolved_members contains member if {
 }
 
 # Delegated from a resolved remote space in the target space
-resolved_members contains member if {
+resolved_members_raw contains member if {
     raw := arbiter.get_space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member.tag == "MemberRemoteSpace"
@@ -118,7 +101,7 @@ resolved_members contains member if {
 }
 
 # Delegated from a resolved remote space in the admin space
-resolved_members contains member if {
+resolved_members_raw contains member if {
     input.resource.spaceKey != "$admin"
     raw := arbiter.get_space_members("$admin")
     entry := raw[_]
@@ -133,7 +116,33 @@ resolved_members contains member if {
     }
 }
 
-# min_access: pick the lower of two access levels
+# ---------------------------------------------------------------------------
+# Deduplicated: each DID appears once with their highest access
+# ---------------------------------------------------------------------------
+
+higher_exists(member) if {
+    higher := resolved_members_raw[_]
+    higher.did == member.did
+    member_rank(higher) > member_rank(member)
+}
+
+higher_via(member) if {
+    tie := resolved_members_raw[_]
+    tie.did == member.did
+    member_rank(tie) == member_rank(member)
+    tie.via < member.via
+}
+
+resolved_members contains member if {
+    member := resolved_members_raw[_]
+    not higher_exists(member)
+    not higher_via(member)
+}
+
+# ---------------------------------------------------------------------------
+# min_access
+# ---------------------------------------------------------------------------
+
 min_access(a, b) := a if {
     member_rank({"access": a}) <= member_rank({"access": b})
 }
@@ -148,7 +157,7 @@ min_access(a, b) := b if {
 
 requester_rank := rank if {
     ranks := {member_rank(member) |
-        member := resolved_members[_]
+        member := resolved_members_raw[_]
         member.did == input.requester
     }
     rank := max(ranks)
