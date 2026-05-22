@@ -8,7 +8,7 @@ use regorus::{Engine, Value};
 use std::collections::BTreeMap;
 
 /// The default access-level policy embedded in the binary.
-pub const DEFAULT_POLICY: &str = include_str!("../../../policies/access-levels.rego");
+pub const DEFAULT_POLICY: &str = include_str!("../../../policies/arbiter/access-levels.rego");
 
 /// Standard config NSIDs.
 pub mod lexicon {
