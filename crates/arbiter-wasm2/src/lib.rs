@@ -3,8 +3,13 @@
 //! Provides a `SimulationEngine` that wraps the sans-IO core state machine
 //! for use in the browser-based arbiter simulator. All complex types cross
 //! the WASM boundary as JSON strings.
+//!
+//! The simulator auto-resolves remote spaces internally because all arbiters
+//! are in-memory (no actual network IO).
 
 use arbiter_core2::core::*;
+use arbiter_core2::policy_vm::PolicyVmPool;
+use serde_json::json;
 use wasm_bindgen::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -18,6 +23,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
 pub struct SimulationEngine {
     state: ServerState,
+    vm_pool: PolicyVmPool,
 }
 
 #[wasm_bindgen]
@@ -26,6 +32,7 @@ impl SimulationEngine {
     pub fn new() -> Self {
         Self {
             state: ServerState::default(),
+            vm_pool: PolicyVmPool::new(),
         }
     }
 
@@ -55,50 +62,18 @@ impl SimulationEngine {
     }
 
     /// Process an operation on an arbiter and returns JSON result.
+    ///
+    /// If the operation needs remote resolution, this method auto-resolves
+    /// all remotes (all arbiters are in-memory) and returns the final result.
     pub fn process_operation(
         &mut self,
         arbiter_did: &str,
         user_did: &str,
         space_key: &str,
         args_json: &str,
-        resolved_remotes_json: &str,
     ) -> String {
         let args: JobArgs = match serde_json::from_str(args_json) {
             Ok(a) => a,
-            Err(e) => {
-                return serde_json::json!({"status": "error", "error": e.to_string()}).to_string()
-            }
-        };
-        let resolved_remotes: serde_json::Value = match serde_json::from_str(resolved_remotes_json)
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return serde_json::json!({"status": "error", "error": e.to_string()}).to_string()
-            }
-        };
-
-        let mut arbiter = match self.state.arbiters.get(arbiter_did) {
-            Some(a) => a.clone(),
-            None => return serde_json::json!({"status": "error", "error": "ArbiterNotExists"}).to_string(),
-        };
-
-        arbiter.process_operation(user_did, space_key, args, &resolved_remotes);
-
-        let result = operation_result_json(&arbiter.result);
-        apply_arbiter_result(&mut self.state, arbiter_did, arbiter);
-        result
-    }
-
-    /// Provide resolved remote members for a queued job.
-    pub fn provide_resolved_remotes(
-        &mut self,
-        arbiter_did: &str,
-        job_id: i64,
-        resolved_remotes_json: &str,
-    ) -> String {
-        let resolved_remotes: serde_json::Value = match serde_json::from_str(resolved_remotes_json)
-        {
-            Ok(r) => r,
             Err(e) => {
                 return serde_json::json!({"status": "error", "error": e.to_string()}).to_string()
             }
@@ -112,7 +87,36 @@ impl SimulationEngine {
             }
         };
 
-        arbiter.provide_resolved_remotes(job_id, &resolved_remotes);
+        // Start the operation
+        arbiter.process_operation(user_did, space_key, args, &mut self.vm_pool);
+
+        // Auto-resolve loop: for each suspension, resolve the remote and resume
+        loop {
+            match arbiter.result.clone() {
+                ArbiterResult::Suspended { job_id, request } => {
+                    let resolved = match request.kind {
+                        SuspensionKind::ResolveRemote => {
+                            let remote_did = request
+                                .remote_arbiter_did
+                                .as_deref()
+                                .unwrap_or("");
+                            let remote_key = request
+                                .space_key
+                                .as_deref()
+                                .unwrap_or("");
+                            // Resolve as the calling arbiter's DID (server-to-server)
+                            self.resolve_remote_members(remote_did, arbiter_did, remote_key)
+                        }
+                    };
+
+                    arbiter.resume_operation(job_id, &resolved, &mut self.vm_pool);
+                }
+                _ => {
+                    // Completed, error, or deleted
+                    break;
+                }
+            }
+        }
 
         let result = operation_result_json(&arbiter.result);
         apply_arbiter_result(&mut self.state, arbiter_did, arbiter);
@@ -211,6 +215,60 @@ impl SimulationEngine {
         })
         .to_string()
     }
+
+    // -----------------------------------------------------------------------
+    // Internal: remote resolution (all in-memory for the simulator)
+    // -----------------------------------------------------------------------
+
+    /// Resolve members of a space on another arbiter.
+    fn resolve_remote_members(
+        &mut self,
+        arbiter_did: &str,
+        as_arbiter: &str,
+        space_key: &str,
+    ) -> serde_json::Value {
+        let mut arbiter = match self.state.arbiters.get(arbiter_did) {
+            Some(a) => a.clone(),
+            None => return serde_json::json!([]),
+        };
+
+        arbiter.process_operation(
+            as_arbiter,
+            space_key,
+            JobArgs::ResolveMembers,
+            &mut self.vm_pool,
+        );
+
+        // Auto-resolve any suspensions for this remote call too
+        loop {
+            match arbiter.result.clone() {
+                ArbiterResult::Suspended { job_id, request } => {
+                    let resolved = match request.kind {
+                        SuspensionKind::ResolveRemote => {
+                            let remote_did = request.remote_arbiter_did.as_deref().unwrap_or("");
+                            let remote_key = request.space_key.as_deref().unwrap_or("");
+                            self.resolve_remote_members(remote_did, arbiter_did, remote_key)
+                        }
+                    };
+                    arbiter.resume_operation(job_id, &resolved, &mut self.vm_pool);
+                }
+                _ => break,
+            }
+        }
+
+        let result = match &arbiter.result {
+            ArbiterResult::Finished(JobResult::ResolvedMembersList(response)) => {
+                response.get("members").cloned().unwrap_or(json!([]))
+            }
+            _ => json!([]),
+        };
+
+        self.state.arbiters = self
+            .state
+            .arbiters
+            .update(arbiter_did.to_string(), arbiter);
+        result
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,17 +278,16 @@ impl SimulationEngine {
 fn operation_result_json(result: &ArbiterResult) -> String {
     let json = match result {
         ArbiterResult::Ok => serde_json::json!({"status": "ok"}),
-        ArbiterResult::NeedsResolution { job_id, spaces } => {
+        ArbiterResult::Suspended { job_id, request } => {
             serde_json::json!({
-                "status": "needsResolution",
+                "status": "suspended",
                 "jobId": job_id,
-                "spaces": spaces,
+                "request": request,
             })
         }
         ArbiterResult::Finished(r) => match r {
             JobResult::Ok => serde_json::json!({"status": "ok"}),
             JobResult::ResolvedMembersList(response) => {
-                // response is { members: [...], missingSpaces: [...] }
                 let mut obj = serde_json::json!({"status": "ok"});
                 if let Some(m) = response.get("members") {
                     obj["members"] = m.clone();

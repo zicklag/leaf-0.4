@@ -1,12 +1,17 @@
 //! Data model and state machine for the arbiter core.
 //!
-//! Contains the core types (Arbiter, Space, Member, Job) and the state machine
+//! Contains the core types (Arbiter, Space, Member) and the state machine
 //! that wraps the Rego policy engine for authorization.
+//!
+//! Policy evaluation is driven by a [`PolicyVmPool`] that manages suspended
+//! `RegoVM` instances across async resolution cycles. The `Arbiter` itself
+//! only holds handles (JobIds) into the pool, keeping the state machine
+//! fully `Clone`+`Serialize`.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 pub use crate::policy::*;
+use crate::policy_vm::{HostRequest, PolicyVmPool, VmResult};
 
 // ---------------------------------------------------------------------------
 // Type aliases
@@ -71,12 +76,58 @@ pub enum JobResult {
     ResolvedMembersList(serde_json::Value),
 }
 
-/// A remote space that still needs async resolution.
+// ---------------------------------------------------------------------------
+// Suspension info (serializable, returned to the caller)
+// ---------------------------------------------------------------------------
+
+/// Information about a suspension that the caller must resolve.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ResolutionEntry {
-    pub remote_arbiter_did: Did,
-    pub space_key: SpaceKey,
+pub struct SuspensionInfo {
+    /// The type of host intervention needed.
+    #[serde(rename = "type")]
+    pub kind: SuspensionKind,
+    /// The remote arbiter DID (for `ResolveRemote`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_arbiter_did: Option<String>,
+    /// The space key on the remote arbiter (for `ResolveRemote`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SuspensionKind {
+    ResolveRemote,
+}
+
+impl From<HostRequest> for SuspensionInfo {
+    fn from(req: HostRequest) -> Self {
+        match req {
+            HostRequest::ResolveRemote {
+                remote_arbiter_did,
+                space_key,
+            } => SuspensionInfo {
+                kind: SuspensionKind::ResolveRemote,
+                remote_arbiter_did: Some(remote_arbiter_did),
+                space_key: Some(space_key),
+            },
+        }
+    }
+}
+
+impl From<&HostRequest> for SuspensionInfo {
+    fn from(req: &HostRequest) -> Self {
+        match req {
+            HostRequest::ResolveRemote {
+                remote_arbiter_did,
+                space_key,
+            } => SuspensionInfo {
+                kind: SuspensionKind::ResolveRemote,
+                remote_arbiter_did: Some(remote_arbiter_did.clone()),
+                space_key: Some(space_key.clone()),
+            },
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -117,25 +168,17 @@ impl Space {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ArbiterErrorKind {
-    JobIdExists,
     JobNotExists,
-    SpaceNotNeeded,
-    SpaceAlreadyResolved,
     SpaceAlreadyExists,
     SpaceNotExists,
     PermissionDenied,
     CannotDeleteAdminSpace,
-    MemberNotExist,
-    PermissionChanged,
     ArbiterDeletionMustSpecifyAdminSpace,
-    WriteOperationAlreadyInProgress,
-    RemoteSpaceReferencesLocalArbiter,
     OnlyLastOwnerCanDeleteArbiter,
-    JobsTimedOut(im::HashSet<JobId>),
     InvalidConfig,
     UnsupportedConfigLexicon,
     ArbiterAlreadyExists,
-    RaceCondition,
+    PolicyEvaluationError,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,10 +196,10 @@ pub struct ArbiterError {
 pub enum ArbiterResult {
     /// Operation succeeded.
     Ok,
-    /// A job was queued and needs remote space resolution.
-    NeedsResolution {
+    /// Policy evaluation needs async resolution before continuing.
+    Suspended {
         job_id: JobId,
-        spaces: Vec<ResolutionEntry>,
+        request: SuspensionInfo,
     },
     /// A job finished with a result.
     Finished(JobResult),
@@ -164,20 +207,6 @@ pub enum ArbiterResult {
     Deleted,
     /// An error occurred.
     Err(ArbiterError),
-}
-
-// ---------------------------------------------------------------------------
-// Job
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Job {
-    pub id: JobId,
-    pub user_did: Did,
-    pub space_key: SpaceKey,
-    pub args: JobArgs,
-    /// Version of the arbiter when this job was started.
-    pub arbiter_version: ArbiterVersion,
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +219,6 @@ pub struct Arbiter {
     pub did: Did,
     pub config: ArbiterConfig,
     pub spaces: im::HashMap<SpaceKey, Space>,
-    pub job_queue: im::HashMap<JobId, Job>,
     pub result: ArbiterResult,
 }
 
@@ -200,9 +228,9 @@ impl Arbiter {
     /// The config must contain a valid Rego policy at `config.policy`.
     pub fn new(did: Did, owner_did: Did, config: ArbiterConfig) -> Result<Self, PolicyError> {
         // Validate the config has a valid policy
-        let policy = extract_policy(&config)?;
+        let _policy = extract_policy(&config)?;
         // Quick validation that the policy parses
-        validate_policy(policy)?;
+        validate_policy(extract_policy(&config)?)?;
 
         let mut admin = Space::admin_space();
         admin.members.insert(
@@ -221,22 +249,24 @@ impl Arbiter {
             did,
             config,
             spaces,
-            job_queue: im::HashMap::new(),
             result: ArbiterResult::Ok,
         })
     }
 
     /// Process an operation on the arbiter.
     ///
-    /// Takes a snapshot of the arbiter's spaces, evaluates the policy,
-    /// and either executes the operation immediately or queues a job
-    /// if remote resolution is needed.
+    /// Takes a snapshot of the arbiter's spaces, evaluates the policy in a
+    /// RegoVM (suspendable mode), and either executes the operation immediately
+    /// or suspends waiting for remote resolution.
+    ///
+    /// If the result is `Suspended`, the caller must resolve the remote and call
+    /// [`resume_operation`] with the resolved data.
     pub fn process_operation(
         &mut self,
         user_did: &str,
         space_key: &str,
         args: JobArgs,
-        resolved_remotes: &serde_json::Value,
+        pool: &mut PolicyVmPool,
     ) {
         // 1. Structural validation
         if let Some(err) = validate_operation(self, space_key, &args) {
@@ -244,184 +274,140 @@ impl Arbiter {
             return;
         }
 
-        // 2. Map args to policy action
+        // 2. Build input for the policy
         let action = args_to_action(&args);
-
-        // 3. Build policy params
         let params = args_to_policy_params(&args);
+        let input = build_policy_input(action, user_did, space_key, params.as_ref());
 
-        // 4. Evaluate policy with snapshot
-        match self.evaluate_policy(action, user_did, space_key, params.as_ref(), resolved_remotes) {
-            PolicyOutcome::NeedsResolution(spaces) => {
-                // Queue the job
-                let job_id = self.next_job_id();
-                self.job_queue = self.job_queue.update(job_id, Job {
-                    id: job_id,
-                    user_did: user_did.to_string(),
-                    space_key: space_key.to_string(),
-                    args,
-                    arbiter_version: self.next_version(),
-                });
-                self.result = ArbiterResult::NeedsResolution {
-                    job_id,
-                    spaces,
-                };
-            }
-            PolicyOutcome::Denied => {
-                self.result = ArbiterResult::Err(ArbiterError {
-                    kind: ArbiterErrorKind::PermissionDenied,
-                    job_id: None,
-                });
-            }
-            PolicyOutcome::Allowed => {
-                self.execute_operation(user_did, space_key, args, resolved_remotes);
-            }
-            PolicyOutcome::Error(_e) => {
+        // 3. Get the policy source and build job context for suspension
+        let policy_source = match extract_policy(&self.config) {
+            Ok(s) => s,
+            Err(_) => {
                 self.result = ArbiterResult::Err(ArbiterError {
                     kind: ArbiterErrorKind::InvalidConfig,
                     job_id: None,
-                });
-            }
-        }
-    }
-
-    /// Provide resolved remote members for a queued job.
-    ///
-    /// Re-evaluates the policy with the updated resolved_remotes.
-    pub fn provide_resolved_remotes(
-        &mut self,
-        job_id: JobId,
-        resolved_remotes: &serde_json::Value,
-    ) {
-        let job = match self.job_queue.get(&job_id) {
-            Some(j) => j.clone(),
-            None => {
-                self.result = ArbiterResult::Err(ArbiterError {
-                    kind: ArbiterErrorKind::JobNotExists,
-                    job_id: Some(job_id),
                 });
                 return;
             }
         };
 
-        let action = args_to_action(&job.args);
+        // Build the job context (used if the VM suspends, returned if it completes)
+        let job_context = crate::policy_vm::JobContext {
+            user_did: user_did.to_string(),
+            space_key: space_key.to_string(),
+            args,
+        };
 
-        match self.evaluate_policy(
-            action,
-            &job.user_did,
-            &job.space_key,
-            args_to_policy_params(&job.args).as_ref(),
-            resolved_remotes,
-        ) {
-            PolicyOutcome::NeedsResolution(spaces) => {
-                // Still need more resolution
-                self.result = ArbiterResult::NeedsResolution {
+        // 4. Start evaluation in the VM pool
+        match pool.start_evaluation(policy_source, crate::policy_vm::POLICY_EXTENSIONS, &input, &self.spaces, Some(job_context)) {
+            VmResult::Completed(value, ctx) => {
+                let allowed = value.as_bool().copied().unwrap_or(false);
+                if allowed {
+                    // Use the returned context (which has the original args)
+                    match ctx {
+                        Some(ctx) => {
+                            self.execute_operation(&ctx.user_did, &ctx.space_key, ctx.args, pool);
+                        }
+                        None => {
+                            self.result = ArbiterResult::Err(ArbiterError {
+                                kind: ArbiterErrorKind::PolicyEvaluationError,
+                                job_id: None,
+                            });
+                        }
+                    }
+                } else {
+                    self.result = ArbiterResult::Err(ArbiterError {
+                        kind: ArbiterErrorKind::PermissionDenied,
+                        job_id: None,
+                    });
+                }
+            }
+            VmResult::Suspended { job_id, request } => {
+                self.result = ArbiterResult::Suspended {
                     job_id,
-                    spaces,
+                    request: SuspensionInfo::from(&request),
                 };
             }
-            PolicyOutcome::Denied => {
-                self.job_queue = self.job_queue.without(&job_id);
+            VmResult::Error(_e) => {
                 self.result = ArbiterResult::Err(ArbiterError {
-                    kind: ArbiterErrorKind::PermissionDenied,
-                    job_id: Some(job_id),
-                });
-            }
-            PolicyOutcome::Allowed => {
-                self.job_queue = self.job_queue.without(&job_id);
-                self.execute_operation(&job.user_did, &job.space_key, job.args, resolved_remotes);
-            }
-            PolicyOutcome::Error(_) => {
-                self.job_queue = self.job_queue.without(&job_id);
-                self.result = ArbiterResult::Err(ArbiterError {
-                    kind: ArbiterErrorKind::InvalidConfig,
-                    job_id: Some(job_id),
+                    kind: ArbiterErrorKind::PolicyEvaluationError,
+                    job_id: None,
                 });
             }
         }
     }
 
-    /// Timeout a queued job (remotes that didn't resolve).
-    pub fn timeout_job(&mut self, job_id: JobId) {
-        if !self.job_queue.contains_key(&job_id) {
-            self.result = ArbiterResult::Err(ArbiterError {
-                kind: ArbiterErrorKind::JobNotExists,
-                job_id: Some(job_id),
-            });
-            return;
+    /// Resume a suspended operation with resolved data.
+    ///
+    /// The caller must call this after resolving the `SuspensionInfo` from a
+    /// previous `Suspended` result, providing the resolved value (e.g., the
+    /// remote member list as a JSON value).
+    pub fn resume_operation(
+        &mut self,
+        job_id: JobId,
+        resolved_value: &serde_json::Value,
+        pool: &mut PolicyVmPool,
+    ) {
+        match pool.resume_evaluation(job_id, resolved_value) {
+            VmResult::Completed(value, context) => {
+                let allowed = value.as_bool().copied().unwrap_or(false);
+                if allowed {
+                    // Use the stored context from the pool
+                    match context {
+                        Some(ctx) => {
+                            self.execute_operation(&ctx.user_did, &ctx.space_key, ctx.args, pool);
+                        }
+                        None => {
+                            self.result = ArbiterResult::Err(ArbiterError {
+                                kind: ArbiterErrorKind::PolicyEvaluationError,
+                                job_id: Some(job_id),
+                            });
+                        }
+                    }
+                } else {
+                    pool.cancel(job_id);
+                    self.result = ArbiterResult::Err(ArbiterError {
+                        kind: ArbiterErrorKind::PermissionDenied,
+                        job_id: None,
+                    });
+                }
+            }
+            VmResult::Suspended { job_id: new_job_id, request } => {
+                self.result = ArbiterResult::Suspended {
+                    job_id: new_job_id,
+                    request: SuspensionInfo::from(&request),
+                };
+            }
+            VmResult::Error(_e) => {
+                pool.cancel(job_id);
+                self.result = ArbiterResult::Err(ArbiterError {
+                    kind: ArbiterErrorKind::PolicyEvaluationError,
+                    job_id: None,
+                });
+            }
         }
-
-        self.job_queue = self.job_queue.without(&job_id);
-        self.result = ArbiterResult::Finished(JobResult::Ok);
     }
 
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    /// Evaluate the policy with a snapshot of the current state.
-    fn evaluate_policy(
-        &self,
-        action: PolicyAction,
+    /// Execute the operation (mutate state). Assumes authorization is already done.
+    fn execute_operation(
+        &mut self,
         user_did: &str,
         space_key: &str,
-        params: Option<&PolicyParams>,
-        resolved_remotes: &serde_json::Value,
-    ) -> PolicyOutcome {
-        let policy_source = match extract_policy(&self.config) {
-            Ok(s) => s.to_string(),
-            Err(_) => return PolicyOutcome::Error("Invalid config".into()),
-        };
-
-        // Snapshot: clone is O(1) via im::HashMap structural sharing
-        let snapshot = Arc::new(self.spaces.clone());
-
-        let mut engine = match PolicyEngine::new(&policy_source, snapshot) {
-            Ok(e) => e,
-            Err(_) => return PolicyOutcome::Error("Invalid policy".into()),
-        };
-
-        // Check needs_resolution first
-        let needs = match engine.get_needs_resolution(user_did, space_key, resolved_remotes) {
-            Ok(n) => n,
-            Err(_) => return PolicyOutcome::Error("Policy eval error".into()),
-        };
-
-        if !needs.is_empty() {
-            let spaces: Vec<ResolutionEntry> = needs
-                .iter()
-                .filter_map(|v| {
-                    let obj = v.as_object()?;
-                    Some(ResolutionEntry {
-                        remote_arbiter_did: obj.get("remoteArbiterDid")?.as_str()?.to_string(),
-                        space_key: obj.get("spaceKey")?.as_str()?.to_string(),
-                    })
-                })
-                .collect();
-            return PolicyOutcome::NeedsResolution(spaces);
-        }
-
-        // Check allow
-        let allowed = match engine.evaluate(action, user_did, space_key, params, resolved_remotes) {
-            Ok(a) => a,
-            Err(_) => return PolicyOutcome::Error("Policy eval error".into()),
-        };
-
-        if allowed {
-            PolicyOutcome::Allowed
-        } else {
-            PolicyOutcome::Denied
-        }
-    }
-
-    /// Execute the operation (mutate state). Assumes authorization is already done.
-    fn execute_operation(&mut self, user_did: &str, space_key: &str, args: JobArgs, resolved_remotes: &serde_json::Value) {
+        args: JobArgs,
+        pool: &mut PolicyVmPool,
+    ) {
         match &args {
             JobArgs::ResolveMembers => {
-                // Policy already validated access. Return resolved members.
-                let snapshot = Arc::new(self.spaces.clone());
-                let policy = match extract_policy(&self.config) {
-                    Ok(s) => s.to_string(),
+                // Policy already validated access. Query resolved members from
+                // the policy using a fresh VM run in run-to-completion mode.
+                let action = PolicyAction::ResolveSpaceMembers;
+                let input = build_policy_input(action, user_did, space_key, None);
+                let policy_source = match extract_policy(&self.config) {
+                    Ok(s) => s,
                     Err(_) => {
                         self.result = ArbiterResult::Err(ArbiterError {
                             kind: ArbiterErrorKind::InvalidConfig,
@@ -430,23 +416,14 @@ impl Arbiter {
                         return;
                     }
                 };
-                let mut engine = match PolicyEngine::new(&policy, snapshot) {
-                    Ok(e) => e,
-                    Err(_) => {
-                        self.result = ArbiterResult::Err(ArbiterError {
-                            kind: ArbiterErrorKind::InvalidConfig,
-                            job_id: None,
-                        });
-                        return;
-                    }
-                };
-                match engine.get_resolved_members(user_did, space_key, resolved_remotes) {
+
+                match pool.query_resolved_members(policy_source, &input, &self.spaces) {
                     Ok(members) => {
                         self.result = ArbiterResult::Finished(JobResult::ResolvedMembersList(members));
                     }
                     Err(_) => {
                         self.result = ArbiterResult::Err(ArbiterError {
-                            kind: ArbiterErrorKind::PermissionDenied,
+                            kind: ArbiterErrorKind::PolicyEvaluationError,
                             job_id: None,
                         });
                     }
@@ -497,26 +474,6 @@ impl Arbiter {
     fn next_version(&self) -> ArbiterVersion {
         self.version.wrapping_add(1)
     }
-
-    fn next_job_id(&self) -> JobId {
-        // Simple: max existing + 1, or 1 if empty
-        self.job_queue.keys().max().copied().unwrap_or(0) + 1
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Policy evaluation outcomes
-// ---------------------------------------------------------------------------
-
-enum PolicyOutcome {
-    /// Remote spaces need to be resolved first.
-    NeedsResolution(Vec<ResolutionEntry>),
-    /// Operation is denied by policy.
-    Denied,
-    /// Operation is allowed.
-    Allowed,
-    /// Policy evaluation error.
-    Error(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -524,7 +481,7 @@ enum PolicyOutcome {
 // ---------------------------------------------------------------------------
 
 /// Extract the Rego policy source from the arbiter config.
-fn extract_policy(config: &ArbiterConfig) -> Result<&str, PolicyError> {
+pub fn extract_policy(config: &ArbiterConfig) -> Result<&str, PolicyError> {
     let obj = config
         .as_object()
         .ok_or_else(|| PolicyError::EvalError("Config must be an object".into()))?;
@@ -534,14 +491,37 @@ fn extract_policy(config: &ArbiterConfig) -> Result<&str, PolicyError> {
         return Ok(policy);
     }
 
-    // Try $type-specific extraction
-    if let Some(policy) = obj.get("policy").and_then(|v| v.as_str()) {
-        return Ok(policy);
-    }
-
     Err(PolicyError::EvalError(
         "Config missing 'policy' field".into(),
     ))
+}
+
+/// Build the policy input JSON from action, requester, and params.
+fn build_policy_input(
+    action: PolicyAction,
+    requester: &str,
+    space_key: &str,
+    params: Option<&PolicyParams>,
+) -> serde_json::Value {
+    let mut input = serde_json::json!({
+        "requester": requester,
+        "action": action.as_str(),
+        "resource": {
+            "arbiterDid": "",
+            "spaceKey": space_key,
+        },
+    });
+
+    if let Some(p) = params {
+        if let Some(tm) = &p.target_member {
+            input["params"]["targetMember"] = tm.clone();
+        }
+        if let Some(ta) = &p.target_access {
+            input["params"]["targetAccess"] = ta.clone();
+        }
+    }
+
+    input
 }
 
 /// Validate the operation before policy evaluation (structural checks).
@@ -638,6 +618,7 @@ impl Default for ServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy_vm::PolicyVmPool;
 
     fn make_default_config() -> serde_json::Value {
         serde_json::json!({
@@ -669,6 +650,7 @@ mod tests {
             config,
         )
         .unwrap();
+        let mut pool = PolicyVmPool::new();
 
         arbiter.process_operation(
             "did:plc:alice",
@@ -681,7 +663,7 @@ mod tests {
                     "publicMembers": false,
                 }),
             },
-            &serde_json::json!({}),
+            &mut pool,
         );
 
         match &arbiter.result {
@@ -695,39 +677,12 @@ mod tests {
     #[test]
     fn test_non_owner_cannot_create_space() {
         let config = make_default_config();
-        let mut arbiter = Arbiter::new(
-            "did:plc:my-arb".into(),
-            "did:plc:alice".into(),
-            config,
-        )
-        .unwrap();
-
-        // Alice created with $admin with 'ReadMemberList' instead... actually
-        // for this test let's just check the policy denies a stranger creating a space.
-
-        // Add a non-admin space
-        arbiter.process_operation(
-            "did:plc:alice",
-            "my-space",
-            JobArgs::CreateSpace {
-                space_type: lexicon::CONFIG_SPACE.to_string(),
-                config: serde_json::json!({
-                    "$type": lexicon::CONFIG_SPACE,
-                    "publicRecords": false,
-                    "publicMembers": false,
-                }),
-            },
-            &serde_json::json!({}),
-        );
-
-        // Now add $admin space with only ReadMemberList for stranger
-        // Actually, let's just test that someone NOT in the admin list gets denied.
-        // In our setup, any stranger not resolved gets no access, so they can't create spaces.
+        let mut pool = PolicyVmPool::new();
 
         let mut arb2 = Arbiter::new(
             "did:plc:other".into(),
             "did:plc:alice".into(),
-            make_default_config(),
+            config,
         )
         .unwrap();
 
@@ -740,7 +695,7 @@ mod tests {
                     "$type": lexicon::CONFIG_SPACE,
                 }),
             },
-            &serde_json::json!({}),
+            &mut pool,
         );
 
         match &arb2.result {
@@ -760,12 +715,13 @@ mod tests {
             config,
         )
         .unwrap();
+        let mut pool = PolicyVmPool::new();
 
         arbiter.process_operation(
             "did:plc:alice",
             ADMIN_SPACE_KEY,
             JobArgs::DeleteArbiter,
-            &serde_json::json!({}),
+            &mut pool,
         );
 
         match &arbiter.result {
@@ -783,12 +739,13 @@ mod tests {
             config,
         )
         .unwrap();
+        let mut pool = PolicyVmPool::new();
 
         arbiter.process_operation(
             "did:plc:stranger",
             ADMIN_SPACE_KEY,
             JobArgs::ResolveMembers,
-            &serde_json::json!({}),
+            &mut pool,
         );
 
         match &arbiter.result {

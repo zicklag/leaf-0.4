@@ -1,22 +1,27 @@
 //! Integration test harness for arbiter-core2.
 //!
 //! Simulates a multi-arbiter environment with auto-resolution of remote
-//! delegations, mirroring the browser simulator's orchestrator.
+//! delegations using the suspendable RegoVM.
 
 use arbiter_core2::core::*;
+use arbiter_core2::policy_vm::PolicyVmPool;
 use serde_json::json;
 
 /// All-purpose test harness wrapping a multi-arbiter server.
 pub struct Harness {
     pub state: ServerState,
-    next_job_id: JobId,
+    pub vm_pool: PolicyVmPool,
+    #[allow(dead_code)]
+    /// Map from job_id to the arbiter DID that owns it.
+    job_owners: std::collections::HashMap<JobId, String>,
 }
 
 impl Harness {
     pub fn new() -> Self {
         Self {
             state: ServerState::default(),
-            next_job_id: 1,
+            vm_pool: PolicyVmPool::new(),
+            job_owners: std::collections::HashMap::new(),
         }
     }
 
@@ -53,53 +58,66 @@ impl Harness {
         space_key: &str,
         args: JobArgs,
     ) -> ProcessResult {
-        let mut resolved_remotes = json!({});
+        let current_arbiter = self.get_arbiter(arbiter_did);
 
-        for _depth in 0..10 {
-            let mut arbiter = self.get_arbiter(arbiter_did);
-            arbiter.process_operation(user_did, space_key, args.clone(), &resolved_remotes);
+        // Start the operation
+        let (result, should_delete) = self.process_inner(current_arbiter, user_did, space_key, args);
 
-            match &arbiter.result {
-                ArbiterResult::NeedsResolution { spaces, .. } => {
-                    // Resolve each remote space
-                    for entry in spaces {
-                        let remote_key =
-                            format!("{}|{}", entry.remote_arbiter_did, entry.space_key);
-                        if resolved_remotes.get(&remote_key).is_some() {
-                            continue;
+        if should_delete {
+            self.state.arbiters = self.state.arbiters.without(arbiter_did);
+        } else {
+            // result carries the final arbiter state
+        }
+
+        ProcessResult {
+            result,
+            state: self.state.clone(),
+        }
+    }
+
+    /// Inner loop: process an operation, auto-resolving remote spaces.
+    /// Returns (final_result, should_delete).
+    fn process_inner(
+        &mut self,
+        mut current_arbiter: Arbiter,
+        user_did: &str,
+        space_key: &str,
+        args: JobArgs,
+    ) -> (ArbiterResult, bool) {
+        // Capture the calling arbiter's DID before it potentially gets moved
+        let calling_arbiter_did = current_arbiter.did.clone();
+
+        current_arbiter.process_operation(user_did, space_key, args, &mut self.vm_pool);
+
+        loop {
+            let next = current_arbiter.result.clone();
+            match next {
+                ArbiterResult::Suspended { job_id, request } => {
+                    let resolved = match request.kind {
+                        SuspensionKind::ResolveRemote => {
+                            let remote_did = request.remote_arbiter_did
+                                .expect("ResolveRemote missing remote_arbiter_did");
+                            let remote_key = request.space_key
+                                .expect("ResolveRemote missing space_key");
+                            // Resolve as the calling arbiter's DID (server-to-server)
+                            self.resolve_remote_members(&remote_did, &calling_arbiter_did, &remote_key)
                         }
-                        let members = self.resolve_remote_members(
-                            &entry.remote_arbiter_did,
-                            arbiter_did,
-                            &entry.space_key,
-                        );
-                        let arr: serde_json::Value =
-                            serde_json::to_value(members).unwrap_or(json!([]));
-                        resolved_remotes[&remote_key] = arr;
-                    }
-                    // Apply the arbiter state (job was queued)
-                    self.set_arbiter(arbiter_did, arbiter);
+                    };
+
+                    current_arbiter.resume_operation(job_id, &resolved, &mut self.vm_pool);
+                }
+                ArbiterResult::Deleted => {
+                    return (current_arbiter.result, true);
                 }
                 _ => {
-                    let result = ProcessResult {
-                        result: arbiter.result.clone(),
-                        state: self.state.clone(),
-                    };
-                    // If deleted, remove from state
-                    match &arbiter.result {
-                        ArbiterResult::Deleted => {
-                            self.state.arbiters = self.state.arbiters.without(arbiter_did);
-                        }
-                        _ => {
-                            self.set_arbiter(arbiter_did, arbiter);
-                        }
-                    }
-                    return result;
+                    self.state.arbiters = self.state.arbiters.update(
+                        current_arbiter.did.clone(),
+                        current_arbiter,
+                    );
+                    return (next, false);
                 }
             }
         }
-
-        panic!("Remote resolution depth limit exceeded for {arbiter_did}/{space_key}")
     }
 
     /// Assert an operation succeeds.
@@ -115,7 +133,7 @@ impl Harness {
             ArbiterResult::Finished(JobResult::Ok)
             | ArbiterResult::Ok
             | ArbiterResult::Finished(JobResult::ResolvedMembersList(_)) => {}
-            ArbiterResult::Deleted => {} // also OK for delete operations
+            ArbiterResult::Deleted => {}
             other => panic!(
                 "Expected success for {user_did}@{arbiter_did}/{space_key}, got {other:?}"
             ),
@@ -197,7 +215,7 @@ impl Harness {
         arbiter_did: &str,
         user_did: &str,
         space_key: &str,
-        expected: &[(&str, &str)], // (did, access_level)
+        expected: &[(&str, &str)],
     ) {
         let members = self.resolved_members(arbiter_did, user_did, space_key);
         for (expected_did, expected_level) in expected {
@@ -244,16 +262,12 @@ impl Harness {
             .unwrap_or_else(|| panic!("Arbiter {did} not found"))
     }
 
-    fn set_arbiter(&mut self, did: &str, arbiter: Arbiter) {
-        self.state.arbiters = self.state.arbiters.update(did.to_string(), arbiter);
-    }
-
     fn resolve_remote_members(
         &mut self,
         arbiter_did: &str,
         as_arbiter: &str,
         space_key: &str,
-    ) -> Vec<serde_json::Value> {
+    ) -> serde_json::Value {
         // Resolve as the calling arbiter — the remote arbiter checks permissions.
         let r = self.process(
             arbiter_did,
@@ -261,14 +275,14 @@ impl Harness {
             space_key,
             JobArgs::ResolveMembers,
         );
+        // Return JUST the members array (the policy expects to iterate over this)
         match r.result {
             ArbiterResult::Finished(JobResult::ResolvedMembersList(response)) => {
                 response.get("members")
-                    .and_then(|m| m.as_array())
                     .cloned()
-                    .unwrap_or_default()
+                    .unwrap_or(json!([]))
             }
-            _ => vec![],
+            _ => json!([]),
         }
     }
 

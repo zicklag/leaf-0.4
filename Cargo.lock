@@ -101,9 +101,9 @@ dependencies = [
 name = "arbiter-core2"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "im",
+ "indexmap 2.13.1",
  "regorus",
  "serde",
  "serde-wasm-bindgen",

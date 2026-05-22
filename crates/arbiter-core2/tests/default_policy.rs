@@ -233,9 +233,7 @@ fn public_members_allows_non_member_access() {
     });
     h.assert_ok("org", "alice", "team", add_member(member_did("bob"), "IsMember"));
 
-    // Alice is in $admin as Owner, so she's in team via delegation.
-    // But the key test: can a non-member ("stranger") read the member list
-    // because publicMembers is true?
+    // A non-member can read the public member list
     let members = h.resolved_members("org", "stranger", "team");
     assert!(!members.is_empty(), "Public space should be readable by anyone");
     assert_member_exists(&members, "bob", "IsMember");
@@ -343,7 +341,7 @@ fn allow_all_policy() {
         import rego.v1
         default allow := true
         resolved_members contains {"did": input.requester, "access": {"level": "Owner"}} if { true }
-        needs_resolution contains entry if { false }
+        missing_spaces contains false if { false }
     "#;
 
     h.create_arbiter("org", "alice", allow_all);
@@ -364,7 +362,7 @@ fn deny_all_policy() {
         import rego.v1
         default allow := false
         resolved_members contains {"did": "noone", "access": {"level": "ReadMemberList"}} if { false }
-        needs_resolution contains entry if { false }
+        missing_spaces contains false if { false }
     "#;
 
     h.create_arbiter("org", "alice", deny_all);

@@ -1,4 +1,12 @@
 # Default access-level authorization policy for the Muni Town Arbiter.
+#
+# This policy uses:
+#   - data.arbiter.spaces[space_key]  — local arbiter state (frozen snapshot)
+#   - resolve_remote(arbiter_did, space_key)  — async host builtin for remote spaces
+#
+# The VM may suspend on resolve_remote calls. The host fetches the data and
+# resumes the VM transparently. The policy does not distinguish between local
+# and remote resolution at the rule level.
 
 package arbiter
 
@@ -32,12 +40,26 @@ member_rank(member) := rank if {
 }
 
 # ---------------------------------------------------------------------------
+# Space data access helpers
+# ---------------------------------------------------------------------------
+
+# Get members of a space from the frozen data snapshot.
+space_members(space_key) := members if {
+    members := data.arbiter.spaces[space_key].members
+}
+
+# Get config of a space from the frozen data snapshot.
+space_config(space_key) := config if {
+    config := data.arbiter.spaces[space_key].config
+}
+
+# ---------------------------------------------------------------------------
 # Resolved members (raw, may contain duplicates via different delegation paths)
 # ---------------------------------------------------------------------------
 
 # Direct member in the target space
 resolved_members_raw contains member if {
-    raw := arbiter.get_space_members(input.resource.spaceKey)
+    raw := space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member.tag == "MemberDid"
     member := {"did": entry.member.value, "access": entry.access, "via": input.resource.spaceKey}
@@ -46,7 +68,7 @@ resolved_members_raw contains member if {
 # Direct member inherited from $admin space
 resolved_members_raw contains member if {
     input.resource.spaceKey != "$admin"
-    raw := arbiter.get_space_members("$admin")
+    raw := space_members("$admin")
     entry := raw[_]
     entry.member.tag == "MemberDid"
     member := {"did": entry.member.value, "access": entry.access, "via": "$admin"}
@@ -54,11 +76,11 @@ resolved_members_raw contains member if {
 
 # Delegated from a local space member in the target space
 resolved_members_raw contains member if {
-    raw := arbiter.get_space_members(input.resource.spaceKey)
+    raw := space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member.tag == "MemberLocalSpace"
     child_key := entry.member.value
-    child_raw := arbiter.get_space_members(child_key)
+    child_raw := space_members(child_key)
     child_entry := child_raw[_]
     child_entry.member.tag == "MemberDid"
     member := {
@@ -71,11 +93,11 @@ resolved_members_raw contains member if {
 # Delegated from a local space member in the admin space
 resolved_members_raw contains member if {
     input.resource.spaceKey != "$admin"
-    raw := arbiter.get_space_members("$admin")
+    raw := space_members("$admin")
     entry := raw[_]
     entry.member.tag == "MemberLocalSpace"
     child_key := entry.member.value
-    child_raw := arbiter.get_space_members(child_key)
+    child_raw := space_members(child_key)
     child_entry := child_raw[_]
     child_entry.member.tag == "MemberDid"
     member := {
@@ -87,32 +109,35 @@ resolved_members_raw contains member if {
 
 # Delegated from a resolved remote space in the target space
 resolved_members_raw contains member if {
-    raw := arbiter.get_space_members(input.resource.spaceKey)
+    raw := space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member.tag == "MemberRemoteSpace"
-    remote_id := concat("|", [entry.member.value.arbiterDid, entry.member.value.spaceKey])
-    resolved := input.resolved_remotes[remote_id]
+    arbiter_did := entry.member.value.arbiterDid
+    space_key := entry.member.value.spaceKey
+    # This resolves asynchronously via __builtin_host_await
+    resolved := resolve_remote(arbiter_did, space_key)
     remote_entry := resolved[_]
     member := {
         "did": remote_entry.did,
         "access": min_access(remote_entry.access, entry.access),
-        "via": remote_id,
+        "via": concat("|", [arbiter_did, space_key]),
     }
 }
 
 # Delegated from a resolved remote space in the admin space
 resolved_members_raw contains member if {
     input.resource.spaceKey != "$admin"
-    raw := arbiter.get_space_members("$admin")
+    raw := space_members("$admin")
     entry := raw[_]
     entry.member.tag == "MemberRemoteSpace"
-    remote_id := concat("|", [entry.member.value.arbiterDid, entry.member.value.spaceKey])
-    resolved := input.resolved_remotes[remote_id]
+    arbiter_did := entry.member.value.arbiterDid
+    space_key := entry.member.value.spaceKey
+    resolved := resolve_remote(arbiter_did, space_key)
     remote_entry := resolved[_]
     member := {
         "did": remote_entry.did,
         "access": min_access(remote_entry.access, entry.access),
-        "via": remote_id,
+        "via": concat("|", [arbiter_did, space_key]),
     }
 }
 
@@ -164,39 +189,17 @@ requester_rank := rank if {
 }
 
 # ---------------------------------------------------------------------------
-# Remote spaces needing async resolution
-# ---------------------------------------------------------------------------
-
-needs_resolution contains entry if {
-    raw := arbiter.get_space_members(input.resource.spaceKey)
-    member := raw[_]
-    member.member.tag == "MemberRemoteSpace"
-    remote_id := concat("|", [member.member.value.arbiterDid, member.member.value.spaceKey])
-    not input.resolved_remotes[remote_id]
-    entry := {"remoteArbiterDid": member.member.value.arbiterDid, "spaceKey": member.member.value.spaceKey}
-}
-
-needs_resolution contains entry if {
-    input.resource.spaceKey != "$admin"
-    raw := arbiter.get_space_members("$admin")
-    member := raw[_]
-    member.member.tag == "MemberRemoteSpace"
-    remote_id := concat("|", [member.member.value.arbiterDid, member.member.value.spaceKey])
-    not input.resolved_remotes[remote_id]
-    entry := {"remoteArbiterDid": member.member.value.arbiterDid, "spaceKey": member.member.value.spaceKey}
-}
-
-# ---------------------------------------------------------------------------
-# Missing spaces: remote spaces that were expected but returned empty
+# Missing spaces: remote spaces that resolved to empty (no members)
 # ---------------------------------------------------------------------------
 
 missing_spaces contains entry if {
-    raw := arbiter.get_space_members(input.resource.spaceKey)
+    raw := space_members(input.resource.spaceKey)
     member := raw[_]
     member.member.tag == "MemberRemoteSpace"
-    remote_id := concat("|", [member.member.value.arbiterDid, member.member.value.spaceKey])
-    remote_data := input.resolved_remotes[remote_id]
-    count(remote_data) == 0
+    arbiter_did := member.member.value.arbiterDid
+    space_key := member.member.value.spaceKey
+    resolved := resolve_remote(arbiter_did, space_key)
+    count(resolved) == 0
     entry := {
         "space": member.member.value,
         "access": member.access,
@@ -205,12 +208,13 @@ missing_spaces contains entry if {
 
 missing_spaces contains entry if {
     input.resource.spaceKey != "$admin"
-    raw := arbiter.get_space_members("$admin")
+    raw := space_members("$admin")
     member := raw[_]
     member.member.tag == "MemberRemoteSpace"
-    remote_id := concat("|", [member.member.value.arbiterDid, member.member.value.spaceKey])
-    remote_data := input.resolved_remotes[remote_id]
-    count(remote_data) == 0
+    arbiter_did := member.member.value.arbiterDid
+    space_key := member.member.value.spaceKey
+    resolved := resolve_remote(arbiter_did, space_key)
+    count(resolved) == 0
     entry := {
         "space": member.member.value,
         "access": member.access,
@@ -222,13 +226,13 @@ missing_spaces contains entry if {
 # ---------------------------------------------------------------------------
 
 target_exists_in_raw if {
-    raw := arbiter.get_space_members(input.resource.spaceKey)
+    raw := space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member == input.params.targetMember
 }
 
 raw_target_rank := rank if {
-    raw := arbiter.get_space_members(input.resource.spaceKey)
+    raw := space_members(input.resource.spaceKey)
     entry := raw[_]
     entry.member == input.params.targetMember
     rank := member_rank(entry)
@@ -245,7 +249,7 @@ default allow := false
 # Public member list: anyone can read
 allow if {
     input.action in {"resolveSpaceMembers", "getSpaceMembers"}
-    config := arbiter.get_space_config(input.resource.spaceKey)
+    config := space_config(input.resource.spaceKey)
     config.publicMembers == true
 }
 
@@ -263,7 +267,7 @@ allow if {
 # Public records: anyone can read space config
 allow if {
     input.action == "getSpaceConfig"
-    config := arbiter.get_space_config(input.resource.spaceKey)
+    config := space_config(input.resource.spaceKey)
     config.publicRecords == true
 }
 
@@ -320,6 +324,6 @@ allow if {
 allow if {
     input.action == "deleteArbiter"
     requester_rank >= access_rank("Owner")
-    admin_members := arbiter.get_space_members("$admin")
+    admin_members := space_members("$admin")
     count(admin_members) == 1
 }
