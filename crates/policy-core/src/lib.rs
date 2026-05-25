@@ -199,8 +199,9 @@ impl VmSession {
       };
 
       if let Some(cached) = self.response_cache.get(&key).cloned() {
-        match self.resume_one_step(&cached)? {
-          VmResult::Completed(_) => return Ok(VmResult::Completed(cached)),
+        let result = self.resume_one_step(&cached)?;
+        match result {
+          VmResult::Completed(_) => return Ok(result),
           VmResult::Suspended(_) => continue,
         }
       } else {

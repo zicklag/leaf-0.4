@@ -1199,11 +1199,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2298,6 +2300,18 @@ version = "0.1.0"
 dependencies = [
  "regorus",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "policy-core-wasm"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.2",
+ "policy-core",
+ "regorus",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
 ]
 
 [[package]]
