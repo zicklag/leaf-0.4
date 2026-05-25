@@ -24,11 +24,6 @@ pub mod lexicon {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyAction {
     ResolveSpaceMembers,
-    GetSpaceMembers,
-    ListSpaces,
-    GetSpaceConfig,
-    GetArbiterConfig,
-    SetArbiterConfig,
     CreateSpace,
     SetSpaceConfig,
     DeleteSpace,
@@ -41,11 +36,6 @@ impl PolicyAction {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ResolveSpaceMembers => "resolveSpaceMembers",
-            Self::GetSpaceMembers => "getSpaceMembers",
-            Self::ListSpaces => "listSpaces",
-            Self::GetSpaceConfig => "getSpaceConfig",
-            Self::GetArbiterConfig => "getArbiterConfig",
-            Self::SetArbiterConfig => "setArbiterConfig",
             Self::CreateSpace => "createSpace",
             Self::SetSpaceConfig => "setSpaceConfig",
             Self::DeleteSpace => "deleteSpace",
@@ -113,13 +103,6 @@ pub fn value_to_regorus(val: &serde_json::Value) -> Value {
             Value::from(map)
         }
     }
-}
-
-/// Convert a regorus::Value back to a serde_json::Value (list).
-#[allow(dead_code)]
-pub fn value_from_regorus(val: &Value) -> Vec<serde_json::Value> {
-    let json_str = serde_json::to_string(val).unwrap_or_default();
-    serde_json::from_str(&json_str).unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------

@@ -100,8 +100,15 @@ impl PolicyVmPool {
             next_job_id: 1,
         }
     }
+}
 
-    /// Compile the policy and start evaluation in a new VM.
+impl Default for PolicyVmPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PolicyVmPool {
     ///
     /// Returns the result immediately if the VM completes without suspending,
     /// or returns `VmResult::Suspended` with a `job_id` if it needs host data.
@@ -208,7 +215,7 @@ impl PolicyVmPool {
                         VmResult::Completed(result, context)
                     }
                     ExecutionState::Suspended { reason, .. } => {
-                        let request = match host_request_from_suspend(&reason) {
+                        let request = match host_request_from_suspend(reason) {
                             Some(r) => r,
                             None => {
                                 self.pending.remove(&job_id);
@@ -275,7 +282,7 @@ impl PolicyVmPool {
             // Push a response for each resolved remote
             // We don't know the order the policy will request them, but since
             // the policy evaluates deterministically, the order matches.
-            for (_remote_id, data) in &self.resolved_remotes {
+            for data in self.resolved_remotes.values() {
                 let data_val = value_to_regorus(data);
                 queue.push_back(data_val);
             }
@@ -391,7 +398,7 @@ impl PolicyVmPool {
         // Create VM and load program
         let mut vm = RegoVM::new();
         // Setting program before set_data so check_rule_data_conflicts can work
-        vm.load_program(program.clone());
+        vm.load_program(program);
         vm.set_data(value_to_regorus(&data))
             .map_err(|e| format!("Failed to set VM data: {e}"))?;
         vm.set_input(value_to_regorus(input));
@@ -422,10 +429,7 @@ impl PolicyVmPool {
 
                 self.pending.insert(
                     job_id,
-                    PendingVm {
-                        vm,
-                        context,
-                    },
+                    PendingVm { vm, context },
                 );
 
                 VmResult::Suspended { job_id, request }

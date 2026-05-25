@@ -168,16 +168,12 @@ impl Space {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ArbiterErrorKind {
-    JobNotExists,
     SpaceAlreadyExists,
     SpaceNotExists,
     PermissionDenied,
     CannotDeleteAdminSpace,
     ArbiterDeletionMustSpecifyAdminSpace,
-    OnlyLastOwnerCanDeleteArbiter,
     InvalidConfig,
-    UnsupportedConfigLexicon,
-    ArbiterAlreadyExists,
     PolicyEvaluationError,
 }
 
@@ -228,7 +224,7 @@ impl Arbiter {
     /// The config must contain a valid Rego policy at `config.policy`.
     pub fn new(did: Did, owner_did: Did, config: ArbiterConfig) -> Result<Self, PolicyError> {
         // Validate the config has a valid policy
-        let _policy = extract_policy(&config)?;
+        extract_policy(&config)?;
         // Quick validation that the policy parses
         validate_policy(extract_policy(&config)?)?;
 
@@ -301,9 +297,7 @@ impl Arbiter {
         // 4. Start evaluation in the VM pool
         match pool.start_evaluation(policy_source, crate::policy_vm::POLICY_EXTENSIONS, &input, &self.spaces, Some(job_context)) {
             VmResult::Completed(value, ctx) => {
-                let allowed = value.as_bool().copied().unwrap_or(false);
-                if allowed {
-                    // Use the returned context (which has the original args)
+                if value.as_bool().copied().unwrap_or(false) {
                     match ctx {
                         Some(ctx) => {
                             self.execute_operation(&ctx.user_did, &ctx.space_key, ctx.args, pool);
@@ -350,19 +344,14 @@ impl Arbiter {
     ) {
         match pool.resume_evaluation(job_id, resolved_value) {
             VmResult::Completed(value, context) => {
-                let allowed = value.as_bool().copied().unwrap_or(false);
-                if allowed {
-                    // Use the stored context from the pool
-                    match context {
-                        Some(ctx) => {
-                            self.execute_operation(&ctx.user_did, &ctx.space_key, ctx.args, pool);
-                        }
-                        None => {
-                            self.result = ArbiterResult::Err(ArbiterError {
-                                kind: ArbiterErrorKind::PolicyEvaluationError,
-                                job_id: Some(job_id),
-                            });
-                        }
+                if value.as_bool().copied().unwrap_or(false) {
+                    if let Some(ctx) = context {
+                        self.execute_operation(&ctx.user_did, &ctx.space_key, ctx.args, pool);
+                    } else {
+                        self.result = ArbiterResult::Err(ArbiterError {
+                            kind: ArbiterErrorKind::PolicyEvaluationError,
+                            job_id: Some(job_id),
+                        });
                     }
                 } else {
                     pool.cancel(job_id);
@@ -526,37 +515,53 @@ fn build_policy_input(
 
 /// Validate the operation before policy evaluation (structural checks).
 fn validate_operation(arbiter: &Arbiter, space_key: &str, args: &JobArgs) -> Option<ArbiterError> {
-    let err = |kind: ArbiterErrorKind| -> Option<ArbiterError> {
-        Some(ArbiterError { kind, job_id: None })
-    };
-
     match args {
         JobArgs::ResolveMembers => {
             if !arbiter.spaces.contains_key(space_key) {
-                return err(ArbiterErrorKind::SpaceNotExists);
+                return Some(ArbiterError {
+                    kind: ArbiterErrorKind::SpaceNotExists,
+                    job_id: None,
+                });
             }
         }
         JobArgs::CreateSpace { .. } => {
             if arbiter.spaces.contains_key(space_key) {
-                return err(ArbiterErrorKind::SpaceAlreadyExists);
+                return Some(ArbiterError {
+                    kind: ArbiterErrorKind::SpaceAlreadyExists,
+                    job_id: None,
+                });
             }
         }
-        JobArgs::SetSpaceConfig { .. } | JobArgs::SetSpaceMemberAccess { .. } | JobArgs::RemoveSpaceMember { .. } => {
+        JobArgs::SetSpaceConfig { .. }
+        | JobArgs::SetSpaceMemberAccess { .. }
+        | JobArgs::RemoveSpaceMember { .. } => {
             if !arbiter.spaces.contains_key(space_key) {
-                return err(ArbiterErrorKind::SpaceNotExists);
+                return Some(ArbiterError {
+                    kind: ArbiterErrorKind::SpaceNotExists,
+                    job_id: None,
+                });
             }
         }
         JobArgs::DeleteSpace => {
             if space_key == ADMIN_SPACE_KEY {
-                return err(ArbiterErrorKind::CannotDeleteAdminSpace);
+                return Some(ArbiterError {
+                    kind: ArbiterErrorKind::CannotDeleteAdminSpace,
+                    job_id: None,
+                });
             }
             if !arbiter.spaces.contains_key(space_key) {
-                return err(ArbiterErrorKind::SpaceNotExists);
+                return Some(ArbiterError {
+                    kind: ArbiterErrorKind::SpaceNotExists,
+                    job_id: None,
+                });
             }
         }
         JobArgs::DeleteArbiter => {
             if space_key != ADMIN_SPACE_KEY {
-                return err(ArbiterErrorKind::ArbiterDeletionMustSpecifyAdminSpace);
+                return Some(ArbiterError {
+                    kind: ArbiterErrorKind::ArbiterDeletionMustSpecifyAdminSpace,
+                    job_id: None,
+                });
             }
         }
     }

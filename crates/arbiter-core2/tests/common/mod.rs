@@ -71,7 +71,6 @@ impl Harness {
 
         ProcessResult {
             result,
-            state: self.state.clone(),
         }
     }
 
@@ -162,94 +161,6 @@ impl Harness {
         }
     }
 
-    /// Assert an operation fails with a specific error.
-    pub fn assert_err(
-        &mut self,
-        arbiter_did: &str,
-        user_did: &str,
-        space_key: &str,
-        args: JobArgs,
-        expected: ArbiterErrorKind,
-    ) {
-        let r = self.process(arbiter_did, user_did, space_key, args);
-        match &r.result {
-            ArbiterResult::Err(e) => {
-                assert!(
-                    std::mem::discriminant(&e.kind) == std::mem::discriminant(&expected),
-                    "Expected {expected:?}, got {e:?}"
-                );
-            }
-            other => panic!("Expected error for {user_did}@{arbiter_did}/{space_key}, got {other:?}"),
-        }
-    }
-
-    /// Get the resolved members for a space (with auto-resolution).
-    pub fn resolved_members(
-        &mut self,
-        arbiter_did: &str,
-        user_did: &str,
-        space_key: &str,
-    ) -> Vec<serde_json::Value> {
-        let r = self.process(
-            arbiter_did,
-            user_did,
-            space_key,
-            JobArgs::ResolveMembers,
-        );
-        match &r.result {
-            ArbiterResult::Finished(JobResult::ResolvedMembersList(response)) => {
-                response.get("members")
-                    .and_then(|m| m.as_array())
-                    .cloned()
-                    .unwrap_or_default()
-            }
-            other => panic!(
-                "Expected ResolvedMembersList for {user_did}@{arbiter_did}/{space_key}, got {other:?}"
-            ),
-        }
-    }
-
-    /// Assert the resolved members for a space contain specific DIDs with specific access.
-    pub fn assert_member(
-        &mut self,
-        arbiter_did: &str,
-        user_did: &str,
-        space_key: &str,
-        expected: &[(&str, &str)],
-    ) {
-        let members = self.resolved_members(arbiter_did, user_did, space_key);
-        for (expected_did, expected_level) in expected {
-            let found = members.iter().find(|m| {
-                m.get("did").and_then(|v| v.as_str()) == Some(*expected_did)
-            });
-            assert!(
-                found.is_some(),
-                "Member {expected_did} not found in resolved members for {arbiter_did}/{space_key}"
-            );
-            let level = found
-                .and_then(|m| m.get("access"))
-                .and_then(|a| a.get("level"))
-                .and_then(|v| v.as_str());
-            assert_eq!(
-                level,
-                Some(*expected_level),
-                "Member {expected_did} in {arbiter_did}/{space_key}: expected access {expected_level}, got {level:?}"
-            );
-        }
-    }
-
-    /// Assert that a DID is NOT in the resolved members.
-    pub fn assert_no_member(&mut self, arbiter_did: &str, user_did: &str, space_key: &str, absent_did: &str) {
-        let members = self.resolved_members(arbiter_did, user_did, space_key);
-        let found = members.iter().any(|m| {
-            m.get("did").and_then(|v| v.as_str()) == Some(absent_did)
-        });
-        assert!(
-            !found,
-            "Member {absent_did} should NOT be in resolved members for {arbiter_did}/{space_key}"
-        );
-    }
-
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -286,10 +197,32 @@ impl Harness {
         }
     }
 
-    /// Get the version of an arbiter (for concurrency testing).
-    pub fn version(&self, arbiter_did: &str) -> ArbiterVersion {
-        self.get_arbiter(arbiter_did).version
+    /// Get the resolved members for a space (with auto-resolution).
+    pub fn resolved_members(
+        &mut self,
+        arbiter_did: &str,
+        user_did: &str,
+        space_key: &str,
+    ) -> Vec<serde_json::Value> {
+        let r = self.process(
+            arbiter_did,
+            user_did,
+            space_key,
+            JobArgs::ResolveMembers,
+        );
+        match &r.result {
+            ArbiterResult::Finished(JobResult::ResolvedMembersList(response)) => {
+                response.get("members")
+                    .and_then(|m| m.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+            }
+            other => panic!(
+                "Expected ResolvedMembersList for {user_did}@{arbiter_did}/{space_key}, got {other:?}"
+            ),
+        }
     }
+
 }
 
 impl Default for Harness {
@@ -302,7 +235,6 @@ impl Default for Harness {
 #[derive(Debug)]
 pub struct ProcessResult {
     pub result: ArbiterResult,
-    pub state: ServerState,
 }
 
 // -----------------------------------------------------------------------
