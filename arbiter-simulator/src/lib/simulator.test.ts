@@ -717,6 +717,57 @@ describe('access-levels policy', () => {
       const members = await h.resolvedMembers('org', 'alice', 'team');
       assertMemberExists(members, 'dave', 'IsMember');
     });
+
+    it('remote arbiter denies unauthorised caller', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      h.createDefaultArbiter('partner', 'carol');
+
+      // Partner creates a restricted space (not public, no org in members)
+      await h.assertOk('partner', 'carol', 'restricted', 'createSpace');
+      await h.assertOk('partner', 'carol', 'restricted', 'setSpaceMemberAccess', {
+        memberDid: 'dave',
+        access: access('Owner'),
+      });
+
+      // org tries to reference the restricted space
+      await h.assertOk('org', 'alice', 'team', 'createSpace');
+      await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
+        memberDid: 'partner|restricted',
+        access: access('IsMember'),
+      });
+
+      // The remote arbiter should deny org's request — dave should NOT appear
+      const members = await h.resolvedMembers('org', 'alice', 'team');
+      expect(members.some((m) => m.did === 'dave')).toBe(false);
+    });
+
+    it('remote arbiter grants caller via member access', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      h.createDefaultArbiter('partner', 'carol');
+
+      // Partner creates a shared space with Dave as member (NOT public)
+      await h.assertOk('partner', 'carol', 'shared', 'createSpace');
+      await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
+        memberDid: 'dave',
+        access: access('Owner'),
+      });
+      // Partner adds org's DID as a member of the space (grants access)
+      await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
+        memberDid: 'org',
+        access: access('ReadMemberList'),
+      });
+
+      // org references the shared space
+      await h.assertOk('org', 'alice', 'team', 'createSpace');
+      await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
+        memberDid: 'partner|shared',
+        access: access('IsMember'),
+      });
+
+      // org (as member with ReadMemberList) should be allowed — Dave appears
+      const members = await h.resolvedMembers('org', 'alice', 'team');
+      assertMemberExists(members, 'dave', 'IsMember');
+    });
   });
 
   // =======================================================================

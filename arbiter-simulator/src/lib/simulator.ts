@@ -399,7 +399,7 @@ export class Simulator {
         }
       } else if (request.kind === 'xrpc_remote') {
         log?.steps.push(`xrpc_remote(${request.did}, ${request.path})`);
-        const resolved = this.resolveRemoteQuery(request.did!, request.path, request.input);
+        const resolved = await this.resolveRemoteQuery(arbiter.did, request.did!, request.path, request.input);
         try {
           result = session.resume(resolved);
         } catch (e) {
@@ -436,16 +436,33 @@ export class Simulator {
     return { allowed };
   }
 
-  /** Resolve an xrpc_local / xrpc_remote query from the policy (server-to-server, no policy check). */
+  /** Resolve an xrpc_local query — internal data lookup within the same arbiter (no policy check needed). */
   private resolveLocalQuery(arbiterDid: Did, path: string, input: unknown): unknown {
     return this.executeQuery(arbiterDid, path, (input ?? {}) as Record<string, unknown>);
   }
 
-  private resolveRemoteQuery(remoteDid: Did, path: string, input: unknown): unknown {
-    if (!this.arbiters.get(remoteDid)?.online) {
-      return null;
-    }
-    return this.executeQuery(remoteDid, path, (input ?? {}) as Record<string, unknown>);
+  /**
+   * Resolve an xrpc_remote query by calling the remote arbiter's policy.
+   * The caller is authenticated against the remote arbiter's access rules.
+   * Returns null if the remote is offline, unreachable, or denies access.
+   */
+  private async resolveRemoteQuery(
+    callerArbiterDid: Did,
+    remoteDid: Did,
+    path: string,
+    input: unknown,
+  ): Promise<unknown> {
+    const remoteArbiter = this.arbiters.get(remoteDid);
+    if (!remoteArbiter?.online) return null;
+
+    const params = (input ?? {}) as Record<string, unknown>;
+
+    // Authenticate: the caller (local arbiter) must have permission on the remote
+    const auth = await this.checkPolicy(remoteArbiter, callerArbiterDid, path, params);
+    if (!auth.allowed) return null;
+
+    // Authorized — execute the query (returns raw data, not wrapped in OpResult)
+    return this.executeQuery(remoteDid, path, params);
   }
 
   /**
