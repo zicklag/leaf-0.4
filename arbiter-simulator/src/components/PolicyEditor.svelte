@@ -1,43 +1,45 @@
 <script lang="ts">
   import { app } from '../lib/simulation-store.svelte';
-  import { highlightRego } from '../lib/rego-highlight';
+  import { EditorView, basicSetup } from 'codemirror';
+  import { EditorState } from '@codemirror/state';
+  import { regoLanguage } from '../lib/rego-lang';
+  import { oneDark } from '@codemirror/theme-one-dark';
 
-  let policyCode = $state('');
+  let editorEl: HTMLDivElement | undefined;
+  let editorView: EditorView | undefined;
   let validationMsg = $state<string | null>(null);
   let validationOk = $state(false);
   let isDirty = $state(false);
   let validateTimer: ReturnType<typeof setTimeout> | undefined;
-  let textareaEl: HTMLTextAreaElement | undefined;
-  let overlayEl: HTMLDivElement | undefined;
-  let lineCount = $state(1);
 
-  // Load the default policy from the engine on mount
-  $effect(() => {
-    try {
-      policyCode = app.policy;
-      lineCount = policyCode.split('\n').length;
-    } catch {
-      policyCode = 'package arbiter\nimport rego.v1\ndefault allow := false';
-      lineCount = 1;
-    }
-  });
+  // Build the CodeMirror extensions
+  function makeExtensions() {
+    const theme = app.darkTheme ? [oneDark] : [];
 
-  // Sync scroll between textarea and overlay
-  function handleScroll() {
-    if (overlayEl && textareaEl) {
-      overlayEl.scrollTop = textareaEl.scrollTop;
-      overlayEl.scrollLeft = textareaEl.scrollLeft;
-    }
+    return [
+      basicSetup,
+      regoLanguage,
+      ...theme,
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          isDirty = true;
+          validationMsg = null;
+          debounceValidate(update.state.doc.toString());
+        }
+      }),
+      EditorView.theme({
+        '&': { height: '100%' },
+        '.cm-scroller': { overflow: 'auto' },
+        '.cm-content': { fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace', fontSize: '13px', lineHeight: '1.5' },
+        '.cm-gutters': { fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace', fontSize: '11px' },
+      }),
+    ];
   }
 
-  function handleInput() {
-    isDirty = true;
-    validationMsg = null;
-    lineCount = policyCode.split('\n').length;
-
+  function debounceValidate(code: string) {
     clearTimeout(validateTimer);
     validateTimer = setTimeout(() => {
-      const err = app.validatePolicy(policyCode);
+      const err = app.validatePolicy(code);
       if (err) {
         validationMsg = err;
         validationOk = false;
@@ -49,22 +51,43 @@
   }
 
   function handleApply() {
-    app.setPolicy(policyCode);
+    if (!editorView) return;
+    const code = editorView.state.doc.toString();
+    app.setPolicy(code);
     isDirty = false;
-    app.refreshState();
     app.notifications.add('success', 'Policy applied to all arbiters');
   }
 
   function handleReset() {
-    policyCode = app.getDefaultPolicy();
+    if (!editorView) return;
+    const defaultPolicy = app.getDefaultPolicy();
+    editorView.dispatch({
+      changes: { from: 0, to: editorView.state.doc.length, insert: defaultPolicy },
+    });
     validationMsg = null;
     validationOk = false;
     isDirty = true;
-    lineCount = policyCode.split('\n').length;
   }
 
-  // Syntax-highlighted version
-  let highlighted = $derived(highlightRego(policyCode));
+  // Init editor on mount
+  $effect(() => {
+    if (!editorEl) return;
+
+    const state = EditorState.create({
+      doc: app.policy,
+      extensions: makeExtensions(),
+    });
+
+    editorView = new EditorView({
+      state,
+      parent: editorEl,
+    });
+
+    return () => {
+      editorView?.destroy();
+      editorView = undefined;
+    };
+  });
 </script>
 
 <div class="policy-editor">
@@ -95,29 +118,7 @@
     </div>
   </div>
 
-  <div class="editor-body">
-    <div class="editor-gutter">
-      {#each Array(lineCount) as _, i}
-        <span class="gutter-line">{i + 1}</span>
-      {/each}
-    </div>
-    <div class="editor-input-area">
-      <!-- Syntax highlighted overlay -->
-      <div class="editor-overlay" bind:this={overlayEl}>
-        {@html highlighted}
-      </div>
-      <!-- Transparent textarea for actual editing -->
-      <textarea
-        class="editor-textarea"
-        bind:this={textareaEl}
-        bind:value={policyCode}
-        oninput={handleInput}
-        onscroll={handleScroll}
-        spellcheck="false"
-        wrap="off"
-      ></textarea>
-    </div>
-  </div>
+  <div class="editor-body" bind:this={editorEl}></div>
 </div>
 
 <style>
@@ -150,89 +151,7 @@
 
   .editor-body {
     flex: 1;
-    display: flex;
     min-height: 0;
     overflow: hidden;
-    font-family: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace;
-    font-size: 13px;
-    line-height: 1.5;
   }
-
-  .editor-gutter {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    padding: 12px 4px 12px 8px;
-    background: var(--bg-surface);
-    border-right: 1px solid var(--border-light);
-    user-select: none;
-    min-width: 36px;
-    flex-shrink: 0;
-  }
-
-  .gutter-line {
-    font-size: 11px;
-    color: var(--text-muted);
-    line-height: 1.5;
-    height: 1.5em;
-  }
-
-  .editor-input-area {
-    flex: 1;
-    position: relative;
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  .editor-overlay {
-    position: absolute;
-    inset: 0;
-    padding: 12px 16px;
-    overflow: auto;
-    white-space: pre;
-    color: var(--text-primary);
-    pointer-events: none;
-    /* Make overlay scrollbar invisible - textarea handles scrolling */
-    scrollbar-width: none;
-  }
-
-  .editor-overlay::-webkit-scrollbar {
-    display: none;
-  }
-
-  .editor-textarea {
-    /* Positioned on top of overlay, but transparent */
-    position: absolute;
-    inset: 0;
-    padding: 12px 16px;
-    border: none;
-    background: transparent;
-    color: transparent;
-    caret-color: var(--text-primary);
-    font-family: inherit;
-    font-size: inherit;
-    line-height: inherit;
-    resize: none;
-    outline: none;
-    tab-size: 2;
-    white-space: pre;
-    overflow: auto;
-  }
-
-  .editor-textarea::placeholder {
-    color: var(--text-muted);
-    font-style: italic;
-  }
-
-  /* Syntax highlighting colors */
-  :global(.hl-comment) { color: oklch(0.55 0.02 180); font-style: italic; }
-  :global(.hl-keyword) { color: oklch(0.5 0.18 270); font-weight: 600; }
-  :global(.hl-string) { color: oklch(0.55 0.15 145); }
-  :global(.hl-number) { color: oklch(0.5 0.15 30); }
-  :global(.hl-builtin) { color: oklch(0.5 0.18 200); font-weight: 500; }
-  :global(.hl-function) { color: oklch(0.5 0.16 250); }
-  :global(.hl-rule) { color: oklch(0.5 0.18 65); font-weight: 600; }
-  :global(.hl-operator) { color: oklch(0.45 0.05 260); }
-  :global(.hl-punctuation) { color: oklch(0.55 0.03 260); }
-  :global(.hl-identifier) { color: var(--text-primary); }
 </style>
