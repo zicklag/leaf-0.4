@@ -285,6 +285,7 @@ allow if {
 
 allow if {
 	input.operation.nsid == "town.muni.arbiter.deleteSpace"
+	input.operation.params.spaceKey != "$admin"
 	requester_rank >= access_rank("RemoveSpace")
 }
 

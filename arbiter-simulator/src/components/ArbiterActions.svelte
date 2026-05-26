@@ -35,7 +35,7 @@
       selectedArbiter.did, currentUser.did, '$admin',
       { type: 'DeleteArbiter' },
     );
-    if (result.status === 'deleted') {
+    if (result.status === 'ok') {
       app.notifications.add('success', 'Arbiter deleted');
       app.selectArbiter(null);
     } else {

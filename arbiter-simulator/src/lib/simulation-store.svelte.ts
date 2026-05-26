@@ -153,19 +153,19 @@ class AppState {
     switch (args.type) {
       case 'CreateSpace':
         result = await this.simulator.createSpace(arbiterDid, userDid, {
-          spaceKey: args.spaceKey as string,
+          spaceKey: _spaceKey,
           spaceType: args.spaceType as string,
           config: args.config as Record<string, unknown>,
         }, log);
         break;
       case 'DeleteSpace':
         result = await this.simulator.deleteSpace(arbiterDid, userDid, {
-          spaceKey: args.spaceKey as string,
+          spaceKey: _spaceKey,
         }, log);
         break;
       case 'SetSpaceConfig':
         result = await this.simulator.setSpaceConfig(arbiterDid, userDid, {
-          spaceKey: args.spaceKey as string,
+          spaceKey: _spaceKey,
           config: args.config as Record<string, unknown>,
         }, log);
         break;
@@ -177,7 +177,7 @@ class AppState {
             ? `space:${member.value}`
             : `${(member.value as { arbiterDid: string }).arbiterDid}|${(member.value as { spaceKey: string }).spaceKey}`;
         result = await this.simulator.setSpaceMemberAccess(arbiterDid, userDid, {
-          spaceKey: args.spaceKey as string,
+          spaceKey: _spaceKey,
           memberDid,
           access: args.access as Record<string, unknown>,
         }, log);
@@ -191,14 +191,14 @@ class AppState {
             ? `space:${member.value}`
             : `${(member.value as { arbiterDid: string }).arbiterDid}|${(member.value as { spaceKey: string }).spaceKey}`;
         result = await this.simulator.removeSpaceMember(arbiterDid, userDid, {
-          spaceKey: args.spaceKey as string,
+          spaceKey: _spaceKey,
           memberDid,
         }, log);
         break;
       }
       case 'ResolveMembers':
         result = await this.simulator.resolveSpaceMembers(arbiterDid, userDid, {
-          spaceKey: args.spaceKey as string,
+          spaceKey: _spaceKey,
         }, log);
         break;
       case 'DeleteArbiter':

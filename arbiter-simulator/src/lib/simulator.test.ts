@@ -214,6 +214,7 @@ allow if {
 
 allow if {
 	input.operation.nsid == "town.muni.arbiter.deleteSpace"
+	input.operation.params.spaceKey != "$admin"
 	requester_rank >= access_rank("RemoveSpace")
 }
 
@@ -375,6 +376,8 @@ class TestHarness {
         });
       case 'deleteArbiter':
         return this.sim.deleteArbiter(arbiterDid, userDid);
+      case 'resolveSpaceMembers':
+        return this.sim.resolveSpaceMembers(arbiterDid, userDid, { spaceKey });
       default:
         throw new Error(`Unknown operation: ${operation}`);
     }
@@ -471,6 +474,14 @@ describe('access-levels policy', () => {
         const teamDeleted = !h.sim.arbiters.get('org')?.spaces.has('team');
         expect(teamDeleted).toBe(true);
       }
+    });
+
+    it('owner cannot delete $admin space', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      const result = await h.sim.deleteSpace('org', 'alice', { spaceKey: '$admin' });
+      expect(result.status).toBe('error');
+      // $admin should still exist
+      expect(h.sim.arbiters.get('org')?.spaces.has('$admin')).toBe(true);
     });
   });
 
@@ -739,6 +750,144 @@ describe('access-levels policy', () => {
       `;
       h.createArbiter('org', 'alice', denyAll);
       await h.assertDenied('org', 'alice', 'team', 'createSpace');
+    });
+  });
+
+  // =======================================================================
+  // Access control edge cases
+  // =======================================================================
+
+  describe('access control edge cases', () => {
+    it('remote arbiter offline excludes remote members', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      h.createDefaultArbiter('partner', 'carol');
+
+      await h.assertOk('partner', 'carol', 'shared', 'createSpace');
+      const shared = h.sim.arbiters.get('partner')!.spaces.get('shared')!;
+      shared.config = { ...shared.config, publicMembers: true };
+      await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
+        memberDid: 'dave',
+        access: access('Owner'),
+      });
+
+      await h.assertOk('org', 'alice', 'team', 'createSpace');
+      await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
+        memberDid: 'partner|shared',
+        access: access('ReadMemberList'),
+      });
+
+      // Online: Dave visible
+      const online = await h.resolvedMembers('org', 'alice', 'team');
+      assertMemberExists(online, 'dave', 'ReadMemberList');
+
+      // Offline: Dave absent
+      h.sim.toggleArbiterOffline('partner');
+      const offline = await h.resolvedMembers('org', 'alice', 'team');
+      expect(offline.some((m) => m.did === 'dave')).toBe(false);
+
+      // Back online: Dave returns
+      h.sim.toggleArbiterOffline('partner');
+      const backOnline = await h.resolvedMembers('org', 'alice', 'team');
+      assertMemberExists(backOnline, 'dave', 'ReadMemberList');
+    });
+
+    it('public members toggle controls stranger access', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      await h.assertOk('org', 'alice', 'team', 'createSpace');
+      await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
+        memberDid: 'bob',
+        access: access('IsMember'),
+      });
+
+      // Not public: stranger denied
+      await h.assertDenied('org', 'stranger', 'team', 'resolveSpaceMembers');
+
+      // Make public: stranger can see
+      const team = h.sim.arbiters.get('org')!.spaces.get('team')!;
+      team.config = { ...team.config, publicMembers: true };
+      const members = await h.resolvedMembers('org', 'stranger', 'team');
+      assertMemberExists(members, 'bob', 'IsMember');
+
+      // Un-public: stranger denied again
+      team.config = { ...team.config, publicMembers: false };
+      await h.assertDenied('org', 'stranger', 'team', 'resolveSpaceMembers');
+    });
+
+    it('space-scoped Owner cannot create spaces globally', async () => {
+      h.createDefaultArbiter('org', 'alice');
+
+      // Create team space; alice adds bob as Owner of team only
+      await h.assertOk('org', 'alice', 'team', 'createSpace');
+      await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
+        memberDid: 'bob',
+        access: access('Owner'),
+      });
+
+      // Bob is Owner in team — can configure, add members there
+      await h.assertOk('org', 'bob', 'team', 'setSpaceMemberAccess', {
+        memberDid: 'carol',
+        access: access('IsMember'),
+      });
+
+      // But Bob only has ReadMemberList in $admin — can't create spaces
+      await h.assertDenied('org', 'bob', 'newspace', 'createSpace');
+
+      // Alice (Owner in $admin) can still create spaces
+      await h.assertOk('org', 'alice', 'newspace', 'createSpace');
+    });
+  });
+
+  // =======================================================================
+  // UI flow regression tests (match exact UI patterns)
+  // =======================================================================
+
+  describe('UI flow regressions', () => {
+    it('create arbiter with UI-style config then resolve members', async () => {
+      // Match CreateArbiterBar.svelte: calls createArbiter with only $type
+      const result = h.sim.createArbiter(
+        'arbiter1',
+        { $type: 'town.muni.arbiter.config.regoPolicy' },
+        'alice',
+      );
+      expect(result.status).toBe('ok');
+
+      // Match fetchResolvedMembers: resolves members right after creation
+      const members = await h.resolvedMembers('arbiter1', 'alice', '$admin');
+      expect(members.length).toBe(1);
+      assertMemberExists(members, 'alice', 'Owner');
+    });
+
+    it('add member to admin space via setSpaceMemberAccess', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      // Match DetailPanel handleAddMember flow
+      const result = await h.sim.setSpaceMemberAccess('org', 'alice', {
+        spaceKey: '$admin',
+        memberDid: 'bob',
+        access: { $type: 'town.muni.arbiter.config.accessLevel', level: 'IsMember' },
+      });
+      expect(result.status).toBe('ok');
+
+      const members = await h.resolvedMembers('org', 'alice', '$admin');
+      assertMemberExists(members, 'bob', 'IsMember');
+    });
+
+    it('create space with explicit key (UI flow)', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      // Match handleCreateSpace in ArbiterActions.svelte
+      const result = await h.sim.createSpace('org', 'alice', {
+        spaceKey: 'test',
+        spaceType: 'town.muni.arbiter.config.space',
+        config: {
+          $type: 'town.muni.arbiter.config.space',
+          publicRecords: false,
+          publicMembers: false,
+        },
+      });
+      expect(result.status).toBe('ok');
+
+      const space = h.sim.arbiters.get('org')!.spaces.get('test');
+      expect(space).toBeDefined();
+      expect(space!.key).toBe('test');
     });
   });
 });
