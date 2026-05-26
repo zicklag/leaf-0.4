@@ -237,7 +237,6 @@ class AppState {
       snapshot: this.simulator.snapshot(),
       users: this.users,
       currentUserId: this.currentUserId,
-      defaultPolicy: this.simulator.defaultPolicy,
     };
   }
 
@@ -263,9 +262,6 @@ class AppState {
 
       // Restore simulator state
       this.simulator.loadSnapshot(snap);
-      if (typeof saved.defaultPolicy === 'string') {
-        this.simulator.defaultPolicy = saved.defaultPolicy;
-      }
 
       // Restore UI state
       if (Array.isArray(saved.users)) {

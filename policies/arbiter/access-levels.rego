@@ -65,54 +65,27 @@ space_config(space_key) := {} if {
 # ---------------------------------------------------------------------------
 
 # Direct member in the target space
-resolved_members_raw contains member if {
+direct_members contains member if {
 	some entry in space_members(input.operation.params.spaceKey)
 	member := {"did": entry.did, "access": entry.access, "via": input.operation.params.spaceKey}
 }
 
 # Direct member inherited from $admin space
-resolved_members_raw contains member if {
+direct_members contains member if {
 	input.operation.params.spaceKey != "$admin"
 	some entry in space_members("$admin")
 	member := {"did": entry.did, "access": entry.access, "via": "$admin"}
 }
 
-# Delegated from a local space: the member DID is "space:<key>"
-resolved_members_raw contains member if {
-	some entry in space_members(input.operation.params.spaceKey)
-	startswith(entry.did, "space:")
-	child_key := trim_prefix(entry.did, "space:")
-	some child_entry in space_members(child_key)
-	member := {
-		"did": child_entry.did,
-		"access": min_access(child_entry.access, entry.access),
-		"via": child_key,
-	}
-}
-
-# Delegated from a local space in the admin space
-resolved_members_raw contains member if {
-	input.operation.params.spaceKey != "$admin"
-	some entry in space_members("$admin")
-	startswith(entry.did, "space:")
-	child_key := trim_prefix(entry.did, "space:")
-	some child_entry in space_members(child_key)
-	member := {
-		"did": child_entry.did,
-		"access": min_access(child_entry.access, entry.access),
-		"via": child_key,
-	}
-}
-
 # Delegated from a remote space: the member DID is "<arbiterDid>|<spaceKey>"
-resolved_members_raw contains member if {
+remote_delegation contains member if {
 	some entry in space_members(input.operation.params.spaceKey)
 	contains(entry.did, "|")
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
 	space_key := parts[1]
 
-	# This resolves asynchronously via xrpc_remote → __builtin_host_await
+	# This resolves asynchronously via xrpc_remote -> __builtin_host_await
 	some remote_entry in xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
 	member := {
 		"did": remote_entry.did,
@@ -122,7 +95,7 @@ resolved_members_raw contains member if {
 }
 
 # Delegated from a remote space in the admin space
-resolved_members_raw contains member if {
+remote_delegation contains member if {
 	input.operation.params.spaceKey != "$admin"
 	some entry in space_members("$admin")
 	contains(entry.did, "|")
@@ -135,6 +108,51 @@ resolved_members_raw contains member if {
 		"access": min_access(remote_entry.access, entry.access),
 		"via": concat("|", [arbiter_did, space_key]),
 	}
+}
+
+# Recursive delegation expansion using depth-limited function.
+# expand_delegation(space_key, parent_access, depth) returns an array of all
+# resolved members for a given space, capped at [depth] levels deep.
+# Terminal entries (real DIDs) are emitted directly; space:<key> entries are
+# expanded recursively with depth-1.
+
+expand_delegation(child_key, parent_access, depth) := result if {
+	depth > 0
+	terminal := [member |
+		some entry in space_members(child_key)
+		not startswith(entry.did, "space:")
+		member := {
+			"did": entry.did,
+			"access": min_access(entry.access, parent_access),
+			"via": child_key,
+		}
+	]
+	recursive := [member |
+		some entry in space_members(child_key)
+		startswith(entry.did, "space:")
+		child := trim_prefix(entry.did, "space:")
+		some grandchild in expand_delegation(child, min_access(entry.access, parent_access), depth - 1)
+		member := grandchild
+	]
+	result := array.concat(terminal, recursive)
+}
+
+# Combine everything into resolved_members_raw
+resolved_members_raw contains member if {
+	some member in direct_members
+}
+resolved_members_raw contains member if {
+	some member in remote_delegation
+}
+resolved_members_raw contains member if {
+	some entry in direct_members
+	startswith(entry.did, "space:")
+	some member in expand_delegation(trim_prefix(entry.did, "space:"), entry.access, 9)
+}
+resolved_members_raw contains member if {
+	some entry in remote_delegation
+	startswith(entry.did, "space:")
+	some member in expand_delegation(trim_prefix(entry.did, "space:"), entry.access, 9)
 }
 
 # ---------------------------------------------------------------------------
@@ -150,6 +168,8 @@ higher_exists(member) if {
 resolved_members contains member if {
 	some member in resolved_members_raw
 	not higher_exists(member)
+	not startswith(member.did, "space:")
+	not contains(member.did, "|")
 }
 
 # ---------------------------------------------------------------------------
@@ -256,6 +276,7 @@ allow if {
 
 allow if {
 	input.operation.nsid == "town.muni.arbiter.deleteSpace"
+	input.operation.params.spaceKey != "$admin"
 	requester_rank >= access_rank("RemoveSpace")
 }
 
