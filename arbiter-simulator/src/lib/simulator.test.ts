@@ -71,27 +71,17 @@ resolved_members_raw contains member if {
 	member := {"did": entry.did, "access": entry.access, "via": "$admin"}
 }
 
+# Recursively resolve local space delegations: any "space:<key>" entry
+# in resolved_members_raw is expanded to the child space's members.
+# This handles arbitrarily nested delegation chains.
 resolved_members_raw contains member if {
-	some entry in space_members(input.operation.params.spaceKey)
-	startswith(entry.did, "space:")
-	child_key := trim_prefix(entry.did, "space:")
+	some raw_entry in resolved_members_raw
+	startswith(raw_entry.did, "space:")
+	child_key := trim_prefix(raw_entry.did, "space:")
 	some child_entry in space_members(child_key)
 	member := {
 		"did": child_entry.did,
-		"access": min_access(child_entry.access, entry.access),
-		"via": child_key,
-	}
-}
-
-resolved_members_raw contains member if {
-	input.operation.params.spaceKey != "$admin"
-	some entry in space_members("$admin")
-	startswith(entry.did, "space:")
-	child_key := trim_prefix(entry.did, "space:")
-	some child_entry in space_members(child_key)
-	member := {
-		"did": child_entry.did,
-		"access": min_access(child_entry.access, entry.access),
+		"access": min_access(child_entry.access, raw_entry.access),
 		"via": child_key,
 	}
 }
@@ -941,6 +931,53 @@ describe('access-levels policy', () => {
       const space = h.sim.arbiters.get('org')!.spaces.get('test');
       expect(space).toBeDefined();
       expect(space!.key).toBe('test');
+    });
+  });
+
+  // =======================================================================
+  // Nested local delegation
+  // =======================================================================
+
+  describe('nested local delegation', () => {
+    it('resolves deeply nested local delegations', async () => {
+      h.createDefaultArbiter('arb1', 'alice');
+
+      // Create the spaces
+      await h.assertOk('arb1', 'alice', 'members', 'createSpace');
+      await h.assertOk('arb1', 'alice', 'moderators', 'createSpace');
+      await h.assertOk('arb1', 'alice', '#general', 'createSpace');
+
+      // Add moderators as a local space member to the members space with RemoveMembers access
+      await h.assertOk('arb1', 'alice', 'members', 'setSpaceMemberAccess', {
+        memberDid: 'space:moderators',
+        access: access('RemoveMembers'),
+      });
+
+      // Add members as a local space member to #general with RemoveMembers access
+      await h.assertOk('arb1', 'alice', '#general', 'setSpaceMemberAccess', {
+        memberDid: 'space:members',
+        access: access('RemoveMembers'),
+      });
+
+      // Add Carol as member of moderators with RemoveMembers access
+      await h.assertOk('arb1', 'alice', 'moderators', 'setSpaceMemberAccess', {
+        memberDid: 'carol',
+        access: access('RemoveMembers'),
+      });
+
+      // Add George as member of members with IsMember access
+      await h.assertOk('arb1', 'alice', 'members', 'setSpaceMemberAccess', {
+        memberDid: 'george',
+        access: access('IsMember'),
+      });
+
+      // Resolve members of #general
+      const members = await h.resolvedMembers('arb1', 'alice', '#general');
+
+      // Should have: alice (Owner from $admin), george (IsMember from members), carol (RemoveMembers from moderators)
+      assertMemberExists(members, 'alice', 'Owner');
+      assertMemberExists(members, 'george', 'IsMember');
+      assertMemberExists(members, 'carol', 'RemoveMembers');
     });
   });
 });
