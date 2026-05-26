@@ -97,7 +97,7 @@
       app.notifications.add('success', 'Member access set');
       resetMemberForm();
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to set member');
+      app.notifications.add('error', result.error ?? 'Failed to set member');
     }
   }
 
@@ -111,7 +111,7 @@
     if (result.status === 'ok') {
       app.notifications.add('success', 'Member removed');
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to remove member');
+      app.notifications.add('error', result.error ?? 'Failed to remove member');
     }
   }
 
@@ -161,7 +161,7 @@
       app.notifications.add('success', 'Space deleted');
       app.selectArbiter(selectedArbiterDid);
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to delete space');
+      app.notifications.add('error', result.error ?? 'Failed to delete space');
     }
   }
 </script>

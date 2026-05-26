@@ -25,7 +25,7 @@
     if (result.status === 'ok') {
       app.notifications.add('success', `Space "${key}" created`);
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to create space');
+      app.notifications.add('error', result.error ?? 'Failed to create space');
     }
   }
 
@@ -39,7 +39,7 @@
       app.notifications.add('success', 'Arbiter deleted');
       app.selectArbiter(null);
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to delete arbiter');
+      app.notifications.add('error', result.error ?? 'Failed to delete arbiter');
     }
   }
 </script>

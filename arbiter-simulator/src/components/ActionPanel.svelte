@@ -54,7 +54,7 @@
     if (result.status === 'ok') {
       app.notifications.add('success', `Space "${key}" created`);
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to create space');
+      app.notifications.add('error', result.error ?? 'Failed to create space');
     }
   }
 
@@ -62,7 +62,7 @@
     e.preventDefault();
     if (!currentUser || !selectedSpace) return;
 
-    let member: Member | null = null;
+    let member: { tag: string; value: unknown } | null = null;
     if (newMemberType === 'MemberRemoteSpace') {
       if (!remoteArbiterDid || !remoteSpaceKey) {
         app.notifications.add('error', 'Please select both a remote arbiter and space');
@@ -90,7 +90,7 @@
       resetMemberForm();
       setTimeout(() => memberFocusEl?.focus(), 50);
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to set member');
+      app.notifications.add('error', result.error ?? 'Failed to set member');
     }
   }
 
@@ -106,7 +106,7 @@
     if (result.status === 'ok') {
       app.notifications.add('success', 'Member removed');
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to remove member');
+      app.notifications.add('error', result.error ?? 'Failed to remove member');
     }
   }
 
@@ -120,7 +120,7 @@
       app.notifications.add('success', 'Space deleted');
       app.selectArbiter(selectedArbiter!.did);
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to delete space');
+      app.notifications.add('error', result.error ?? 'Failed to delete space');
     }
   }
 
@@ -130,11 +130,11 @@
       selectedArbiter.did, currentUser.did, '$admin',
       { type: 'DeleteArbiter' },
     );
-    if (result.status === 'deleted') {
+    if (result.status === 'ok') {
       app.notifications.add('success', 'Arbiter deleted');
       app.selectArbiter(null);
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to delete arbiter');
+      app.notifications.add('error', result.error ?? 'Failed to delete arbiter');
     }
   }
 
@@ -151,7 +151,7 @@
     if (result.status === 'ok') {
       app.notifications.add('success', 'Space configured');
     } else {
-      app.notifications.add('error', result.status === 'error' ? result.error : 'Failed to configure space');
+      app.notifications.add('error', result.error ?? 'Failed to configure space');
     }
   }
 

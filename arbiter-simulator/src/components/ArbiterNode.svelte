@@ -1,10 +1,10 @@
 <script lang="ts">
-  import type { ArbiterView } from '../lib/types';
+  import type { ArbiterSnapshot } from '../lib/types';
   import SpaceNode from './SpaceNode.svelte';
   import { app } from '../lib/simulation-store.svelte';
 
   interface Props {
-    arbiter: ArbiterView;
+    arbiter: ArbiterSnapshot;
     isSelected: boolean;
     selectedSpace: string | null;
   }
@@ -14,13 +14,15 @@
   let offline = $derived(app.isArbiterOffline(arbiter.did));
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
   class="arbiter-node"
   class:selected={isSelected}
   class:offline
   onclick={() => app.selectArbiter(arbiter.did)}
-  role="region"
+  onkeydown={(e) => e.key === 'Enter' && app.selectArbiter(arbiter.did)}
+  role="button"
+  tabindex="0"
   aria-label={`Arbiter ${arbiter.did}`}
   data-arbiter-did={arbiter.did}
 >
@@ -34,8 +36,10 @@
     <button
       class="power-toggle"
       class:offline
-      onclick="{(e) => { e.stopPropagation(); app.toggleArbiterOffline(arbiter.did); }}"
+      onclick={(e) => { e.stopPropagation(); app.toggleArbiterOffline(arbiter.did); }}
+      onkeydown={(e) => { e.stopPropagation(); if (e.key === 'Enter') app.toggleArbiterOffline(arbiter.did); }}
       title={offline ? 'Bring arbiter online' : 'Take arbiter offline'}
+      aria-label={offline ? 'Bring arbiter online' : 'Take arbiter offline'}
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 2v8"/>

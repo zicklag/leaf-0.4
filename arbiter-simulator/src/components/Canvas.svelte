@@ -25,13 +25,13 @@
     }> = [];
 
     for (const member of space.members) {
-      if (member.member.tag === 'MemberRemoteSpace') {
-        const remoteValue = member.member.value as { arbiterDid: string; spaceKey: string };
+      if (member.did.includes('|')) {
+        const [arbiterDid, spaceKey] = member.did.split('|', 2);
         edges.push({
           fromArbiter: arbDid,
           fromSpace: spKey,
-          toArbiter: remoteValue.arbiterDid,
-          toSpace: remoteValue.spaceKey,
+          toArbiter: arbiterDid,
+          toSpace: spaceKey,
           access: typeof member.access.level === 'string' ? member.access.level : 'ReadMemberList',
         });
       }

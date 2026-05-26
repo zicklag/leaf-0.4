@@ -14,7 +14,7 @@
   // Load the default policy from the engine on mount
   $effect(() => {
     try {
-      policyCode = app.simulator.policy;
+      policyCode = app.policy;
       lineCount = policyCode.split('\n').length;
     } catch {
       policyCode = 'package arbiter\nimport rego.v1\ndefault allow := false';
@@ -37,7 +37,7 @@
 
     clearTimeout(validateTimer);
     validateTimer = setTimeout(() => {
-      const err = app.simulator.validatePolicy(policyCode);
+      const err = app.validatePolicy(policyCode);
       if (err) {
         validationMsg = err;
         validationOk = false;
@@ -49,14 +49,14 @@
   }
 
   function handleApply() {
-    app.simulator.setPolicy(policyCode);
+    app.setPolicy(policyCode);
     isDirty = false;
     app.refreshState();
     app.notifications.add('success', 'Policy applied to all arbiters');
   }
 
   function handleReset() {
-    policyCode = app.simulator.getDefaultPolicy();
+    policyCode = app.getDefaultPolicy();
     validationMsg = null;
     validationOk = false;
     isDirty = true;

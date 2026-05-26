@@ -110,8 +110,34 @@ class AppState {
   /** @deprecated Use `refreshSnapshot` instead. */
   refreshState() { this.refreshSnapshot(); }
 
-  /** @deprecated No-op, offline functionality removed. */
-  isArbiterOffline(_did: string) { return false; }
+  /** Get current policy text from the simulator. */
+  get policy(): string {
+    return this.simulator.defaultPolicy;
+  }
+
+  /** Validate Rego policy text, returning an error string or null on success. */
+  validatePolicy(policy: string): string | null {
+    try {
+      const err = this.simulator.validatePolicy(policy);
+      return err ?? null;
+    } catch (e) {
+      return String(e);
+    }
+  }
+
+  /** Apply a policy to all arbiters. */
+  setPolicy(policy: string): void {
+    this.simulator.applyPolicyToAll(policy);
+  }
+
+  /** Get the default policy text. */
+  getDefaultPolicy(): string {
+    return this.simulator.getDefaultPolicy();
+  }
+
+  isArbiterOffline(did: string) { return this.simulator.isArbiterOffline(did); }
+
+  toggleArbiterOffline(did: string) { this.simulator.toggleArbiterOffline(did); }
 
   /** @deprecated Use `runOp` with explicit method calls instead. */
   async processOperation(

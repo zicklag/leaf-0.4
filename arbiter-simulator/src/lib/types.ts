@@ -26,6 +26,7 @@ export interface ArbiterState {
   version: number;
   config: Record<string, unknown>;
   policy: string;
+  online: boolean;
   spaces: Map<SpaceKey, Space>;
 }
 
@@ -39,6 +40,7 @@ export interface ArbiterSnapshot {
   version: number;
   config: Record<string, unknown>;
   policy: string;
+  online: boolean;
   spaces: SpaceSnapshot[];
 }
 

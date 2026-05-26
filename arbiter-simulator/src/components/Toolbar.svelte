@@ -24,7 +24,14 @@
 </script>
 
 <header class="toolbar">
-  <div class="brand" onclick={copyCleanLink} title="Copy clean link (without config)">
+  <div
+    class="brand"
+    onclick={copyCleanLink}
+    onkeydown={(e) => e.key === 'Enter' && copyCleanLink()}
+    role="button"
+    tabindex="0"
+    title="Copy clean link (without config)"
+  >
     <span class="logo">⚖️</span>
     <span class="title">Arbiter Simulator</span>
   </div>
