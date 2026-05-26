@@ -137,7 +137,15 @@ class AppState {
 
   isArbiterOffline(did: string) { return this.simulator.isArbiterOffline(did); }
 
-  toggleArbiterOffline(did: string) { this.simulator.toggleArbiterOffline(did); }
+  toggleArbiterOffline(did: string) {
+    this.simulator.toggleArbiterOffline(did);
+    this.refreshSnapshot();
+    // Re-fetch resolved members since remote access may have changed
+    if (this.selectedArbiterDid && this.selectedSpaceKey) {
+      this.lastResolveKey = '';
+      this.fetchResolvedMembers();
+    }
+  }
 
   /** @deprecated Use `runOp` with explicit method calls instead. */
   async processOperation(
