@@ -8,10 +8,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "build:wasm": "cd ../crates/arbiter-wasm2 && wasm-pack build --target web && cd ../../arbiter-simulator && pnpm rebuild arbiter-wasm2"
+    "build:wasm": "cd ../crates/policy-core-wasm && wasm-pack build --target web && cd ../../arbiter-simulator",
+    "test": "vitest run"
   },
   "dependencies": {
-    "arbiter-wasm2": "file:../crates/arbiter-wasm2/pkg"
+    "policy-core-wasm": "file:../crates/policy-core-wasm/pkg"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
@@ -23,6 +24,7 @@
     "typescript": "~6.0.2",
     "vite": "^8.0.12",
     "vite-plugin-top-level-await": "^1.6.0",
-    "vite-plugin-wasm": "^3.6.0"
+    "vite-plugin-wasm": "^3.6.0",
+    "vitest": "^3.1.2"
   }
 }

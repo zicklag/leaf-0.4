@@ -1,7 +1,6 @@
 <script lang="ts">
-  import type { Member } from '../lib/types';
   import { app } from '../lib/simulation-store.svelte';
-  import { accessLabel, accessColor, shortDid } from '../lib/utils';
+  import { accessLabel, accessColor, shortDid, parseMemberDid, buildMemberDid } from '../lib/utils';
   import { ALL_ACCESSES, ACCESS_LABELS } from '../lib/types';
 
   let {
@@ -71,24 +70,28 @@
     e.preventDefault();
     if (!currentUser || !selectedSpace) return;
 
-    let member: Member | null = null;
+    let memberDid: string;
     if (newMemberType === 'MemberRemoteSpace') {
       if (!remoteArbiterDid || !remoteSpaceKey) {
         app.notifications.add('error', 'Please select both a remote arbiter and space');
         return;
       }
-      member = {
-        tag: 'MemberRemoteSpace',
-        value: { arbiterDid: remoteArbiterDid, spaceKey: remoteSpaceKey },
-      };
+      memberDid = buildMemberDid('remotespace', remoteSpaceKey, remoteArbiterDid);
     } else {
       if (!newMemberValue.trim()) return;
-      member = { tag: newMemberType, value: newMemberValue.trim() };
+      memberDid = buildMemberDid(
+        newMemberType === 'MemberDid' ? 'user' : 'localspace',
+        newMemberValue.trim(),
+      );
     }
 
     const result = await app.processOperation(
       selectedArbiterDid!, currentUser.did, selectedSpace.key,
-      { type: 'SetSpaceMemberAccess', member: member!, access: accessConfig(newMemberAccess) },
+      {
+        type: 'SetSpaceMemberAccess',
+        member: { tag: newMemberType, value: newMemberType === 'MemberRemoteSpace' ? { arbiterDid: remoteArbiterDid, spaceKey: remoteSpaceKey } : newMemberValue.trim() },
+        access: accessConfig(newMemberAccess),
+      },
     );
     if (result.status === 'ok') {
       app.notifications.add('success', 'Member access set');
@@ -98,12 +101,12 @@
     }
   }
 
-  async function handleRemoveMember(memberEntry: { member: { tag: string; value: unknown } }) {
+  async function handleRemoveMember(memberEntry: { did: string }) {
     if (!currentUser || !selectedSpace) return;
-    const member = memberEntry.member as Member;
+    const memberDid = memberEntry.did;
     const result = await app.processOperation(
       selectedArbiterDid!, currentUser.did, selectedSpace.key,
-      { type: 'RemoveSpaceMember', member },
+      { type: 'RemoveSpaceMember', member: { tag: memberDid.startsWith('space:') ? 'MemberLocalSpace' : memberDid.includes('|') ? 'MemberRemoteSpace' : 'MemberDid', value: memberDid.startsWith('space:') ? memberDid.slice(6) : memberDid.includes('|') ? (() => { const [a, k] = memberDid.split('|', 2); return { arbiterDid: a, spaceKey: k }; })() : memberDid } },
     );
     if (result.status === 'ok') {
       app.notifications.add('success', 'Member removed');
@@ -258,8 +261,7 @@
             </h5>
             {#each selectedSpaceMissing as ms}
               <div class="missing-row">
-                <span class="row-name mono truncate">❓ {ms.space.arbiterDid}/{ms.space.spaceKey}</span>
-                <span class="row-access-label" style="color: {accessColor(ms.access)}">{accessLabel(ms.access)}</span>
+                <span class="row-name mono truncate">❓ {ms.arbiterDid}/{ms.spaceKey}</span>
               </div>
             {/each}
           </div>
@@ -337,14 +339,11 @@
       {:else}
         <div class="member-grid">
           {#each selectedSpace.members as m}
+            {@const info = parseMemberDid(m.did)}
             <div class="direct-member-row">
-              <span class="row-icon">{m.member.tag === 'MemberDid' ? '👤' : m.member.tag === 'MemberRemoteSpace' ? '🌐' : '📁'}</span>
+              <span class="row-icon">{info.kind === 'user' ? '👤' : info.kind === 'remotespace' ? '🌐' : '📁'}</span>
               <span class="row-name mono truncate">
-                {m.member.tag === 'MemberDid'
-                  ? shortDid(m.member.value as string, 20)
-                  : m.member.tag === 'MemberRemoteSpace'
-                    ? shortDid((m.member.value as {arbiterDid: string}).arbiterDid, 20)
-                    : m.member.value as string}
+                {shortDid(info.display, 20)}
               </span>
               <span class="row-access-label compact" style="color: {accessColor(m.access)}">
                 {accessLabel(m.access)}

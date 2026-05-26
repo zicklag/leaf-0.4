@@ -6,9 +6,25 @@
 //! manual stringification.
 //!
 //! Errors are thrown as JavaScript exceptions via `Result<_, JsValue>`.
+//!
+//! # Policy XRPC requests
+//!
+//! When a policy calls `xrpc_local` or `xrpc_remote` the VM suspends and
+//! returns a [`HostRequestView`]. The host **must** resolve these with query
+//! (read-only) XRPC calls only — policies must never trigger state-changing
+//! procedures. Evaluating a policy is always side-effect free from the
+//! host's perspective.
 
 use policy_core::{HostRequest, VmResult, VmSession};
+use serde::Serialize;
+use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::prelude::*;
+
+/// Serialize a regorus::Value to a JsValue using JSON-compatible serialization
+/// (maps become plain JS objects, not JS Map instances).
+fn to_js_value(v: &regorus::Value) -> Result<JsValue, serde_wasm_bindgen::Error> {
+  v.serialize(&Serializer::json_compatible())
+}
 
 // ---------------------------------------------------------------------------
 // PolicySession
@@ -103,7 +119,7 @@ impl PolicyResult {
   #[wasm_bindgen(getter)]
   pub fn value(&self) -> Option<JsValue> {
     match &self.inner {
-      VmResult::Completed(v) => serde_wasm_bindgen::to_value(v).ok(),
+      VmResult::Completed(v) => to_js_value(v).ok(),
       VmResult::Suspended(_) => None,
     }
   }
@@ -162,7 +178,7 @@ impl HostRequestView {
   pub fn input(&self) -> JsValue {
     match &self.inner {
       HostRequest::XrpcLocal { input, .. } | HostRequest::XrpcRemote { input, .. } => {
-        serde_wasm_bindgen::to_value(input).unwrap_or(JsValue::UNDEFINED)
+        to_js_value(input).unwrap_or(JsValue::UNDEFINED)
       }
     }
   }

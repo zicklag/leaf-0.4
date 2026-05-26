@@ -1,12 +1,20 @@
 # Default access-level authorization policy for the Muni Town Arbiter.
 #
-# This policy uses:
-#   - data.arbiter.spaces[space_key]  — local arbiter state (frozen snapshot)
-#   - resolve_remote(arbiter_did, space_key)  — async host builtin for remote spaces
+# This policy evaluates whether a given XRPC operation is allowed. It
+# receives:
 #
-# The VM may suspend on resolve_remote calls. The host fetches the data and
-# resumes the VM transparently. The policy does not distinguish between local
-# and remote resolution at the rule level.
+#   data.arbiter             — the arbiter's full state (config + spaces)
+#   data.arbiter.spaces[key] — a space with its config and members
+#   input.caller.did         — the requester's DID
+#   input.caller.access      — the requester's pre-computed access level
+#   input.operation.nsid     — the XRPC method NSID
+#   input.operation.params   — the method parameters
+#
+# The policy can request additional data via two host built-ins:
+#   xrpc_local(path, params)   — query the local arbiter
+#   xrpc_remote(did, path, params) — query a remote arbiter
+#
+# XRPC queries from the policy are ALWAYS read-only (never procedures).
 
 package arbiter
 
@@ -34,67 +42,78 @@ member_rank(member) := access_rank(access_level(member.access))
 # Space data access helpers
 # ---------------------------------------------------------------------------
 
-space_members(space_key) := data.arbiter.spaces[space_key].members
+space_members(space_key) := members if {
+	data.arbiter.spaces[space_key]
+	members := data.arbiter.spaces[space_key].members
+}
 
-space_config(space_key) := data.arbiter.spaces[space_key].config
+space_members(space_key) := [] if {
+	not data.arbiter.spaces[space_key]
+}
+
+space_config(space_key) := config if {
+	data.arbiter.spaces[space_key]
+	config := data.arbiter.spaces[space_key].config
+}
+
+space_config(space_key) := {} if {
+	not data.arbiter.spaces[space_key]
+}
 
 # ---------------------------------------------------------------------------
-# Resolved members (raw, may contain duplicates via different delegation paths)
+# Resolved members via local/remote delegation
 # ---------------------------------------------------------------------------
 
 # Direct member in the target space
 resolved_members_raw contains member if {
-	some entry in space_members(input.resource.spaceKey)
-	entry.member.tag == "MemberDid"
-	member := {"did": entry.member.value, "access": entry.access, "via": input.resource.spaceKey}
+	some entry in space_members(input.operation.params.spaceKey)
+	member := {"did": entry.did, "access": entry.access, "via": input.operation.params.spaceKey}
 }
 
 # Direct member inherited from $admin space
 resolved_members_raw contains member if {
-	input.resource.spaceKey != "$admin"
+	input.operation.params.spaceKey != "$admin"
 	some entry in space_members("$admin")
-	entry.member.tag == "MemberDid"
-	member := {"did": entry.member.value, "access": entry.access, "via": "$admin"}
+	member := {"did": entry.did, "access": entry.access, "via": "$admin"}
 }
 
-# Delegated from a local space member in the target space
+# Delegated from a local space: the member DID is "space:<key>"
 resolved_members_raw contains member if {
-	some entry in space_members(input.resource.spaceKey)
-	entry.member.tag == "MemberLocalSpace"
-	child_key := entry.member.value
+	some entry in space_members(input.operation.params.spaceKey)
+	startswith(entry.did, "space:")
+	child_key := trim_prefix(entry.did, "space:")
 	some child_entry in space_members(child_key)
-	child_entry.member.tag == "MemberDid"
 	member := {
-		"did": child_entry.member.value,
+		"did": child_entry.did,
 		"access": min_access(child_entry.access, entry.access),
 		"via": child_key,
 	}
 }
 
-# Delegated from a local space member in the admin space
+# Delegated from a local space in the admin space
 resolved_members_raw contains member if {
-	input.resource.spaceKey != "$admin"
+	input.operation.params.spaceKey != "$admin"
 	some entry in space_members("$admin")
-	entry.member.tag == "MemberLocalSpace"
-	child_key := entry.member.value
+	startswith(entry.did, "space:")
+	child_key := trim_prefix(entry.did, "space:")
 	some child_entry in space_members(child_key)
-	child_entry.member.tag == "MemberDid"
 	member := {
-		"did": child_entry.member.value,
+		"did": child_entry.did,
 		"access": min_access(child_entry.access, entry.access),
 		"via": child_key,
 	}
 }
 
-# Delegated from a resolved remote space in the target space
+# Delegated from a remote space: the member DID is "<arbiterDid>|<spaceKey>"
 resolved_members_raw contains member if {
-	some entry in space_members(input.resource.spaceKey)
-	entry.member.tag == "MemberRemoteSpace"
-	arbiter_did := entry.member.value.arbiterDid
-	space_key := entry.member.value.spaceKey
+	some entry in space_members(input.operation.params.spaceKey)
+	contains(entry.did, "|")
+	parts := split(entry.did, "|")
+	arbiter_did := parts[0]
+	space_key := parts[1]
 
-	# This resolves asynchronously via __builtin_host_await
-	some remote_entry in resolve_remote(arbiter_did, space_key)
+	# This resolves asynchronously via xrpc_remote → __builtin_host_await
+	some remote_entry in xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, entry.access),
@@ -102,14 +121,15 @@ resolved_members_raw contains member if {
 	}
 }
 
-# Delegated from a resolved remote space in the admin space
+# Delegated from a remote space in the admin space
 resolved_members_raw contains member if {
-	input.resource.spaceKey != "$admin"
+	input.operation.params.spaceKey != "$admin"
 	some entry in space_members("$admin")
-	entry.member.tag == "MemberRemoteSpace"
-	arbiter_did := entry.member.value.arbiterDid
-	space_key := entry.member.value.spaceKey
-	some remote_entry in resolve_remote(arbiter_did, space_key)
+	contains(entry.did, "|")
+	parts := split(entry.did, "|")
+	arbiter_did := parts[0]
+	space_key := parts[1]
+	some remote_entry in xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, entry.access),
@@ -127,17 +147,9 @@ higher_exists(member) if {
 	member_rank(higher) > member_rank(member)
 }
 
-higher_via(member) if {
-	some tie in resolved_members_raw
-	tie.did == member.did
-	member_rank(tie) == member_rank(member)
-	tie.via < member.via
-}
-
 resolved_members contains member if {
 	some member in resolved_members_raw
 	not higher_exists(member)
-	not higher_via(member)
 }
 
 # ---------------------------------------------------------------------------
@@ -159,38 +171,23 @@ min_access(a, b) := b if {
 requester_rank := rank if {
 	ranks := {member_rank(member) |
 		some member in resolved_members_raw
-		member.did == input.requester
+		member.did == input.caller.did
 	}
 	rank := max(ranks)
 }
 
 # ---------------------------------------------------------------------------
-# Missing spaces: remote spaces that resolved to empty (no members)
+# Missing spaces: remote references that resolved to empty
 # ---------------------------------------------------------------------------
 
-missing_spaces contains entry if {
-	some member in space_members(input.resource.spaceKey)
-	member.member.tag == "MemberRemoteSpace"
-	arbiter_did := member.member.value.arbiterDid
-	space_key := member.member.value.spaceKey
-	count(resolve_remote(arbiter_did, space_key)) == 0
-	entry := {
-		"space": member.member.value,
-		"access": member.access,
-	}
-}
-
-missing_spaces contains entry if {
-	input.resource.spaceKey != "$admin"
-	some member in space_members("$admin")
-	member.member.tag == "MemberRemoteSpace"
-	arbiter_did := member.member.value.arbiterDid
-	space_key := member.member.value.spaceKey
-	count(resolve_remote(arbiter_did, space_key)) == 0
-	entry := {
-		"space": member.member.value,
-		"access": member.access,
-	}
+missing_spaces contains ms if {
+	some entry in space_members(input.operation.params.spaceKey)
+	contains(entry.did, "|")
+	parts := split(entry.did, "|")
+	arbiter_did := parts[0]
+	space_key := parts[1]
+	count(xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})) == 0
+	ms := {"arbiterDid": arbiter_did, "spaceKey": space_key}
 }
 
 # ---------------------------------------------------------------------------
@@ -198,15 +195,17 @@ missing_spaces contains entry if {
 # ---------------------------------------------------------------------------
 
 target_exists_in_raw if {
-	some entry in space_members(input.resource.spaceKey)
-	entry.member == input.params.targetMember
+	some entry in space_members(input.operation.params.spaceKey)
+	entry.did == input.operation.params.memberDid
 }
 
 raw_target_rank := rank if {
-	some entry in space_members(input.resource.spaceKey)
-	entry.member == input.params.targetMember
+	some entry in space_members(input.operation.params.spaceKey)
+	entry.did == input.operation.params.memberDid
 	rank := member_rank(entry)
 }
+
+resolve_result := {"members": resolved_members, "missingSpaces": missing_spaces}
 
 # ---------------------------------------------------------------------------
 # Authorization rules
@@ -218,79 +217,78 @@ default allow := false
 
 # Public member list: anyone can read
 allow if {
-	input.action in {"resolveSpaceMembers", "getSpaceMembers"}
-	space_config(input.resource.spaceKey).publicMembers == true
+	input.operation.nsid in {"town.muni.arbiter.resolveSpaceMembers", "town.muni.arbiter.getSpaceMembers"}
+	space_config(input.operation.params.spaceKey).publicMembers == true
 }
 
-# Non-public: need ReadMemberList
 allow if {
-	input.action in {"resolveSpaceMembers", "getSpaceMembers"}
+	input.operation.nsid in {"town.muni.arbiter.resolveSpaceMembers", "town.muni.arbiter.getSpaceMembers"}
 	requester_rank >= access_rank("ReadMemberList")
 }
 
 allow if {
-	input.action in {"getArbiterConfig", "listSpaces"}
+	input.operation.nsid in {"town.muni.arbiter.getArbiterConfig", "town.muni.arbiter.listSpaces"}
 	requester_rank >= access_rank("ReadMemberList")
 }
 
 # Public records: anyone can read space config
 allow if {
-	input.action == "getSpaceConfig"
-	space_config(input.resource.spaceKey).publicRecords == true
+	input.operation.nsid == "town.muni.arbiter.getSpaceConfig"
+	space_config(input.operation.params.spaceKey).publicRecords == true
 }
 
 allow if {
-	input.action == "getSpaceConfig"
+	input.operation.nsid == "town.muni.arbiter.getSpaceConfig"
 	requester_rank >= access_rank("ReadMemberList")
 }
 
 # --- Writes ---
 
 allow if {
-	input.action == "createSpace"
+	input.operation.nsid == "town.muni.arbiter.createSpace"
 	requester_rank >= access_rank("CreateSpaces")
 }
 
 allow if {
-	input.action == "setSpaceConfig"
+	input.operation.nsid == "town.muni.arbiter.setSpaceConfig"
 	requester_rank >= access_rank("ConfigureSpace")
 }
 
 allow if {
-	input.action == "deleteSpace"
+	input.operation.nsid == "town.muni.arbiter.deleteSpace"
 	requester_rank >= access_rank("RemoveSpace")
 }
 
 allow if {
-	input.action == "setArbiterConfig"
+	input.operation.nsid == "town.muni.arbiter.setArbiterConfig"
 	requester_rank >= access_rank("Owner")
 }
 
 allow if {
-	input.action == "setSpaceMemberAccess"
+	input.operation.nsid == "town.muni.arbiter.setSpaceMemberAccess"
 	requester_rank >= access_rank("AddMembers")
-	access_rank(input.params.targetAccess.level) <= requester_rank
+	access_rank(input.operation.params.access.level) <= requester_rank
 	not target_exists_in_raw
 }
 
 allow if {
-	input.action == "setSpaceMemberAccess"
+	input.operation.nsid == "town.muni.arbiter.setSpaceMemberAccess"
 	requester_rank >= access_rank("AddMembers")
-	access_rank(input.params.targetAccess.level) <= requester_rank
+	access_rank(input.operation.params.access.level) <= requester_rank
 	target_exists_in_raw
 	requester_rank >= access_rank("RemoveMembers")
 	raw_target_rank <= requester_rank
 }
 
 allow if {
-	input.action == "removeSpaceMember"
+	input.operation.nsid == "town.muni.arbiter.removeSpaceMember"
 	requester_rank >= access_rank("RemoveMembers")
 	target_exists_in_raw
 	raw_target_rank <= requester_rank
 }
 
 allow if {
-	input.action == "deleteArbiter"
+	input.operation.nsid == "town.muni.arbiter.deleteArbiter"
 	requester_rank >= access_rank("Owner")
 	count(space_members("$admin")) == 1
 }

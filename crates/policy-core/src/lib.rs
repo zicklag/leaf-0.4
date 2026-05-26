@@ -11,6 +11,12 @@
 //! a [`HostRequest`]. The caller resolves it and calls
 //! [`VmSession::resume`] with the result.
 //!
+//! **Important:** XRPC requests made from the policy are **always queries**
+//! (read-only), never procedures. Evaluating a policy must never change the
+//! state of the system. The host should enforce this — if the policy requests
+//! a mutation endpoint the host should either reject it or treat it as a
+//! no-op query.
+//!
 //! Because `RegoVM` is `Send + Sync` (with regorus's `arc` feature), each
 //! caller owns its own `VmSession` — no pool needed.
 
@@ -358,14 +364,14 @@ fn build_vm(
 pub const POLICY_EXTENSIONS: &str = r#"
 # Request data from the local host via XRPC.
 # The VM suspends until the host resolves this and provides the response.
-xrpc_local(path, input) := result if {
-    result := __builtin_host_await({"path": path, "input": input}, "xrpc_local")
+xrpc_local(path, inp) := result if {
+    result := __builtin_host_await({"path": path, "input": inp}, "xrpc_local")
 }
 
 # Request data from a remote host via XRPC.
 # The VM suspends until the host resolves this and provides the response.
-xrpc_remote(did, path, input) := result if {
-    result := __builtin_host_await({"did": did, "path": path, "input": input}, "xrpc_remote")
+xrpc_remote(did, path, inp) := result if {
+    result := __builtin_host_await({"did": did, "path": path, "input": inp}, "xrpc_remote")
 }
 "#;
 

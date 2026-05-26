@@ -1,10 +1,10 @@
 <script lang="ts">
-  import type { SpaceView } from '../lib/types';
+  import type { SpaceSnapshot } from '../lib/types';
   import { app } from '../lib/simulation-store.svelte';
-  import { accessLabel, shortDid } from '../lib/utils';
+  import { accessLabel, shortDid, parseMemberDid } from '../lib/utils';
 
   interface Props {
-    space: SpaceView;
+    space: SpaceSnapshot;
     arbiterDid: string;
     isSelected: boolean;
   }
@@ -42,17 +42,10 @@
       <span class="no-members">No direct members</span>
     {:else}
       {#each space.members.slice(0, 3) as m}
-        <span class="member-chip mono" title={`${m.member.tag}: ${JSON.stringify(m.member.value)} → ${accessLabel(m.access)}`}>
-          {m.member.tag === 'MemberDid'
-            ? '👤'
-            : m.member.tag === 'MemberRemoteSpace'
-              ? '🌐'
-              : '📁'}
-          {m.member.tag === 'MemberDid'
-            ? shortDid(m.member.value as string, 16)
-            : m.member.tag === 'MemberRemoteSpace'
-              ? shortDid((m.member.value as {arbiterDid: string}).arbiterDid, 16)
-              : shortDid(m.member.value as string, 16)}
+        {@const info = parseMemberDid(m.did)}
+        <span class="member-chip mono" title={`${info.kind}: ${info.display} → ${accessLabel(m.access)}`}>
+          {info.kind === 'user' ? '👤' : info.kind === 'remotespace' ? '🌐' : '📁'}
+          {shortDid(info.display, 16)}
         </span>
       {/each}
       {#if space.members.length > 3}

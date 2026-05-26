@@ -12,9 +12,13 @@
 
     try {
       const arbiterDid = newArbiterDid.trim();
-      app.simulator.createArbiter(arbiterDid, currentUser.did);
+      app.simulator.createArbiter(
+        arbiterDid,
+        { $type: 'town.muni.arbiter.config.regoPolicy' },
+        currentUser.did,
+      );
       newArbiterDid = '';
-      app.refreshState();
+      app.refreshSnapshot();
       app.notifications.add('success', `Arbiter "${arbiterDid}" created`);
       app.selectSpace(arbiterDid, '$admin');
       setTimeout(() => inputEl?.focus(), 50);

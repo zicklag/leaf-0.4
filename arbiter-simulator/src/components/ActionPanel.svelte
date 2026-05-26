@@ -1,8 +1,8 @@
 <script lang="ts">
-  import type { Member, Access } from '../lib/types';
+  import type { Access } from '../lib/types';
   import { app } from '../lib/simulation-store.svelte';
   import { ALL_ACCESSES, ACCESS_LABELS } from '../lib/types';
-  import { accessColor } from '../lib/utils';
+  import { accessColor, parseMemberDid } from '../lib/utils';
 
   let { currentUser, selectedArbiter, selectedSpace, serverState, users } =
     $derived(app);
@@ -94,12 +94,14 @@
     }
   }
 
-  async function handleRemoveMember(entry: { member: { tag: string; value: unknown } }) {
+  async function handleRemoveMember(entry: { did: string }) {
     if (!currentUser || !selectedSpace) return;
-    const member = entry.member as Member;
     const result = await app.processOperation(
       selectedArbiter!.did, currentUser.did, selectedSpace.key,
-      { type: 'RemoveSpaceMember', member },
+      {
+        type: 'RemoveSpaceMember',
+        member: { tag: entry.did.startsWith('space:') ? 'MemberLocalSpace' : entry.did.includes('|') ? 'MemberRemoteSpace' : 'MemberDid', value: entry.did },
+      },
     );
     if (result.status === 'ok') {
       app.notifications.add('success', 'Member removed');
@@ -153,16 +155,12 @@
     }
   }
 
-  function memberDisplay(entry: { member: { tag: string; value: unknown } }): string {
-    const m = entry.member;
-    switch (m.tag) {
-      case 'MemberDid': return `👤 ${m.value}`;
-      case 'MemberLocalSpace': return `📁 ${m.value}`;
-      case 'MemberRemoteSpace': {
-        const v = m.value as { arbiterDid: string; spaceKey: string };
-        return `🌐 ${v.arbiterDid}/${v.spaceKey}`;
-      }
-      default: return `? ${m.tag}`;
+  function memberDisplay(entry: { did: string }): string {
+    const info = parseMemberDid(entry.did);
+    switch (info.kind) {
+      case 'user': return `👤 ${info.display}`;
+      case 'localspace': return `📁 ${info.display}`;
+      case 'remotespace': return `🌐 ${info.display}`;
     }
   }
 

@@ -1,29 +1,10 @@
 import type {
-  Member,
   Access,
-  ServerStateView,
-  MemberEntryView,
+  ServerSnapshot,
+  ArbiterSnapshot,
+  MemberEntry,
 } from "./types";
 import { ALL_ACCESSES } from "./types";
-
-// ---------------------------------------------------------------------------
-// Member building
-// ---------------------------------------------------------------------------
-
-/** Build a Member from a MemberEntryView for remove operations. */
-export function buildMemberFromEntry(entry: MemberEntryView): Member | null {
-  const m = entry.member;
-  switch (m.tag) {
-    case "MemberDid":
-      return { tag: "MemberDid", value: m.value as string };
-    case "MemberLocalSpace":
-      return { tag: "MemberLocalSpace", value: m.value as string };
-    case "MemberRemoteSpace":
-      return { tag: "MemberRemoteSpace", value: m.value as { arbiterDid: string; spaceKey: string } };
-    default:
-      return null;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Access level helpers
@@ -69,34 +50,54 @@ export function shortDid(did: string, maxLen = 24): string {
   return did.slice(0, maxLen - 3) + "…";
 }
 
-/** Get a human-readable label for a member entry in the state view. */
-export function memberDisplay(member: MemberEntryView): string {
-  const m = member.member;
-  switch (m.tag) {
-    case "MemberDid":
-      return `👤 ${shortDid(m.value as string)}`;
-    case "MemberLocalSpace":
-      return `📁 ${m.value}`;
-    case "MemberRemoteSpace":
-      return `🌐 ${(m.value as { arbiterDid: string }).arbiterDid}/${(m.value as { spaceKey: string }).spaceKey}`;
-    default:
-      return `? ${m.tag}`;
+/** Get a human-readable label for a member entry. */
+export function memberDisplay(member: MemberEntry): string {
+  if (member.did.startsWith('space:')) {
+    return `📁 ${member.did.slice(6)}`;
+  }
+  if (member.did.includes('|')) {
+    const [arb, key] = member.did.split('|', 2);
+    return `🌐 ${arb}/${key}`;
+  }
+  return `👤 ${shortDid(member.did)}`;
+}
+
+/** Get spaces from the server snapshot for a given arbiter. */
+export function getArbiterSpaces(
+  snapshot: ServerSnapshot,
+  arbiterDid: string,
+) {
+  return snapshot.arbiters.find((a) => a.did === arbiterDid)?.spaces ?? [];
+}
+
+/** Build a member DID from type + value for setSpaceMemberAccess. */
+export function buildMemberDid(
+  memberType: 'user' | 'localspace' | 'remotespace',
+  value: string,
+  remoteArbiterDid?: string,
+): string {
+  switch (memberType) {
+    case 'user':
+      return value;
+    case 'localspace':
+      return `space:${value}`;
+    case 'remotespace':
+      return `${remoteArbiterDid}|${value}`;
   }
 }
 
-/** Get a short label for a member type. */
-export function memberTypeLabel(tag: string): string {
-  switch (tag) {
-    case "MemberDid": return "User";
-    case "MemberLocalSpace": return "Local Space";
-    case "MemberRemoteSpace": return "Remote Space";
-    default: return tag;
+/** Parse a member DID back into parts for display. */
+export function parseMemberDid(
+  did: string,
+): { kind: 'user' | 'localspace' | 'remotespace'; display: string } {
+  if (did.startsWith('space:')) {
+    return { kind: 'localspace', display: did.slice(6) };
   }
-}
-
-/** Get spaces from the server state for a given arbiter. */
-export function getArbiterSpaces(state: ServerStateView, arbiterDid: string) {
-  return state.arbiters.find((a) => a.did === arbiterDid)?.spaces ?? [];
+  if (did.includes('|')) {
+    const [arb, key] = did.split('|', 2);
+    return { kind: 'remotespace', display: `${arb}/${key}` };
+  }
+  return { kind: 'user', display: did };
 }
 
 // ---------------------------------------------------------------------------

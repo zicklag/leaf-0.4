@@ -1,16 +1,12 @@
 // Reactive application state using Svelte 5 runes.
 
 import { Simulator } from './simulator';
-import { generateUserId, generateArbiterDid } from './utils';
 import type {
   UserAccount,
-  ServerStateView,
-  ArbiterView,
-  SpaceView,
-  MemberEntryView,
-  JobArgs,
-  OperationOk,
-  OperationResult,
+  OpResult,
+  ArbiterSnapshot,
+  SpaceSnapshot,
+  PolicyCheckLog,
 } from './types';
 
 // --- Notifications ---
@@ -64,31 +60,138 @@ class AppState {
   users = $state<UserAccount[]>([]);
   currentUserId = $state<string | null>(null);
 
-  serverState = $state<ServerStateView | null>(null);
+  // Snapshot refreshed after each mutation / selection
+  snapshot = $state<{ arbiters: ArbiterSnapshot[] }>({ arbiters: [] });
 
   selectedArbiterDid = $state<string | null>(null);
   selectedSpaceKey = $state<string | null>(null);
-  selectedSpaceMembers = $state<OperationOk['members'] | null>(null);
-  selectedSpaceMissing = $state<OperationOk['missingSpaces'] | null>(null);
-  selectedSpaceError = $state<string | null>(null);
 
-  private lastSpaceRefresh = '';
-  private lastRefreshUser = '';
+  // Resolved member view for the selected space
+  resolvedMembers = $state<Array<{ did: string; access: Record<string, unknown> }> | null>(null);
+  resolvedMissing = $state<Array<{ arbiterDid: string; spaceKey: string }> | null>(null);
+  resolvedError = $state<string | null>(null);
+
+  // Policy check log for the most recent operation
+  lastPolicyLog = $state<PolicyCheckLog | null>(null);
+
+  private lastResolveKey = '';
 
   get currentUser() {
     return this.users.find((u) => u.did === this.currentUserId) ?? null;
   }
 
-  get selectedArbiter(): ArbiterView | null {
-    return this.serverState?.arbiters.find(
-      (a) => a.did === this.selectedArbiterDid,
-    ) ?? null;
+  get selectedArbiter(): ArbiterSnapshot | null {
+    return this.snapshot.arbiters.find((a) => a.did === this.selectedArbiterDid) ?? null;
   }
 
-  get selectedSpace(): SpaceView | null {
-    return this.selectedArbiter?.spaces.find(
-      (s) => s.key === this.selectedSpaceKey,
-    ) ?? null;
+  get selectedSpace(): SpaceSnapshot | null {
+    return this.selectedArbiter?.spaces.find((s) => s.key === this.selectedSpaceKey) ?? null;
+  }
+
+  // Backward-compatible aliases for existing components
+  // These will be removed once components are migrated.
+
+  /** @deprecated Use `snapshot` instead. */
+  get serverState() { return this.snapshot; }
+
+  /** @deprecated Use `resolvedMembers` instead. */
+  get selectedSpaceMembers() {
+    return this.resolvedMembers as Array<{ did: string; access: Record<string, unknown> } & Record<string, unknown>> | null;
+  }
+
+  /** @deprecated Use `resolvedMissing` instead. */
+  get selectedSpaceMissing() { return this.resolvedMissing; }
+
+  /** @deprecated Use `resolvedError` instead. */
+  get selectedSpaceError() {
+    return this.resolvedError ? `Permission denied: ${this.resolvedError}` : null;
+  }
+
+  /** @deprecated Use `refreshSnapshot` instead. */
+  refreshState() { this.refreshSnapshot(); }
+
+  /** @deprecated No-op, offline functionality removed. */
+  isArbiterOffline(_did: string) { return false; }
+
+  /** @deprecated Use `runOp` with explicit method calls instead. */
+  async processOperation(
+    arbiterDid: string,
+    userDid: string,
+    _spaceKey: string,
+    args: { type: string; [key: string]: unknown },
+  ): Promise<{ status: string; error?: string; members?: unknown[] }> {
+    // Map old JobArgs type strings to new simulator methods
+    const log: PolicyCheckLog = { steps: [], result: undefined, allowed: false };
+    let result: OpResult;
+
+    switch (args.type) {
+      case 'CreateSpace':
+        result = await this.simulator.createSpace(arbiterDid, userDid, {
+          spaceKey: args.spaceKey as string,
+          spaceType: args.spaceType as string,
+          config: args.config as Record<string, unknown>,
+        }, log);
+        break;
+      case 'DeleteSpace':
+        result = await this.simulator.deleteSpace(arbiterDid, userDid, {
+          spaceKey: args.spaceKey as string,
+        }, log);
+        break;
+      case 'SetSpaceConfig':
+        result = await this.simulator.setSpaceConfig(arbiterDid, userDid, {
+          spaceKey: args.spaceKey as string,
+          config: args.config as Record<string, unknown>,
+        }, log);
+        break;
+      case 'SetSpaceMemberAccess': {
+        const member = args.member as { tag: string; value: unknown };
+        const memberDid = member.tag === 'MemberDid'
+          ? String(member.value)
+          : member.tag === 'MemberLocalSpace'
+            ? `space:${member.value}`
+            : `${(member.value as { arbiterDid: string }).arbiterDid}|${(member.value as { spaceKey: string }).spaceKey}`;
+        result = await this.simulator.setSpaceMemberAccess(arbiterDid, userDid, {
+          spaceKey: args.spaceKey as string,
+          memberDid,
+          access: args.access as Record<string, unknown>,
+        }, log);
+        break;
+      }
+      case 'RemoveSpaceMember': {
+        const member = args.member as { tag: string; value: unknown };
+        const memberDid = member.tag === 'MemberDid'
+          ? String(member.value)
+          : member.tag === 'MemberLocalSpace'
+            ? `space:${member.value}`
+            : `${(member.value as { arbiterDid: string }).arbiterDid}|${(member.value as { spaceKey: string }).spaceKey}`;
+        result = await this.simulator.removeSpaceMember(arbiterDid, userDid, {
+          spaceKey: args.spaceKey as string,
+          memberDid,
+        }, log);
+        break;
+      }
+      case 'ResolveMembers':
+        result = await this.simulator.resolveSpaceMembers(arbiterDid, userDid, {
+          spaceKey: args.spaceKey as string,
+        }, log);
+        break;
+      case 'DeleteArbiter':
+        // Simulate deletion via the arbiter's own policy (admin space)
+        result = await this.simulator.deleteArbiter(arbiterDid, userDid, log);
+        break;
+      default:
+        result = { status: 'error', error: `Unknown operation: ${args.type}` };
+    }
+
+    this.lastPolicyLog = log;
+    this.refreshSnapshot();
+
+    if (this.selectedArbiterDid && this.selectedSpaceKey) {
+      this.lastResolveKey = '';
+      this.fetchResolvedMembers();
+    }
+
+    return result;
   }
 
   async init() {
@@ -99,19 +202,19 @@ class AppState {
       this.addUser('Alice');
       this.addUser('Bob');
       this.addUser('Charlie');
-      this.refreshState();
+      this.refreshSnapshot();
     } catch (e) {
       this.initError = String(e);
       this.loading = false;
     }
   }
 
-  refreshState() {
-    this.serverState = this.simulator.getState();
+  refreshSnapshot() {
+    this.snapshot = this.simulator.snapshot();
   }
 
   addUser(label: string): UserAccount {
-    const did = generateUserId(label);
+    const did = label.toLowerCase().replace(/\s+/g, '-');
     const user: UserAccount = { did, label };
     this.users = [...this.users, user];
     if (!this.currentUserId) this.currentUserId = did;
@@ -128,83 +231,82 @@ class AppState {
   selectUser(did: string) {
     this.currentUserId = did;
     if (this.selectedArbiterDid && this.selectedSpaceKey) {
-      this.fetchSpaceMembers();
+      this.fetchResolvedMembers();
     }
   }
 
   selectArbiter(did: string | null) {
     this.selectedArbiterDid = did;
     this.selectedSpaceKey = null;
-    this.selectedSpaceMembers = null;
-    this.selectedSpaceMissing = null;
-    this.selectedSpaceError = null;
+    this.resolvedMembers = null;
+    this.resolvedMissing = null;
+    this.resolvedError = null;
   }
 
   selectSpace(arbiterDid: string, spaceKey: string) {
     this.selectedArbiterDid = arbiterDid;
     this.selectedSpaceKey = spaceKey;
-    this.fetchSpaceMembers();
+    this.fetchResolvedMembers();
   }
 
-  /// Fetch resolved members for the selected space.
-  private async fetchSpaceMembers() {
+  /** Fetch resolved members for the selected space. */
+  private async fetchResolvedMembers() {
     if (!this.selectedArbiterDid || !this.selectedSpaceKey) return;
     if (!this.currentUserId) return;
 
     const key = `${this.selectedArbiterDid}/${this.selectedSpaceKey}/${this.currentUserId}`;
-    if (key === this.lastSpaceRefresh) return;
-    this.lastSpaceRefresh = key;
+    if (key === this.lastResolveKey) return;
+    this.lastResolveKey = key;
 
     try {
-      const result = await this.simulator.processOperation(
+      const log: PolicyCheckLog = { steps: [], result: undefined, allowed: false };
+      const result = await this.simulator.resolveSpaceMembers(
         this.selectedArbiterDid,
         this.currentUserId,
-        this.selectedSpaceKey,
-        { type: 'ResolveMembers' },
+        { spaceKey: this.selectedSpaceKey },
+        log,
       );
 
-      if (result.result.status === 'ok') {
-        this.selectedSpaceMembers = result.result.members ?? null;
-        this.selectedSpaceMissing = result.result.missingSpaces ?? null;
-        this.selectedSpaceError = null;
-      } else if (result.result.status === 'error') {
-        this.selectedSpaceMembers = null;
-        this.selectedSpaceMissing = null;
-        this.selectedSpaceError = `Permission denied for "${this.currentUser?.label}": ${result.result.error}`;
+      if (result.status === 'ok') {
+        this.resolvedMembers = result.members ?? null;
+        this.resolvedMissing = result.missingSpaces?.map((m) => ({
+          arbiterDid: m.arbiterDid,
+          spaceKey: m.spaceKey,
+        })) ?? null;
+        this.resolvedError = null;
       } else {
-        this.selectedSpaceMembers = null;
-        this.selectedSpaceMissing = null;
-        this.selectedSpaceError = `Could not resolve members.`;
+        this.resolvedMembers = null;
+        this.resolvedMissing = null;
+        this.resolvedError = `Permission denied: ${result.error}`;
       }
 
-      // Update the full state
-      this.serverState = result.state;
+      this.lastPolicyLog = log;
+      this.refreshSnapshot();
     } catch (e) {
-      this.selectedSpaceMembers = null;
-      this.selectedSpaceMissing = null;
-      this.selectedSpaceError = `Error: ${e}`;
+      this.resolvedMembers = null;
+      this.resolvedMissing = null;
+      this.resolvedError = `Error: ${e}`;
     }
   }
 
-  /// Process an operation and update state.
-  async processOperation(
+  /** Run an XRPC operation and refresh state. */
+  async runOp(
     arbiterDid: string,
     userDid: string,
-    spaceKey: string,
-    args: JobArgs,
-  ): Promise<OperationResult> {
-    const result = await this.simulator.processOperation(
-      arbiterDid, userDid, spaceKey, args,
-    );
-    this.serverState = result.state;
+    operation: (log?: PolicyCheckLog) => Promise<OpResult>,
+  ): Promise<OpResult> {
+    const log: PolicyCheckLog = { steps: [], result: undefined, allowed: false };
+    const result = await operation(log);
+    this.lastPolicyLog = log;
+    this.refreshSnapshot();
 
     // Re-fetch members if a space is selected
     if (this.selectedArbiterDid && this.selectedSpaceKey) {
-      this.lastSpaceRefresh = '';
-      this.fetchSpaceMembers();
+      this.lastResolveKey = '';
+      this.fetchResolvedMembers();
     }
 
-    return result.result;
+    return result;
   }
 
   resetAll() {
@@ -212,26 +314,12 @@ class AppState {
     location.reload();
   }
 
-  toggleArbiterOffline(did: string) {
-    const s = this.simulator.disabledArbiters;
-    if (s.has(did)) {
-      s.delete(did);
-    } else {
-      s.add(did);
-    }
-    this.refreshState();
-    if (this.selectedArbiterDid && this.selectedSpaceKey) {
-      this.lastSpaceRefresh = '';
-      this.fetchSpaceMembers();
-    }
+  generateArbiterDid(): string {
+    const count = this.snapshot.arbiters.length + 1;
+    return `arbiter${count}`;
   }
-
-  isArbiterOffline(did: string): boolean {
-    return this.simulator.disabledArbiters.has(did);
-  }
-
-  generateArbiterDid() { return generateArbiterDid(); }
 }
 
 export const app = new AppState();
-(globalThis as any).app = app;
+// Expose for debugging
+(globalThis as unknown as Record<string, unknown>).app = app;
