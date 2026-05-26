@@ -179,6 +179,8 @@ higher_exists(member) if {
 resolved_members contains member if {
 	some member in resolved_members_raw
 	not higher_exists(member)
+	not startswith(member.did, "space:")
+	not contains(member.did, "|")
 }
 
 # ---------------------------------------------------------------------------
