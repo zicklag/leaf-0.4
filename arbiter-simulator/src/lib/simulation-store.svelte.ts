@@ -9,6 +9,8 @@ import type {
   PolicyCheckLog,
 } from './types';
 
+const STORAGE_KEY = 'arbiter-simulator-state';
+
 // --- Notifications ---
 class NotificationStore {
   items = $state<AppNotification[]>([]);
@@ -128,6 +130,7 @@ class AppState {
   /** Apply a policy to all arbiters. */
   setPolicy(policy: string): void {
     this.simulator.applyPolicyToAll(policy);
+    this.refreshSnapshot();
   }
 
   /** Get the default policy text. */
@@ -228,15 +231,114 @@ class AppState {
     return result;
   }
 
+  /** Serialise the full app state into a portable object. */
+  private serialise(): Record<string, unknown> {
+    return {
+      snapshot: this.simulator.snapshot(),
+      users: this.users,
+      currentUserId: this.currentUserId,
+      defaultPolicy: this.simulator.defaultPolicy,
+    };
+  }
+
+  /** Save current state to localStorage. */
+  private saveToStorage(): void {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.serialise()));
+    } catch {
+      // Ignore storage errors (quota, private browsing, etc.)
+    }
+  }
+
+  /** Restore state from localStorage. Returns true if state was restored. */
+  private restoreFromStorage(): boolean {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      const saved = JSON.parse(raw);
+      if (!saved || typeof saved !== 'object') return false;
+
+      const snap = saved.snapshot;
+      if (!snap || !Array.isArray(snap.arbiters)) return false;
+
+      // Restore simulator state
+      this.simulator.loadSnapshot(snap);
+      if (typeof saved.defaultPolicy === 'string') {
+        this.simulator.defaultPolicy = saved.defaultPolicy;
+      }
+
+      // Restore UI state
+      if (Array.isArray(saved.users)) {
+        this.users = saved.users;
+      }
+      if (typeof saved.currentUserId === 'string') {
+        this.currentUserId = saved.currentUserId;
+      }
+
+      this.refreshSnapshot();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Copy the full config to clipboard as JSON. */
+  async copyConfig(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(this.serialise(), null, 2));
+      this.notifications.add('success', 'Config copied to clipboard!');
+    } catch {
+      this.notifications.add('error', 'Failed to copy config');
+    }
+  }
+
+  /** Import config from clipboard JSON and restore state. */
+  async importConfig(): Promise<void> {
+    try {
+      const text = await navigator.clipboard.readText();
+      const saved = JSON.parse(text);
+      if (!saved || typeof saved !== 'object' || !saved.snapshot || !Array.isArray(saved.snapshot.arbiters)) {
+        this.notifications.add('error', 'Invalid config format');
+        return;
+      }
+
+      this.simulator.loadSnapshot(saved.snapshot);
+      if (typeof saved.defaultPolicy === 'string') {
+        this.simulator.defaultPolicy = saved.defaultPolicy;
+      }
+      if (Array.isArray(saved.users)) {
+        this.users = saved.users;
+      }
+      this.currentUserId = typeof saved.currentUserId === 'string' ? saved.currentUserId : (saved.users?.[0]?.did ?? null);
+
+      this.refreshSnapshot();
+      this.selectedArbiterDid = null;
+      this.selectedSpaceKey = null;
+      this.resolvedMembers = null;
+      this.resolvedMissing = null;
+      this.resolvedError = null;
+      this.notifications.add('success', 'Config imported!');
+    } catch {
+      this.notifications.add('error', 'Failed to import config');
+    }
+  }
+
   async init() {
     try {
       await this.simulator.init();
       this.loading = false;
       this.applyTheme();
-      this.addUser('Alice');
-      this.addUser('Bob');
-      this.addUser('Charlie');
-      this.refreshSnapshot();
+
+      // Try to restore saved state first
+      const restored = this.restoreFromStorage();
+
+      if (!restored) {
+        // Fresh start
+        this.addUser('Alice');
+        this.addUser('Bob');
+        this.addUser('Charlie');
+        this.refreshSnapshot();
+      }
     } catch (e) {
       this.initError = String(e);
       this.loading = false;
@@ -245,6 +347,7 @@ class AppState {
 
   refreshSnapshot() {
     this.snapshot = this.simulator.snapshot();
+    this.saveToStorage();
   }
 
   addUser(label: string): UserAccount {
@@ -252,6 +355,7 @@ class AppState {
     const user: UserAccount = { did, label };
     this.users = [...this.users, user];
     if (!this.currentUserId) this.currentUserId = did;
+    this.saveToStorage();
     return user;
   }
 
@@ -260,6 +364,7 @@ class AppState {
     if (this.currentUserId === did) {
       this.currentUserId = this.users[0]?.did ?? null;
     }
+    this.saveToStorage();
   }
 
   selectUser(did: string) {
@@ -344,6 +449,7 @@ class AppState {
   }
 
   resetAll() {
+    localStorage.removeItem(STORAGE_KEY);
     history.replaceState(null, '', window.location.pathname);
     location.reload();
   }

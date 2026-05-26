@@ -4,15 +4,6 @@
 
   let { currentUser } = $derived(app);
 
-  function shareLink() {
-    const url = window.location.href;
-    navigator.clipboard.writeText(url).then(() => {
-      app.notifications.add('success', 'Link copied to clipboard!');
-    }).catch(() => {
-      app.notifications.add('error', 'Failed to copy link');
-    });
-  }
-
   function copyCleanLink() {
     const url = window.location.origin + window.location.pathname;
     navigator.clipboard.writeText(url).then(() => {
@@ -20,6 +11,14 @@
     }).catch(() => {
       app.notifications.add('error', 'Failed to copy link');
     });
+  }
+
+  function handleCopyConfig() {
+    app.copyConfig();
+  }
+
+  function handleImportConfig() {
+    app.importConfig();
   }
 </script>
 
@@ -47,8 +46,11 @@
     <button class="btn btn-sm" onclick={() => app.resetAll()}>
       ↺ Reset
     </button>
-    <button class="btn btn-sm" onclick={shareLink}>
-      ↗ Share
+    <button class="btn btn-sm" onclick={handleCopyConfig} title="Copy full config to clipboard">
+      📋 Copy
+    </button>
+    <button class="btn btn-sm" onclick={handleImportConfig} title="Import config from clipboard">
+      📥 Import
     </button>
     <button class="btn btn-sm theme-toggle" onclick={() => app.toggleTheme()} title={app.darkTheme ? 'Switch to light mode' : 'Switch to dark mode'}>
       {app.darkTheme ? '☀️' : '🌙'}
