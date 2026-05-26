@@ -116,39 +116,67 @@ remote_delegation contains member if {
 # Terminal entries (real DIDs) are emitted directly; space:<key> entries are
 # expanded recursively with depth-1.
 
+# -- expand_delegation helpers -------------------------------------------------
+
+# Terminal entries: real DIDs (not space: and not remote |)
+_expand_terminal(child_key, parent_access) := [member |
+	some entry in space_members(child_key)
+	not startswith(entry.did, "space:")
+	not contains(entry.did, "|")
+	member := {
+		"did": entry.did,
+		"access": min_access(entry.access, parent_access),
+		"via": child_key,
+	}
+]
+
+# Remote delegation entries: arbiter|space references resolved via xrpc_remote
+_expand_remote(child_key, parent_access) := [member |
+	some entry in space_members(child_key)
+	contains(entry.did, "|")
+	parts := split(entry.did, "|")
+	arbiter_did := parts[0]
+	space_key := parts[1]
+	some remote_entry in xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	member := {
+		"did": remote_entry.did,
+		"access": min_access(remote_entry.access, min_access(entry.access, parent_access)),
+		"via": concat("|", [arbiter_did, space_key]),
+	}
+]
+
+# Recursive entries: space:<key> references expanded with depth-1
+_expand_recursive(child_key, parent_access, depth) := [grandchild |
+	some entry in space_members(child_key)
+	startswith(entry.did, "space:")
+	child := trim_prefix(entry.did, "space:")
+	some grandchild in expand_delegation(child, min_access(entry.access, parent_access), depth - 1)
+]
+
 expand_delegation(child_key, parent_access, depth) := result if {
 	depth > 0
-	terminal := [member |
-		some entry in space_members(child_key)
-		not startswith(entry.did, "space:")
-		member := {
-			"did": entry.did,
-			"access": min_access(entry.access, parent_access),
-			"via": child_key,
-		}
-	]
-	recursive := [member |
-		some entry in space_members(child_key)
-		startswith(entry.did, "space:")
-		child := trim_prefix(entry.did, "space:")
-		some grandchild in expand_delegation(child, min_access(entry.access, parent_access), depth - 1)
-		member := grandchild
-	]
-	result := array.concat(terminal, recursive)
+	terminal := _expand_terminal(child_key, parent_access)
+	remote := _expand_remote(child_key, parent_access)
+	recursive := _expand_recursive(child_key, parent_access, depth)
+	combined := array.concat(terminal, remote)
+	result := array.concat(combined, recursive)
 }
 
 # Combine everything into resolved_members_raw
 resolved_members_raw contains member if {
 	some member in direct_members
 }
+
 resolved_members_raw contains member if {
 	some member in remote_delegation
 }
+
 resolved_members_raw contains member if {
 	some entry in direct_members
 	startswith(entry.did, "space:")
 	some member in expand_delegation(trim_prefix(entry.did, "space:"), entry.access, 9)
 }
+
 resolved_members_raw contains member if {
 	some entry in remote_delegation
 	startswith(entry.did, "space:")

@@ -95,7 +95,7 @@ export class Simulator {
 
       if (request.kind === 'xrpc_local') {
         log?.steps.push(`xrpc_local(${request.path})`);
-        const resolved = this.resolveLocalQuery(arbiter.did, request.path, request.input);
+        const resolved = await this.resolveLocalQuery(arbiter.did, request.path, request.input);
         try {
           result = session.resume(resolved);
         } catch (e) {
@@ -141,14 +141,14 @@ export class Simulator {
   }
 
   /** Resolve an xrpc_local query — internal data lookup within the same arbiter (no policy check needed). */
-  private resolveLocalQuery(arbiterDid: Did, path: string, input: unknown): unknown {
-    return this.executeQuery(arbiterDid, path, (input ?? {}) as Record<string, unknown>);
+  /** Resolve a local xrpc_local query. */
+  private async resolveLocalQuery(arbiterDid: Did, path: string, input: unknown): Promise<unknown> {
+    return this.executeQuery(arbiterDid, path, (input ?? {}) as Record<string, unknown>, arbiterDid);
   }
 
   /**
-   * Resolve an xrpc_remote query by calling the remote arbiter's policy.
-   * The caller is authenticated against the remote arbiter's access rules.
-   * Returns null if the remote is offline, unreachable, or denies access.
+   * Resolve an xrpc_remote query. Authenticates the caller against the
+   * remote arbiter, then executes the query.
    */
   private async resolveRemoteQuery(
     callerArbiterDid: Did,
@@ -161,19 +161,24 @@ export class Simulator {
 
     const params = (input ?? {}) as Record<string, unknown>;
 
-    // Authenticate: the caller (local arbiter) must have permission on the remote
     const auth = await this.checkPolicy(remoteArbiter, callerArbiterDid, path, params);
     if (!auth.allowed) return null;
 
-    // Authorized — execute the query (returns raw data, not wrapped in OpResult)
-    return this.executeQuery(remoteDid, path, params);
+    return this.executeQuery(remoteDid, path, params, callerArbiterDid);
   }
 
   /**
-   * Execute a query-type XRPC method (read-only, no policy check — server-to-server).
-   * Returns the result value directly (not wrapped in OpResult).
+   * Execute a query-type XRPC method. Server-to-server — no policy check.
+   * For resolveSpaceMembers, evaluates the full policy to return a flat
+   * resolved member list, so the calling policy never needs to expand remote
+   * space:<key> entries locally.
    */
-  private executeQuery(arbiterDid: Did, path: string, params: Record<string, unknown>): unknown {
+  private async executeQuery(
+    arbiterDid: Did,
+    path: string,
+    params: Record<string, unknown>,
+    callerDid?: Did,
+  ): Promise<unknown> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return null;
 
@@ -192,13 +197,15 @@ export class Simulator {
       }
 
       case NSID.resolveSpaceMembers: {
-        // When the policy queries resolveSpaceMembers via xrpc_remote, return
-        // the raw direct members of the target space. The calling policy handles
-        // delegation, min_access, and deduplication.
+        // Return fully resolved members so the calling policy receives real
+        // DIDs — no space:<key> entries that only make sense on this arbiter.
         const sk = params.spaceKey as string | undefined;
         if (!sk) return [];
-        const space = arbiter.spaces.get(sk);
-        return space ? space.members.map((m) => ({ did: m.did, access: m.access })) : [];
+        return this.resolveSpaceMembersInner(
+          arbiter,
+          callerDid ?? arbiterDid,
+          sk,
+        );
       }
 
       case NSID.listSpaces:
@@ -209,6 +216,27 @@ export class Simulator {
       default:
         return null;
     }
+  }
+
+  /**
+   * Evaluate resolve_result on an arbiter and return fully resolved members
+   * (flat — no space:<key> entries). No auth check — the caller handles that.
+   */
+  private async resolveSpaceMembersInner(
+    arbiter: ArbiterState,
+    callerDid: Did,
+    spaceKey: SpaceKey,
+  ): Promise<MemberEntry[]> {
+    const result = await this.evaluateEntryPoint(
+      arbiter,
+      callerDid,
+      NSID.resolveSpaceMembers,
+      { spaceKey },
+      'data.arbiter.resolve_result',
+    );
+    if (result.error) return [];
+    const data = result.value as Record<string, unknown> | undefined;
+    return Array.isArray(data?.members) ? (data.members as MemberEntry[]) : [];
   }
 
   // -----------------------------------------------------------------------
@@ -370,17 +398,12 @@ export class Simulator {
     const auth = await this.checkPolicy(arbiter, callerDid, NSID.resolveSpaceMembers, params, log);
     if (!auth.allowed) return { status: 'error', error: auth.error ?? 'ErrPermissionDenied' };
 
-    // Query the policy's resolve_result for the computed member data
-    const result = await this.evaluateEntryPoint(
-      arbiter, callerDid, NSID.resolveSpaceMembers, params, 'data.arbiter.resolve_result', log,
-    );
-    if (result.error) return { status: 'error', error: result.error };
-
-    const data = result.value as Record<string, unknown> | undefined;
+    // Get fully resolved members
+    const members = await this.resolveSpaceMembersInner(arbiter, callerDid, params.spaceKey);
     return {
       status: 'ok',
-      members: Array.isArray(data?.members) ? (data!.members as MemberEntry[]) : [],
-      missingSpaces: Array.isArray(data?.missingSpaces) ? (data!.missingSpaces as SpaceRef[]) : [],
+      members,
+      missingSpaces: [],
     };
   }
 

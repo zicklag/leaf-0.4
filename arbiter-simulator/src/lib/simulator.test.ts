@@ -763,4 +763,73 @@ describe('access-levels policy', () => {
       assertMemberExists(members, 'carol', 'RemoveMembers');
     });
   });
+
+  // =======================================================================
+  // Cross-arbiter remote delegation
+  // =======================================================================
+
+  describe('cross-arbiter remote delegation', () => {
+    it('resolves members across arbiter boundaries with nested delegations', async () => {
+      // Set up muni-town with nested delegation
+      h.createDefaultArbiter('muni-town', 'alice');
+      await h.assertOk('muni-town', 'alice', 'members', 'createSpace');
+      await h.assertOk('muni-town', 'alice', 'moderators', 'createSpace');
+
+      // muni-town/members is public so remote arbiters can read its members
+      const muniMembers = h.sim.arbiters.get('muni-town')!.spaces.get('members')!;
+      muniMembers.config = { ...muniMembers.config, publicMembers: true };
+
+      // muni-town/members delegates to moderators (local) and has george
+      await h.assertOk('muni-town', 'alice', 'members', 'setSpaceMemberAccess', {
+        memberDid: 'space:moderators',
+        access: access('RemoveMembers'),
+      });
+      await h.assertOk('muni-town', 'alice', 'members', 'setSpaceMemberAccess', {
+        memberDid: 'george',
+        access: access('IsMember'),
+      });
+
+      // muni-town/moderators has carol
+      await h.assertOk('muni-town', 'alice', 'moderators', 'setSpaceMemberAccess', {
+        memberDid: 'carol',
+        access: access('RemoveMembers'),
+      });
+
+      // Set up spicy-lobster with remote delegation to muni-town/members
+      h.createDefaultArbiter('spicy-lobster', 'bob');
+      await h.assertOk('spicy-lobster', 'bob', 'members', 'createSpace');
+      await h.assertOk('spicy-lobster', 'bob', '#general', 'createSpace');
+
+      // spicy-lobster/members has mary (direct) and muni-town|members (remote)
+      await h.assertOk('spicy-lobster', 'bob', 'members', 'setSpaceMemberAccess', {
+        memberDid: 'mary',
+        access: access('IsMember'),
+      });
+      await h.assertOk('spicy-lobster', 'bob', 'members', 'setSpaceMemberAccess', {
+        memberDid: 'muni-town|members',
+        access: access('IsMember'),
+      });
+
+      // spicy-lobster/#general delegates to members
+      await h.assertOk('spicy-lobster', 'bob', '#general', 'setSpaceMemberAccess', {
+        memberDid: 'space:members',
+        access: access('RemoveMembers'),
+      });
+
+      // Resolve members of spicy-lobster/#general as bob
+      const members = await h.resolvedMembers('spicy-lobster', 'bob', '#general');
+
+      // Should include:
+      // - bob (Owner from $admin)
+      // - mary (IsMember from members via #general)
+      // - alice (IsMember, from muni-town via remote delegation, capped by min_access)
+      // - george (IsMember from muni-town/members via remote delegation)
+      // - carol (IsMember from muni-town/moderators via remote delegation, capped)
+      assertMemberExists(members, 'bob', 'Owner');
+      assertMemberExists(members, 'mary', 'IsMember');
+      assertMemberExists(members, 'alice', 'IsMember');
+      assertMemberExists(members, 'george', 'IsMember');
+      assertMemberExists(members, 'carol', 'IsMember');
+    });
+  });
 });
