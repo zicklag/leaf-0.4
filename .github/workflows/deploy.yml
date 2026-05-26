@@ -5,9 +5,7 @@ on:
     branches: [main]
     paths:
       - "arbiter-simulator/**"
-      - "crates/arbiter-core/**"
-      - "crates/arbiter-server/**"
-      - "crates/arbiter-wasm/**"
+      - "crates/**"
       - "lexicons/**"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
@@ -45,7 +43,7 @@ jobs:
           curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM crate
-        working-directory: crates/arbiter-wasm
+        working-directory: crates/policy-core-wasm
         run: wasm-pack build --target web
 
       - name: Install dependencies
