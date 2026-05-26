@@ -115,6 +115,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "arbiter-core3"
+version = "0.1.0"
+dependencies = [
+ "policy-core",
+ "regorus",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "arbiter-server"
 version = "0.1.0"
 dependencies = [
@@ -131,6 +142,29 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+]
+
+[[package]]
+name = "arbiter-server2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arbiter-core3",
+ "async-trait",
+ "atproto-identity",
+ "atproto-oauth",
+ "base64",
+ "bs58",
+ "hex",
+ "policy-core",
+ "reqwest",
+ "salvo",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

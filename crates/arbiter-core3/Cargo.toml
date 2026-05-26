@@ -1,0 +1,11 @@
+[package]
+name = "arbiter-core3"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+policy-core = { path = "../policy-core" }
+regorus = { version = "0.10", default-features = false, features = ["rvm", "arc"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

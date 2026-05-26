@@ -2,10 +2,9 @@
   import { app } from '../lib/simulation-store.svelte';
   import { EditorView, basicSetup } from 'codemirror';
   import { EditorState } from '@codemirror/state';
-  import { regoLanguage } from '../lib/rego-lang';
   import { oneDark } from '@codemirror/theme-one-dark';
+  import { regoLanguage } from '../lib/rego-lang';
 
-  let editorEl: HTMLDivElement | undefined;
   let editorView: EditorView | undefined;
   let validationMsg = $state<string | null>(null);
   let validationOk = $state(false);
@@ -69,25 +68,27 @@
     isDirty = true;
   }
 
-  // Init editor on mount
-  $effect(() => {
-    if (!editorEl) return;
-
+  // Svelte action to mount CodeMirror editor (avoids $effect reactive re-run issues)
+  function mountEditor(node: HTMLDivElement) {
     const state = EditorState.create({
       doc: app.policy,
       extensions: makeExtensions(),
     });
 
-    editorView = new EditorView({
+    const view = new EditorView({
       state,
-      parent: editorEl,
+      parent: node,
     });
 
-    return () => {
-      editorView?.destroy();
-      editorView = undefined;
+    editorView = view;
+
+    return {
+      destroy() {
+        view.destroy();
+        editorView = undefined;
+      },
     };
-  });
+  }
 </script>
 
 <div class="policy-editor">
@@ -118,7 +119,7 @@
     </div>
   </div>
 
-  <div class="editor-body" bind:this={editorEl}></div>
+  <div class="editor-body" use:mountEditor></div>
 </div>
 
 <style>

@@ -7,3 +7,4 @@ const app = mount(App, {
 });
 
 export default app;
+// vite_restart_marker_1779840564
