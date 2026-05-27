@@ -7,9 +7,10 @@
 
 use std::sync::Arc;
 
+use atproto_identity::key;
 use atproto_identity::resolve::IdentityResolver;
+use atproto_oauth::encoding::FromBase64;
 use atproto_oauth::jwt;
-use base64::Engine as _;
 use salvo::prelude::*;
 
 /// Auth configuration.
@@ -107,28 +108,11 @@ async fn verify_jwt(
     token: &str,
     identity_resolver: &dyn IdentityResolver,
 ) -> anyhow::Result<String> {
-    // Decode claims to get the issuer
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        anyhow::bail!("Invalid JWT format: expected 3 parts");
-    }
-
-    let claims_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|e| anyhow::anyhow!("Failed to decode JWT claims: {e}"))?;
-
-    let claims: jwt::Claims = serde_json::from_slice(&claims_bytes)
-        .map_err(|e| anyhow::anyhow!("Failed to parse JWT claims: {e}"))?;
-
-    let issuer = claims
-        .jose
-        .issuer
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No issuer in JWT claims"))?;
+    let issuer = decode_jwt_issuer(token)?;
 
     // Resolve the DID document
     let did_document = identity_resolver
-        .resolve(issuer)
+        .resolve(&issuer)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to resolve DID {issuer}: {e}"))?;
 
@@ -140,20 +124,33 @@ async fn verify_jwt(
 
     // Try to verify the JWT signature with each key
     for key_multibase in did_keys {
-        match atproto_identity::key::identify_key(key_multibase) {
-            Ok(key_data) => {
-                match jwt::verify(token, &key_data) {
-                    Ok(_validated_claims) => {
-                        return Ok(issuer.clone());
-                    }
-                    Err(_) => continue,
-                }
-            }
-            Err(_) => continue,
+        let Ok(key_data) = key::identify_key(key_multibase) else {
+            continue;
+        };
+        if jwt::verify(token, &key_data).is_ok() {
+            return Ok(issuer);
         }
     }
 
     anyhow::bail!(
         "JWT signature could not be verified with any key for {issuer}"
     );
+}
+
+/// Extract the issuer DID from a JWT without full signature verification.
+/// Only the claims payload is decoded (without verification) to determine
+/// which DID to resolve. Actual signature verification happens afterward
+/// via `jwt::verify` once the DID document's keys are obtained.
+fn decode_jwt_issuer(token: &str) -> anyhow::Result<String> {
+    let payload = token
+        .split('.')
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("Invalid JWT: expected 3 parts"))?;
+
+    let claims = jwt::Claims::from_base64(payload)?;
+
+    claims
+        .jose
+        .issuer
+        .ok_or_else(|| anyhow::anyhow!("JWT missing required 'iss' claim"))
 }

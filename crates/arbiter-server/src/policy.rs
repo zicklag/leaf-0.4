@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use atproto_identity::resolve::IdentityResolver;
 use policy_core::{HostRequest, VmResult, VmSession};
 use regorus::Value as RegoValue;
 use serde_json::Value;
@@ -20,7 +21,6 @@ use crate::state::ArbiterCollection;
 pub struct NSID;
 
 impl NSID {
-    pub const CREATE_ARBITER: &'static str = "town.muni.arbiter.createArbiter";
     pub const GET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.getArbiterConfig";
     pub const SET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.setArbiterConfig";
     pub const DELETE_ARBITER: &'static str = "town.muni.arbiter.deleteArbiter";
@@ -33,7 +33,6 @@ impl NSID {
     pub const RESOLVE_SPACE_MEMBERS: &'static str = "town.muni.arbiter.resolveSpaceMembers";
     pub const SET_SPACE_MEMBER_ACCESS: &'static str = "town.muni.arbiter.setSpaceMemberAccess";
     pub const REMOVE_SPACE_MEMBER: &'static str = "town.muni.arbiter.removeSpaceMember";
-    pub const CREATE_DID: &'static str = "town.muni.arbiter.createDid";
     pub const UPDATE_DID_DOC: &'static str = "town.muni.arbiter.updateDidDoc";
 }
 
@@ -168,6 +167,7 @@ pub async fn evaluate(
     arbiter_did: &str,
     collection: &ArbiterCollection,
     http_client: &reqwest::Client,
+    identity_resolver: &dyn IdentityResolver,
 ) -> Result<Value, String> {
     let data = json_to_rego(&build_data(arbiter_config));
     let input = json_to_rego(&build_input(caller_did, nsid, params));
@@ -193,7 +193,7 @@ pub async fn evaluate(
                         }
                     }
                     HostRequest::XrpcRemote { did, path, input } => {
-                        resolve_remote(http_client, did, path, rego_to_json(input)).await
+                        resolve_remote(http_client, identity_resolver, did, path, rego_to_json(input)).await
                     }
                 };
                 result = session.resume(&json_to_rego(&resolved))
@@ -203,17 +203,64 @@ pub async fn evaluate(
     }
 }
 
-/// Fetch data from a remote arbiter.
-async fn resolve_remote(client: &reqwest::Client, remote_did: &str, path: &str, input: Value) -> Value {
-    let host = remote_did.strip_prefix("did:web:").unwrap_or(remote_did).replace("%3A", ":");
-    let space_key = input.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
-    let url = format!("https://{host}/xrpc/{path}?arbiterDid={remote_did}&spaceKey={space_key}");
+/// Fetch data from a remote service by resolving its DID document and
+/// looking up the service endpoint indicated by the required DID fragment.
+///
+/// The remote DID MUST include a `#fragment` specifying which service to
+/// use (e.g. `did:plc:abc123#arbiter` → looks up the `#arbiter` service).
+/// Without a fragment the request is impossible to route and returns empty.
+async fn resolve_remote(
+    client: &reqwest::Client,
+    identity_resolver: &dyn IdentityResolver,
+    remote_did: &str,
+    path: &str,
+    input: Value,
+) -> Value {
+    // Parse the DID and required fragment
+    let (base_did, fragment) = match remote_did.split_once('#') {
+        Some((base, frag)) => (base, format!("#{frag}")),
+        None => {
+            tracing::warn!(%remote_did, "xrpc_remote DID missing required fragment (e.g. #arbiter)");
+            return Value::Null;
+        }
+    };
 
-    match client.get(&url).send().await {
-        Ok(resp) => resp.json::<Value>().await.unwrap_or(serde_json::json!({ "members": [] })),
+    // Resolve the DID document
+    let doc = match identity_resolver.resolve(base_did).await {
+        Ok(d) => d,
         Err(e) => {
-            tracing::warn!(%remote_did, %e, "Remote query failed");
-            serde_json::json!({ "members": [] })
+            tracing::warn!(%remote_did, %e, "Failed to resolve remote DID");
+            return Value::Null;
+        }
+    };
+
+    // Find the matching service endpoint
+    let endpoint = doc.service.iter().find(|s| s.id == fragment || s.id.ends_with(&fragment))
+        .map(|s| s.service_endpoint.clone());
+
+    let Some(endpoint) = endpoint else {
+        tracing::warn!(%remote_did, fragment, "No service found matching fragment");
+        return Value::Null;
+    };
+
+    // Build the XRPC query URL — GET only (enforces read-only)
+    let url = format!("{}/xrpc/{}", endpoint.trim_end_matches('/'), path);
+    let mut req = client.get(&url);
+
+    // Forward all input params as query parameters
+    if let Some(obj) = input.as_object() {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                req = req.query(&[(k.as_str(), s)]);
+            }
+        }
+    }
+
+    match req.send().await {
+        Ok(resp) => resp.json::<Value>().await.unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!(%remote_did, %url, %e, "Remote query failed");
+            Value::Null
         }
     }
 }

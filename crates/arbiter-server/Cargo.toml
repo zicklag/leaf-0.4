@@ -14,7 +14,6 @@ async-trait = "0.1"
 atproto-identity = "0.14"
 atproto-oauth = { version = "0.14", default-features = false }
 atproto-plc = "0.2"
-base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 salvo = { version = "0.76", features = ["server"] }
 serde = { version = "1", features = ["derive"] }

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use atproto_identity::resolve::{HickoryDnsResolver, InnerIdentityResolver, SharedIdentityResolver};
+use atproto_identity::resolve::{HickoryDnsResolver, IdentityResolver, InnerIdentityResolver, SharedIdentityResolver};
 use clap::Parser;
 use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
@@ -56,6 +56,7 @@ pub struct ServerState {
     pub server_did: String,
     pub client: reqwest::Client,
     pub auth: Arc<AuthConfig>,
+    pub identity_resolver: Arc<dyn IdentityResolver>,
     pub plc_directory_url: String,
     pub did_keys: plc::DidKeyStore,
 }
@@ -99,7 +100,8 @@ async fn main() -> anyhow::Result<()> {
         http_client: resolver_client,
         plc_hostname: config.plc_directory_url.clone(),
     }));
-    let auth = Arc::new(AuthConfig::new(Arc::new(identity_resolver))
+    let identity_resolver = Arc::new(identity_resolver) as Arc<dyn IdentityResolver>;
+    let auth = Arc::new(AuthConfig::new(identity_resolver.clone())
         .with_unsafe_token_if(config.unsafe_auth_token.clone()));
 
     // Load persisted state
@@ -118,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
         server_did,
         client: reqwest::Client::new(),
         auth: auth.clone(),
+        identity_resolver: identity_resolver.clone(),
         plc_directory_url: config.plc_directory_url.clone(),
         did_keys: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
