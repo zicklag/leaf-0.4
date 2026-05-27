@@ -132,6 +132,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arbiter-core"
+version = "0.1.0"
+dependencies = [
+ "asansio",
+ "policy-core",
+ "regorus",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "arbiter-server"
 version = "0.1.0"
 dependencies = [
@@ -140,7 +151,6 @@ dependencies = [
  "atproto-identity",
  "atproto-oauth",
  "atproto-plc",
- "base64",
  "bs58",
  "clap",
  "hex",
@@ -167,6 +177,12 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+
+[[package]]
+name = "asansio"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e7f8f2855121b8a429097196c6661bfc1ed1462bccb0f29d17ca03cb86b4cd2"
 
 [[package]]
 name = "async-trait"
