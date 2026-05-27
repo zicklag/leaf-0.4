@@ -238,6 +238,8 @@ enum Action {
         space_key: SpaceKey,
         member_did: Did,
     },
+    /// Update the DID document configuration.
+    UpdateDidDoc(Value),
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +423,32 @@ impl ArbiterCore {
         };
 
         self.continue_evaluation(pending, resolved_value)
+    }
+
+    /// Execute a local operation bypassing the policy check.
+    ///
+    /// Used when the policy itself requests local data via `xrpc_local()`.
+    /// The action is dispatched directly without any authorization check.
+    pub fn execute_local_query(&mut self, nsid: &str, params: &Value) -> OpStep {
+        let action = match build_action(nsid, params) {
+            Some(a) => a,
+            None => {
+                return OpStep::Done(OpResult::Err(OpError {
+                    error: format!("ErrUnknownNSID: {nsid}"),
+                }));
+            }
+        };
+
+        // Execute the action directly with a placeholder arbiter DID.
+        // The arbiter_did is only used for mutations (which won't happen
+        // in a local query context), but we need something for the API.
+        self.execute_authorized_action(
+            String::new(),
+            "",
+            nsid,
+            params,
+            action,
+        )
     }
 
     // -------------------------------------------------------------------
@@ -957,6 +985,18 @@ impl ArbiterCore {
                     spaces: None,
                 }))
             }
+            Action::UpdateDidDoc(_config) => {
+                // Policy check passed.
+                // The actual PLC directory interaction happens in the
+                // server layer after this returns.
+                self.time += 1;
+                OpStep::Done(OpResult::Ok(OpOk {
+                    config: None,
+                    members: None,
+                    missing_spaces: None,
+                    spaces: None,
+                }))
+            }
         }
     }
 
@@ -1114,6 +1154,9 @@ fn build_action(nsid: &str, params: &Value) -> Option<Action> {
                 .unwrap_or("")
                 .to_string(),
         }),
+        NSID::UPDATE_DID_DOC => Some(Action::UpdateDidDoc(
+            params.get("config").cloned().unwrap_or(Value::Null),
+        )),
         _ => None,
     }
 }

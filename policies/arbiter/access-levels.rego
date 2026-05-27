@@ -341,3 +341,8 @@ allow if {
 	requester_rank >= access_rank("Owner")
 	count(space_members("$admin")) == 1
 }
+
+allow if {
+	input.operation.nsid == "town.muni.arbiter.updateDidDoc"
+	requester_rank >= access_rank("Owner")
+}

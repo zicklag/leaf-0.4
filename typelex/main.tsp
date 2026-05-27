@@ -87,6 +87,53 @@ namespace town.muni.arbiter.defs {
 
   /** The specified member is not in the space. */
   model ErrMemberNotInSpace {}
+
+  /** The specified DID is not managed by this service. */
+  model ErrDidNotManaged {}
+
+  /**
+   * A service endpoint entry within a DID document's `services` field.
+   *
+   * Maps a service ID (e.g. `atproto_pds`) to its type and URL.
+   * Per the DID PLC spec, the service ID should not include a `#` prefix;
+   * the `#` will be added when rendering the DID document.
+   */
+  model ServiceEndpoint {
+    /** The type of the service (e.g. `AtprotoPersonalDataServer`). */
+    @required type: string,
+    /** The endpoint URL (e.g. `https://pds.example.com`). */
+    @required endpoint: string,
+  }
+
+  /**
+   * Configurable fields for a DID PLC document.
+   */
+  model DidDocConfig {
+    /**
+     * Priority-ordered list of public keys in `did:key` encoding.
+     * At least 1 and at most 5 keys, with no duplication.
+     * These keys control the DID identifier (can sign rotation operations).
+     */
+    @required rotationKeys: string[],
+    /**
+     * Map from verification method ID to public key in `did:key` encoding.
+     * The ID should not include a `#` prefix; it will be added when rendering
+     * the DID document. These keys do **not** have control over the DID.
+     */
+    @required verificationMethods: Record<string>,
+    /**
+     * Priority-ordered list of URIs indicating other names or aliases
+     * associated with the DID. For atproto, this should include an `at://`
+     * URI for the account's handle.
+     */
+    @required alsoKnownAs: string[],
+    /**
+     * Map from service ID to service endpoint configuration.
+     * The ID should not include a `#` prefix; it will be added when rendering
+     * the DID document.
+     */
+    @required services: Record<ServiceEndpoint>,
+  }
 }
 
 namespace town.muni.arbiter.createArbiter {
@@ -440,6 +487,46 @@ namespace town.muni.arbiter.listSpaces {
        * */
       config?: OpenUnion,
     }[],
+  };
+}
+
+namespace town.muni.arbiter.createDid {
+  /**
+   * Create a new DID that will be managed by this service.
+   * 
+   * A new arbiter will be created in order to manage access
+   * to the DID. The arbiter will be configured with a default
+   * policy that sets the creator as the owner of the arbiter
+   * and allows them to change the DID document.
+   *
+   * The policy can also be changed later.
+   *
+   * The created DID will be returned
+   * */
+  @procedure
+  op main(): {
+    @required did: did,
+  };
+}
+
+namespace town.muni.arbiter.updateDidDoc {
+  /**
+   * Update the DID doc for a DID that is hosted by this service.
+   * */
+  @procedure
+  @errors(
+    town.muni.arbiter.defs.ErrDidNotManaged,
+    town.muni.arbiter.defs.ErrPermissionDenied,
+  )
+  op main(
+    @required input: {
+      /** The DID to update the document for. */
+      @required did: did,
+      /** Updated DID document configuration. */
+      @required config: town.muni.arbiter.defs.DidDocConfig,
+    }
+  ): {
+    @required did: did,
   };
 }
 

@@ -108,6 +108,8 @@ impl NSID {
     pub const RESOLVE_SPACE_MEMBERS: &'static str = "town.muni.arbiter.resolveSpaceMembers";
     pub const SET_SPACE_MEMBER_ACCESS: &'static str = "town.muni.arbiter.setSpaceMemberAccess";
     pub const REMOVE_SPACE_MEMBER: &'static str = "town.muni.arbiter.removeSpaceMember";
+    pub const CREATE_DID: &'static str = "town.muni.arbiter.createDid";
+    pub const UPDATE_DID_DOC: &'static str = "town.muni.arbiter.updateDidDoc";
 }
 
 // ---------------------------------------------------------------------------

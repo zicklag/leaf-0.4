@@ -1,0 +1,10 @@
+{
+  "client_id": "http://127.0.0.1:5173/oauth-client-metadata.json",
+  "redirect_uris": ["http://127.0.0.1:5173/oauth/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "application_type": "web",
+  "token_endpoint_auth_method": "none",
+  "scope": "atproto",
+  "dpop_bound_access_tokens": true
+}

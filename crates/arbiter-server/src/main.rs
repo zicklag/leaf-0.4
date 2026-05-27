@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use atproto_identity::resolve::{HickoryDnsResolver, InnerIdentityResolver, SharedIdentityResolver};
 use clap::Parser;
 use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
@@ -36,6 +37,7 @@ mod auth;
 mod handlers;
 mod io;
 mod persistence;
+mod plc;
 
 use auth::AuthConfig;
 use persistence::Persister;
@@ -67,6 +69,10 @@ struct AppConfig {
     /// Interval (seconds) between automatic state persistence.
     #[arg(long = "persist-interval", env = "PERSIST_INTERVAL", default_value = "5")]
     persist_interval_secs: u64,
+
+    /// URL of the PLC directory server (used for DID creation/updates).
+    #[arg(long = "plc-directory-url", env = "PLC_DIRECTORY_URL", default_value = "http://localhost:3001")]
+    plc_directory_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +91,10 @@ pub struct ServerState {
     pub client: reqwest::Client,
     /// Auth configuration.
     pub auth: Arc<AuthConfig>,
+    /// URL of the PLC directory server (used for DID creation/updates).
+    pub plc_directory_url: String,
+    /// In-memory store of signing keys for DIDs managed by this server.
+    pub did_keys: plc::DidKeyStore,
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +142,20 @@ async fn main() -> anyhow::Result<()> {
         server_did
     );
 
-    // Set up auth
-    let auth = Arc::new(AuthConfig::new().with_unsafe_token_if(config.unsafe_auth_token.clone()));
+    // Set up identity resolver (for JWT auth)
+    let resolver_client = reqwest::Client::new();
+    let dns_resolver = HickoryDnsResolver::create_resolver(&[]);
+    let identity_resolver = SharedIdentityResolver(Arc::new(InnerIdentityResolver {
+        dns_resolver: Arc::new(dns_resolver),
+        http_client: resolver_client,
+        plc_hostname: config.plc_directory_url.clone(),
+    }));
+
+    // Set up auth with real JWT verification
+    let auth = Arc::new(
+        AuthConfig::new(Arc::new(identity_resolver))
+            .with_unsafe_token_if(config.unsafe_auth_token.clone()),
+    );
 
     // Set up persistence
     let persister = Persister::new(config.data_dir.clone());
@@ -158,6 +180,8 @@ async fn main() -> anyhow::Result<()> {
         server_did,
         client: reqwest::Client::new(),
         auth: auth.clone(),
+        plc_directory_url: config.plc_directory_url.clone(),
+        did_keys: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
 
     // Spawn persistence background task
@@ -260,6 +284,17 @@ fn build_router(state: Arc<ServerState>, auth_config: Arc<AuthConfig>) -> Router
             Router::with_path("/xrpc/town.muni.arbiter.removeSpaceMember")
                 .hoop(auth_middleware.clone())
                 .post(handlers::remove_space_member),
+        )
+        // DID management
+        .push(
+            Router::with_path("/xrpc/town.muni.arbiter.createDid")
+                .hoop(auth_middleware.clone())
+                .post(handlers::create_did),
+        )
+        .push(
+            Router::with_path("/xrpc/town.muni.arbiter.updateDidDoc")
+                .hoop(auth_middleware.clone())
+                .post(handlers::update_did_doc),
         )
         // Catch-all proxy for foreign (non-arbiter) XRPC methods
         .push(

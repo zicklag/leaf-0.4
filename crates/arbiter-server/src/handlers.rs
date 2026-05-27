@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use atproto_plc::{DidBuilder, ServiceEndpoint, SigningKey};
 use salvo::prelude::*;
 use salvo::writing::Json;
 
@@ -45,7 +46,7 @@ async fn run_operation(
     resolve_loop(&mut core, &state.client, step).await
 }
 
-/// Recursively resolve suspensions by fetching remote data.
+/// Recursively resolve suspensions by fetching remote or local data.
 async fn resolve_loop(
     core: &mut arbiter_core::ArbiterCore,
     client: &reqwest::Client,
@@ -53,11 +54,22 @@ async fn resolve_loop(
 ) -> OpStep {
     match step {
         OpStep::Suspended { job_id, request } => match request {
-            arbiter_core::CoreRequest::Local { path, input: _ } => {
-                // Local queries are resolved by running the query internally
-                // and resuming. For now, treat as unresolved.
-                tracing::warn!(%path, "Unhandled local XRPC request during policy evaluation");
-                let resumed = core.resume_operation(job_id, serde_json::json!([]));
+            arbiter_core::CoreRequest::Local { path, input } => {
+                // The policy is requesting data from this arbiter.
+                // Execute the query directly, bypassing the policy check
+                // (the policy itself is the one requesting this data).
+                tracing::debug!(%path, "Resolving local XRPC request");
+                let resolved = core.execute_local_query(&path, &input);
+                let value = match &resolved {
+                    OpStep::Done(OpResult::Ok(ok)) => {
+                        serde_json::to_value(ok).unwrap_or(serde_json::json!({}))
+                    }
+                    _ => {
+                        tracing::warn!(%path, "Local query returned non-Ok result");
+                        serde_json::json!([])
+                    }
+                };
+                let resumed = core.resume_operation(job_id, value);
                 Box::pin(resolve_loop(core, client, resumed)).await
             }
             arbiter_core::CoreRequest::Remote {
@@ -628,6 +640,301 @@ pub async fn remove_space_member(req: &mut Request, depot: &mut Depot, res: &mut
     .await;
 
     respond_step(step, res, |_| serde_json::json!({}));
+}
+
+// ---- createDid (procedure) ----
+
+/// Create a new DID managed by this service.
+///
+/// This is a bootstrap operation — there's no existing arbiter to check
+/// policy against. The caller becomes the owner of the new arbiter.
+///
+/// The DID is created as a proper did:plc identity using the atproto-plc
+/// crate. A genesis operation is generated, signed, and submitted to the
+/// configured PLC directory server.
+#[handler]
+pub async fn create_did(_req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
+    let caller = caller_did(depot);
+
+    if caller.is_empty() {
+        res.render(Json(error_response(
+            "ErrInvalidRequest: missing caller DID (auth required)",
+        )));
+        return;
+    }
+
+    // Generate keys for the DID
+    let rotation_key = SigningKey::generate_p256();
+    let signing_key = SigningKey::generate_k256();
+
+    let server_did = &state.server_did;
+    let service_endpoint = format!(
+        "https://{}/xrpc",
+        server_did
+            .strip_prefix("did:web:")
+            .unwrap_or("localhost:8080")
+            .replace("%3A", ":")
+    );
+
+    // Build the DID — this generates keys, creates and signs the genesis
+    // operation, and derives the did:plc identifier from the hash.
+    let (did, operation, keys) = match DidBuilder::new()
+        .add_rotation_key(rotation_key)
+        .add_verification_method("atproto".into(), signing_key)
+        .add_service(
+            "atproto_pds".into(),
+            ServiceEndpoint::new(
+                "AtprotoPersonalDataServer".into(),
+                service_endpoint,
+            ),
+        )
+        .build()
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(%e, "Failed to build DID");
+            res.render(Json(error_response(&format!("ErrDidCreationFailed: {e}"))));
+            return;
+        }
+    };
+
+    let did_str = did.as_str().to_string();
+
+    // Compute the genesis operation CID so we can sign future updates
+    let genesis_cid = match operation.cid() {
+        Ok(cid) => Some(cid),
+        Err(e) => {
+            tracing::warn!(%e, "Failed to compute genesis operation CID");
+            None
+        }
+    };
+
+    // Submit the genesis operation to the PLC directory
+    if let Err(e) = crate::plc::submit_operation(&state, &did_str, &operation).await {
+        tracing::error!(%did_str, %e, "Failed to submit genesis operation to PLC directory");
+        res.render(Json(error_response(&format!("ErrPlcDirectoryUnreachable: {e}"))));
+        return;
+    }
+
+    // Store the keys so we can sign future updates
+    {
+        let mut key_store = state.did_keys.lock().await;
+        key_store.insert(
+            did_str.clone(),
+            crate::plc::DidState {
+                keys: std::sync::Arc::new(keys),
+                latest_cid: genesis_cid,
+            },
+        );
+    }
+
+    // Create the arbiter for this DID, with the caller as owner
+    let mut core = state.core.lock().await;
+    let result = core.create_arbiter(did_str.clone(), serde_json::json!({}), caller);
+    drop(core);
+
+    match result {
+        OpResult::Ok(_) => {
+            tracing::info!(%did_str, "Created new DID and arbiter");
+            res.render(Json(serde_json::json!({"did": did_str})));
+        }
+        OpResult::Err(e) => {
+            res.render(Json(error_response(&e.error)));
+        }
+    }
+}
+
+// ---- updateDidDoc (procedure) ----
+
+/// Update the DID document for a DID hosted by this service.
+///
+/// Goes through the arbiter's policy. Only callers with Owner-level
+/// access on the arbiter's $admin space can update the DID document.
+///
+/// On success, the update is submitted to the PLC directory as a signed
+/// PLC operation.
+#[handler]
+pub async fn update_did_doc(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
+    let caller = caller_did(depot);
+    let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
+
+    let arbiter_did = match body
+        .get("did")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+    {
+        Some(d) => d,
+        None => {
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing did",
+            )));
+            return;
+        }
+    };
+
+    let config = body.get("config").cloned().unwrap_or_default();
+
+    // Step 1: Run through the policy system — the arbiter must exist and
+    // the caller must have Owner-level access.
+    let params = serde_json::json!({
+        "config": config,
+    });
+
+    let step = run_operation(
+        &state,
+        &arbiter_did,
+        &caller,
+        NSID::UPDATE_DID_DOC,
+        params,
+    )
+    .await;
+
+    // Step 2: If policy check failed, return the error
+    match step {
+        OpStep::Done(OpResult::Ok(_)) => {
+            // Policy passed — proceed with PLC update
+        }
+        OpStep::Done(OpResult::Err(e)) => {
+            res.render(Json(error_response(&e.error)));
+            return;
+        }
+        OpStep::Suspended { .. } => {
+            res.status_code(salvo::http::StatusCode::GATEWAY_TIMEOUT);
+            res.render(Json(error_response("ErrTimeout")));
+            return;
+        }
+        _ => {
+            res.render(Json(error_response("ErrUnexpected")));
+            return;
+        }
+    };
+
+    // Step 3: Fetch current PLC state and latest operation CID
+    let (plc_state, prev_cid) = match crate::plc::fetch_state_with_cid(&state, &arbiter_did).await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(%arbiter_did, %e, "Failed to fetch PLC state");
+            res.render(Json(error_response(&format!(
+                "ErrPlcDirectoryUnreachable: {e}"
+            ))));
+            return;
+        }
+    };
+
+    // Step 4: Get the stored signing keys
+    let did_state = {
+        let key_store = state.did_keys.lock().await;
+        key_store.get(&arbiter_did).cloned()
+    };
+
+    let signing_key = match did_state {
+        Some(ref ds) => ds.keys.primary_rotation_key().cloned(),
+        None => None,
+    };
+
+    let rotation_key = match signing_key {
+        Some(k) => k,
+        None => {
+            res.render(Json(error_response(
+                "ErrKeyNotFound: no signing keys stored for this DID",
+            )));
+            return;
+        }
+    };
+
+    // Step 5: Merge the provided config with the current PLC state
+    let rotation_keys = config
+        .get("rotationKeys")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| plc_state.rotation_keys.clone());
+
+    let verification_methods = config
+        .get("verificationMethods")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .unwrap_or_else(|| plc_state.verification_methods.clone());
+
+    let also_known_as = config
+        .get("alsoKnownAs")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| plc_state.also_known_as.clone());
+
+    let services = config
+        .get("services")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| {
+                    let endpoint = v.get("endpoint")?.as_str()?;
+                    let service_type = v.get("type")?.as_str()?;
+                    Some((
+                        k.clone(),
+                        atproto_plc::ServiceEndpoint::new(
+                            service_type.to_string(),
+                            endpoint.to_string(),
+                        ),
+                    ))
+                })
+                .collect::<std::collections::HashMap<_, _>>()
+        })
+        .unwrap_or_else(|| plc_state.services.clone());
+
+    // Step 6: Build and sign the update operation
+    let unsigned = atproto_plc::Operation::new_update(
+        rotation_keys,
+        verification_methods,
+        also_known_as,
+        services,
+        prev_cid.clone(),
+    );
+
+    let signed = match unsigned.sign(&rotation_key) {
+        Ok(op) => op,
+        Err(e) => {
+            tracing::error!(%arbiter_did, %e, "Failed to sign update operation");
+            res.render(Json(error_response(&format!(
+                "ErrSigningFailed: {e}"
+            ))));
+            return;
+        }
+    };
+
+    // Step 7: Submit the update to the PLC directory
+    if let Err(e) = crate::plc::submit_operation(&state, &arbiter_did, &signed).await {
+        tracing::error!(%arbiter_did, %e, "Failed to submit update to PLC directory");
+        res.render(Json(error_response(&format!(
+            "ErrPlcDirectoryUnreachable: {e}"
+        ))));
+        return;
+    }
+
+    // Step 8: Update the stored CID
+    if let Ok(new_cid) = signed.cid() {
+        let mut key_store = state.did_keys.lock().await;
+        if let Some(s) = key_store.get_mut(&arbiter_did) {
+            s.latest_cid = Some(new_cid);
+        }
+    }
+
+    tracing::info!(%arbiter_did, "DID document updated");
+    res.render(Json(serde_json::json!({"did": arbiter_did})));
 }
 
 // ---------------------------------------------------------------------------
