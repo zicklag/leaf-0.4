@@ -29,7 +29,7 @@ use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
 use salvo::writing::Json;
 
-use arbiter_core3::ArbiterCore;
+use arbiter_core::ArbiterCore;
 
 mod auth;
 mod handlers;

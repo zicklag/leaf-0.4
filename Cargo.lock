@@ -59,7 +59,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "arbiter-core3"
+name = "arbiter-core"
 version = "0.1.0"
 dependencies = [
  "policy-core",
@@ -70,11 +70,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "arbiter-server2"
+name = "arbiter-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arbiter-core3",
+ "arbiter-core",
  "async-trait",
  "atproto-identity",
  "atproto-oauth",

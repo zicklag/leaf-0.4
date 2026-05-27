@@ -12,7 +12,7 @@ use std::sync::Arc;
 use salvo::prelude::*;
 use salvo::writing::Json;
 
-use arbiter_core3::{NSID, OpResult, OpStep};
+use arbiter_core::{NSID, OpResult, OpStep};
 
 use crate::ServerState;
 
@@ -47,20 +47,20 @@ async fn run_operation(
 
 /// Recursively resolve suspensions by fetching remote data.
 async fn resolve_loop(
-    core: &mut arbiter_core3::ArbiterCore,
+    core: &mut arbiter_core::ArbiterCore,
     client: &reqwest::Client,
     step: OpStep,
 ) -> OpStep {
     match step {
         OpStep::Suspended { job_id, request } => match request {
-            arbiter_core3::CoreRequest::Local { path, input: _ } => {
+            arbiter_core::CoreRequest::Local { path, input: _ } => {
                 // Local queries are resolved by running the query internally
                 // and resuming. For now, treat as unresolved.
                 tracing::warn!(%path, "Unhandled local XRPC request during policy evaluation");
                 let resumed = core.resume_operation(job_id, serde_json::json!([]));
                 Box::pin(resolve_loop(core, client, resumed)).await
             }
-            arbiter_core3::CoreRequest::Remote {
+            arbiter_core::CoreRequest::Remote {
                 remote_did,
                 path,
                 input,
@@ -642,7 +642,7 @@ pub async fn remove_space_member(req: &mut Request, depot: &mut Depot, res: &mut
 fn respond_step(
     step: OpStep,
     res: &mut Response,
-    map_ok: impl FnOnce(arbiter_core3::OpOk) -> serde_json::Value,
+    map_ok: impl FnOnce(arbiter_core::OpOk) -> serde_json::Value,
 ) {
     match step {
         OpStep::Done(OpResult::Ok(ok)) => {

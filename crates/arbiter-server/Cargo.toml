@@ -1,14 +1,14 @@
 [package]
-name = "arbiter-server2"
+name = "arbiter-server"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "arbiter-server2"
+name = "arbiter-server"
 path = "src/main.rs"
 
 [dependencies]
-arbiter-core3 = { path = "../arbiter-core3" }
+arbiter-core = { path = "../arbiter-core" }
 policy-core = { path = "../policy-core" }
 anyhow = "1"
 async-trait = "0.1"

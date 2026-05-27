@@ -4,3 +4,4 @@ target
 tea_debug.log
 .env
 node_modules
+data
