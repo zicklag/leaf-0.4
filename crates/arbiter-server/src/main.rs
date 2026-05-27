@@ -269,7 +269,7 @@ fn build_router(state: Arc<ServerState>, auth_config: Arc<AuthConfig>) -> Router
                 .get(handlers::proxy_xrpc),
         )
         // Health
-        .push(Router::with_path("/").get(index))
+        .get(index)
 }
 
 #[handler]
