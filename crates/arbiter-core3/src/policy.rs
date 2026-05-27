@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{json, Value as JsonValue};
+use serde_json::{Value as JsonValue, json};
 
 use regorus::Value as RegoValue;
 
@@ -71,9 +71,7 @@ pub fn regorus_to_json(val: &RegoValue) -> JsonValue {
             }
         }
         RegoValue::String(s) => JsonValue::String(s.to_string()),
-        RegoValue::Array(arr) => {
-            JsonValue::Array(arr.iter().map(regorus_to_json).collect())
-        }
+        RegoValue::Array(arr) => JsonValue::Array(arr.iter().map(regorus_to_json).collect()),
         RegoValue::Object(obj) => {
             let mut map = serde_json::Map::new();
             for (k, v) in obj.iter() {
@@ -85,9 +83,7 @@ pub fn regorus_to_json(val: &RegoValue) -> JsonValue {
             }
             JsonValue::Object(map)
         }
-        RegoValue::Set(s) => {
-            JsonValue::Array(s.iter().map(regorus_to_json).collect())
-        }
+        RegoValue::Set(s) => JsonValue::Array(s.iter().map(regorus_to_json).collect()),
         RegoValue::Undefined => JsonValue::Null,
     }
 }

@@ -4,12 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "build:typelex": "typelex compile town.muni.arbiter.*"
+    "build:lexicons": "typelex compile town.muni.arbiter.*"
   },
   "keywords": [],
   "author": "Zicklag",
-  "license": "ISC",
   "packageManager": "pnpm@10.32.1",
   "devDependencies": {
     "@typelex/cli": "^0.4.0",

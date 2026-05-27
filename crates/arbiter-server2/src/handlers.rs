@@ -12,7 +12,7 @@ use std::sync::Arc;
 use salvo::prelude::*;
 use salvo::writing::Json;
 
-use arbiter_core3::{OpResult, OpStep, NSID};
+use arbiter_core3::{NSID, OpResult, OpStep};
 
 use crate::ServerState;
 
@@ -82,7 +82,6 @@ async fn resolve_loop(
 // Helper: build XRPC response
 // ---------------------------------------------------------------------------
 
-
 fn error_response(error: &str) -> serde_json::Value {
     serde_json::json!({
         "error": error,
@@ -91,7 +90,10 @@ fn error_response(error: &str) -> serde_json::Value {
 
 /// Extract a String parameter from JSON body or query.
 fn param_str(params: &serde_json::Value, key: &str) -> Option<String> {
-    params.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+    params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Extract arbiter DID from request (body for POST, query for GET).
@@ -108,20 +110,20 @@ async fn parse_body_or_query(req: &mut Request) -> serde_json::Value {
         }
         serde_json::Value::Object(map)
     } else {
-        req.parse_json::<serde_json::Value>().await.unwrap_or_default()
+        req.parse_json::<serde_json::Value>()
+            .await
+            .unwrap_or_default()
     }
 }
 
 /// Extract arbiter DID from request (body for POST, query for GET).
 fn get_arbiter_did(req: &Request, params: &serde_json::Value) -> Option<String> {
     // Try body/params first, then query string
-    param_str(params, "arbiterDid")
-        .or_else(|| req.query::<String>("arbiterDid"))
+    param_str(params, "arbiterDid").or_else(|| req.query::<String>("arbiterDid"))
 }
 
 fn get_space_key(params: &serde_json::Value) -> Option<String> {
-    param_str(params, "spaceKey")
-        .or_else(|| param_str(params, "space_key"))
+    param_str(params, "spaceKey").or_else(|| param_str(params, "space_key"))
 }
 
 // ---------------------------------------------------------------------------
@@ -132,17 +134,16 @@ fn get_space_key(params: &serde_json::Value) -> Option<String> {
 
 #[handler]
 pub async fn create_arbiter(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -162,51 +163,61 @@ pub async fn create_arbiter(req: &mut Request, depot: &mut Depot, res: &mut Resp
 
 #[handler]
 pub async fn get_arbiter_config(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body = parse_body_or_query(req).await;
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
 
     let params = serde_json::json!({"spaceKey": "$admin"});
-    let step = run_operation(&state, &arbiter_did, &caller, NSID::GET_ARBITER_CONFIG, params).await;
+    let step = run_operation(
+        &state,
+        &arbiter_did,
+        &caller,
+        NSID::GET_ARBITER_CONFIG,
+        params,
+    )
+    .await;
 
-    respond_step(step, res, |ok| {
-        serde_json::json!({ "config": ok.config })
-    });
+    respond_step(step, res, |ok| serde_json::json!({ "config": ok.config }));
 }
 
 // ---- setArbiterConfig (procedure) ----
 
 #[handler]
 pub async fn set_arbiter_config(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
 
     let config = body.get("config").cloned().unwrap_or_default();
     let params = serde_json::json!({"spaceKey": "$admin", "config": config});
-    let step = run_operation(&state, &arbiter_did, &caller, NSID::SET_ARBITER_CONFIG, params).await;
+    let step = run_operation(
+        &state,
+        &arbiter_did,
+        &caller,
+        NSID::SET_ARBITER_CONFIG,
+        params,
+    )
+    .await;
 
     respond_step(step, res, |_| serde_json::json!({}));
 }
@@ -215,17 +226,16 @@ pub async fn set_arbiter_config(req: &mut Request, depot: &mut Depot, res: &mut 
 
 #[handler]
 pub async fn delete_arbiter(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -246,17 +256,16 @@ pub async fn delete_arbiter(req: &mut Request, depot: &mut Depot, res: &mut Resp
 
 #[handler]
 pub async fn create_space(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -289,17 +298,16 @@ pub async fn create_space(req: &mut Request, depot: &mut Depot, res: &mut Respon
 
 #[handler]
 pub async fn get_space_config(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body = parse_body_or_query(req).await;
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -312,28 +320,36 @@ pub async fn get_space_config(req: &mut Request, depot: &mut Depot, res: &mut Re
     };
 
     let params = serde_json::json!({"spaceKey": space_key});
-    let step = run_operation(&state, &arbiter_did, &caller, NSID::GET_SPACE_CONFIG, params).await;
+    let step = run_operation(
+        &state,
+        &arbiter_did,
+        &caller,
+        NSID::GET_SPACE_CONFIG,
+        params,
+    )
+    .await;
 
-    respond_step(step, res, |ok| {
-        serde_json::json!({ "spaceType": "", "config": ok.config })
-    });
+    respond_step(
+        step,
+        res,
+        |ok| serde_json::json!({ "spaceType": "", "config": ok.config }),
+    );
 }
 
 // ---- setSpaceConfig (procedure) ----
 
 #[handler]
 pub async fn set_space_config(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -356,7 +372,14 @@ pub async fn set_space_config(req: &mut Request, depot: &mut Depot, res: &mut Re
         "spaceType": space_type,
         "config": config,
     });
-    let step = run_operation(&state, &arbiter_did, &caller, NSID::SET_SPACE_CONFIG, params).await;
+    let step = run_operation(
+        &state,
+        &arbiter_did,
+        &caller,
+        NSID::SET_SPACE_CONFIG,
+        params,
+    )
+    .await;
 
     respond_step(step, res, |_| serde_json::json!({}));
 }
@@ -365,17 +388,16 @@ pub async fn set_space_config(req: &mut Request, depot: &mut Depot, res: &mut Re
 
 #[handler]
 pub async fn delete_space(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -397,17 +419,16 @@ pub async fn delete_space(req: &mut Request, depot: &mut Depot, res: &mut Respon
 
 #[handler]
 pub async fn list_spaces(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body = parse_body_or_query(req).await;
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -415,26 +436,23 @@ pub async fn list_spaces(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let params = serde_json::json!({"spaceKey": "$admin"});
     let step = run_operation(&state, &arbiter_did, &caller, NSID::LIST_SPACES, params).await;
 
-    respond_step(step, res, |ok| {
-        serde_json::json!({ "spaces": ok.spaces })
-    });
+    respond_step(step, res, |ok| serde_json::json!({ "spaces": ok.spaces }));
 }
 
 // ---- getSpaceMembers (query) ----
 
 #[handler]
 pub async fn get_space_members(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body = parse_body_or_query(req).await;
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -447,28 +465,32 @@ pub async fn get_space_members(req: &mut Request, depot: &mut Depot, res: &mut R
     };
 
     let params = serde_json::json!({"spaceKey": space_key});
-    let step = run_operation(&state, &arbiter_did, &caller, NSID::GET_SPACE_MEMBERS, params).await;
+    let step = run_operation(
+        &state,
+        &arbiter_did,
+        &caller,
+        NSID::GET_SPACE_MEMBERS,
+        params,
+    )
+    .await;
 
-    respond_step(step, res, |ok| {
-        serde_json::json!({ "members": ok.members })
-    });
+    respond_step(step, res, |ok| serde_json::json!({ "members": ok.members }));
 }
 
 // ---- resolveSpaceMembers (query) ----
 
 #[handler]
 pub async fn resolve_space_members(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body = parse_body_or_query(req).await;
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -481,7 +503,14 @@ pub async fn resolve_space_members(req: &mut Request, depot: &mut Depot, res: &m
     };
 
     let params = serde_json::json!({"spaceKey": space_key});
-    let step = run_operation(&state, &arbiter_did, &caller, NSID::RESOLVE_SPACE_MEMBERS, params).await;
+    let step = run_operation(
+        &state,
+        &arbiter_did,
+        &caller,
+        NSID::RESOLVE_SPACE_MEMBERS,
+        params,
+    )
+    .await;
 
     respond_step(step, res, |ok| {
         serde_json::json!({
@@ -495,17 +524,16 @@ pub async fn resolve_space_members(req: &mut Request, depot: &mut Depot, res: &m
 
 #[handler]
 pub async fn set_space_member_access(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -517,11 +545,16 @@ pub async fn set_space_member_access(req: &mut Request, depot: &mut Depot, res: 
         }
     };
 
-    let member = body.get("member").and_then(|m| m.get("did")).or_else(|| body.get("memberDid"));
+    let member = body
+        .get("member")
+        .and_then(|m| m.get("did"))
+        .or_else(|| body.get("memberDid"));
     let member_did = match member.and_then(|v| v.as_str()) {
         Some(d) => d.to_string(),
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing member.did")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing member.did",
+            )));
             return;
         }
     };
@@ -538,7 +571,8 @@ pub async fn set_space_member_access(req: &mut Request, depot: &mut Depot, res: 
         &caller,
         NSID::SET_SPACE_MEMBER_ACCESS,
         params,
-    ).await;
+    )
+    .await;
 
     respond_step(step, res, |_| serde_json::json!({}));
 }
@@ -547,17 +581,16 @@ pub async fn set_space_member_access(req: &mut Request, depot: &mut Depot, res: 
 
 #[handler]
 pub async fn remove_space_member(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
     let body: serde_json::Value = req.parse_json().await.unwrap_or_default();
 
     let arbiter_did = match get_arbiter_did(req, &body) {
         Some(d) => d,
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing arbiterDid",
+            )));
             return;
         }
     };
@@ -569,10 +602,17 @@ pub async fn remove_space_member(req: &mut Request, depot: &mut Depot, res: &mut
         }
     };
 
-    let member_did = match body.get("member").and_then(|m| m.get("did")).or_else(|| body.get("memberDid")).and_then(|v| v.as_str()) {
+    let member_did = match body
+        .get("member")
+        .and_then(|m| m.get("did"))
+        .or_else(|| body.get("memberDid"))
+        .and_then(|v| v.as_str())
+    {
         Some(d) => d.to_string(),
         None => {
-            res.render(Json(error_response("ErrInvalidRequest: missing member.did")));
+            res.render(Json(error_response(
+                "ErrInvalidRequest: missing member.did",
+            )));
             return;
         }
     };
@@ -587,7 +627,8 @@ pub async fn remove_space_member(req: &mut Request, depot: &mut Depot, res: &mut
         &caller,
         NSID::REMOVE_SPACE_MEMBER,
         params,
-    ).await;
+    )
+    .await;
 
     respond_step(step, res, |_| serde_json::json!({}));
 }
@@ -635,18 +676,12 @@ fn respond_step(
 /// proxying to the configured backend if allowed.
 #[handler]
 pub async fn proxy_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot
-        .get::<Arc<ServerState>>("state")
-        .cloned()
-        .unwrap();
+    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
     let caller = caller_did(depot);
 
     // Extract NSID from the request path
     let path = req.uri().path();
-    let nsid = path
-        .strip_prefix("/xrpc/")
-        .unwrap_or(path)
-        .to_string();
+    let nsid = path.strip_prefix("/xrpc/").unwrap_or(path).to_string();
 
     // Extract arbiter DID and params from body (POST) or query (GET)
     let params = if req.method() == salvo::http::Method::GET {
@@ -656,7 +691,9 @@ pub async fn proxy_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response
         }
         serde_json::Value::Object(map)
     } else {
-        req.parse_json::<serde_json::Value>().await.unwrap_or_default()
+        req.parse_json::<serde_json::Value>()
+            .await
+            .unwrap_or_default()
     };
 
     let arbiter_did = params
@@ -668,7 +705,9 @@ pub async fn proxy_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response
 
     if arbiter_did.is_empty() {
         res.status_code(salvo::http::StatusCode::BAD_REQUEST);
-        res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+        res.render(Json(error_response(
+            "ErrInvalidRequest: missing arbiterDid",
+        )));
         return;
     }
 
@@ -714,15 +753,15 @@ pub async fn proxy_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response
                 Ok(backend_resp) => {
                     // Forward the status
                     let status = backend_resp.status();
-                    res.status_code(salvo::http::StatusCode::from_u16(status.as_u16())
-                        .unwrap_or(salvo::http::StatusCode::OK));
+                    res.status_code(
+                        salvo::http::StatusCode::from_u16(status.as_u16())
+                            .unwrap_or(salvo::http::StatusCode::OK),
+                    );
 
                     // Forward the body — get bytes then try JSON
                     match backend_resp.bytes().await {
                         Ok(bytes) => {
-                            if let Ok(body) =
-                                serde_json::from_slice::<serde_json::Value>(&bytes)
-                            {
+                            if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes) {
                                 res.render(Json(body));
                             } else {
                                 // Return as raw text
@@ -759,4 +798,3 @@ pub async fn proxy_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response
         }
     }
 }
-

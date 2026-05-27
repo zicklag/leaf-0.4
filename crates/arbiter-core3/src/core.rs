@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::policy::{
-    build_data_from_arbiter, build_op_input, json_to_regorus, regorus_to_json,
-    HostRequest, VmResult, VmSession, NSID,
+    HostRequest, NSID, VmResult, VmSession, build_data_from_arbiter, build_op_input,
+    json_to_regorus, regorus_to_json,
 };
 
 // ---------------------------------------------------------------------------
@@ -124,10 +124,7 @@ pub enum OpResult {
 #[derive(Debug, Clone)]
 pub enum CoreRequest {
     /// Resolve an XRPC query on the local arbiter (can be handled internally).
-    Local {
-        path: String,
-        input: Value,
-    },
+    Local { path: String, input: Value },
     /// Resolve an XRPC query on a remote arbiter.
     Remote {
         /// DID of the caller (used for auth on the remote side).
@@ -152,10 +149,7 @@ pub enum OpStep {
     /// The policy needs data from a local or remote XRPC query before it can
     /// continue. The caller resolves it and calls
     /// [`ArbiterCore::resume_operation`].
-    Suspended {
-        job_id: JobId,
-        request: CoreRequest,
-    },
+    Suspended { job_id: JobId, request: CoreRequest },
     /// The arbiter was deleted (only from deleteArbiter).
     Deleted,
     /// Policy check passed for a foreign (non-arbiter) XRPC method.
@@ -293,12 +287,7 @@ impl ArbiterCore {
     // -------------------------------------------------------------------
 
     /// Create a new arbiter. Bypasses policy (identity bootstrap).
-    pub fn create_arbiter(
-        &mut self,
-        arbiter_did: Did,
-        config: Value,
-        owner_did: Did,
-    ) -> OpResult {
+    pub fn create_arbiter(&mut self, arbiter_did: Did, config: Value, owner_did: Did) -> OpResult {
         if self.arbiters.contains_key(&arbiter_did) {
             return OpResult::Err(OpError {
                 error: "ErrArbiterAlreadyExists".into(),
@@ -347,11 +336,7 @@ impl ArbiterCore {
     }
 
     /// Convenience: create an arbiter with default policy.
-    pub fn create_default_arbiter(
-        &mut self,
-        arbiter_did: Did,
-        owner_did: Did,
-    ) -> OpResult {
+    pub fn create_default_arbiter(&mut self, arbiter_did: Did, owner_did: Did) -> OpResult {
         self.create_arbiter(arbiter_did, json!({}), owner_did)
     }
 
@@ -385,7 +370,7 @@ impl ArbiterCore {
             None => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: "ErrArbiterNotExists".into(),
-                }))
+                }));
             }
         };
 
@@ -425,17 +410,13 @@ impl ArbiterCore {
     /// The `job_id` must match a `Suspended` step returned earlier.
     /// `resolved_value` is the JSON value returned by the XRPC query
     /// that the policy requested.
-    pub fn resume_operation(
-        &mut self,
-        job_id: JobId,
-        resolved_value: Value,
-    ) -> OpStep {
+    pub fn resume_operation(&mut self, job_id: JobId, resolved_value: Value) -> OpStep {
         let pending = match self.pending.remove(&job_id) {
             Some(p) => p,
             None => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: "ErrInvalidJobId".into(),
-                }))
+                }));
             }
         };
 
@@ -528,24 +509,20 @@ impl ArbiterCore {
             None => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: "ErrArbiterNotExists".into(),
-                }))
+                }));
             }
         };
 
         let data = json_to_regorus(&build_data_from_arbiter(arbiter));
         let input = json_to_regorus(&build_op_input(&caller_did, &nsid, &params));
 
-        let session = match VmSession::new(
-            &arbiter.policy,
-            &data,
-            &input,
-            &["data.arbiter.allow"],
-        ) {
+        let session = match VmSession::new(&arbiter.policy, &data, &input, &["data.arbiter.allow"])
+        {
             Ok(s) => s,
             Err(e) => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: format!("ErrPolicyCompile: {e}"),
-                }))
+                }));
             }
         };
 
@@ -576,24 +553,20 @@ impl ArbiterCore {
             None => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: "ErrArbiterNotExists".into(),
-                }))
+                }));
             }
         };
 
         let data = json_to_regorus(&build_data_from_arbiter(arbiter));
         let input = json_to_regorus(&build_op_input(&caller_did, &nsid, &params));
 
-        let session = match VmSession::new(
-            &arbiter.policy,
-            &data,
-            &input,
-            &["data.arbiter.allow"],
-        ) {
+        let session = match VmSession::new(&arbiter.policy, &data, &input, &["data.arbiter.allow"])
+        {
             Ok(s) => s,
             Err(e) => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: format!("ErrPolicyCompile: {e}"),
-                }))
+                }));
             }
         };
 
@@ -779,7 +752,7 @@ impl ArbiterCore {
                     None => {
                         return OpStep::Done(OpResult::Err(OpError {
                             error: "ErrArbiterNotExists".into(),
-                        }))
+                        }));
                     }
                 };
                 OpStep::Done(OpResult::Ok(OpOk {
@@ -795,7 +768,7 @@ impl ArbiterCore {
                     None => {
                         return OpStep::Done(OpResult::Err(OpError {
                             error: "ErrArbiterNotExists".into(),
-                        }))
+                        }));
                     }
                 };
                 let space = match arbiter.spaces.get(&space_key) {
@@ -803,7 +776,7 @@ impl ArbiterCore {
                     None => {
                         return OpStep::Done(OpResult::Err(OpError {
                             error: "ErrSpaceNotExists".into(),
-                        }))
+                        }));
                     }
                 };
                 OpStep::Done(OpResult::Ok(OpOk {
@@ -819,7 +792,7 @@ impl ArbiterCore {
                     None => {
                         return OpStep::Done(OpResult::Err(OpError {
                             error: "ErrArbiterNotExists".into(),
-                        }))
+                        }));
                     }
                 };
                 let spaces: Vec<SpaceSummary> = arbiter
@@ -843,7 +816,7 @@ impl ArbiterCore {
                     None => {
                         return OpStep::Done(OpResult::Err(OpError {
                             error: "ErrArbiterNotExists".into(),
-                        }))
+                        }));
                     }
                 };
                 let space = match arbiter.spaces.get(&space_key) {
@@ -851,7 +824,7 @@ impl ArbiterCore {
                     None => {
                         return OpStep::Done(OpResult::Err(OpError {
                             error: "ErrSpaceNotExists".into(),
-                        }))
+                        }));
                     }
                 };
                 OpStep::Done(OpResult::Ok(OpOk {
@@ -1002,7 +975,7 @@ impl ArbiterCore {
             None => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: "ErrArbiterNotExists".into(),
-                }))
+                }));
             }
         };
 
@@ -1023,7 +996,7 @@ impl ArbiterCore {
             Err(e) => {
                 return OpStep::Done(OpResult::Err(OpError {
                     error: format!("ErrPolicyCompile: {e}"),
-                }))
+                }));
             }
         };
 
@@ -1031,18 +1004,12 @@ impl ArbiterCore {
         self.handle_session_result(
             arbiter_did,
             session,
-            PendingPhase::ResolvingMembers {
-                caller_did,
-            },
+            PendingPhase::ResolvingMembers { caller_did },
         )
     }
 
     /// Continue a pending evaluation (called from resume_operation).
-    fn continue_evaluation(
-        &mut self,
-        pending: PendingOp,
-        resolved_value: Value,
-    ) -> OpStep {
+    fn continue_evaluation(&mut self, pending: PendingOp, resolved_value: Value) -> OpStep {
         self.handle_resume_result(
             pending.arbiter_did,
             pending.session,
@@ -1158,10 +1125,7 @@ fn build_action(nsid: &str, params: &Value) -> Option<Action> {
 // Structural validation
 // ---------------------------------------------------------------------------
 
-fn validate_operation(
-    arbiter: &ArbiterState,
-    action: &Action,
-) -> Option<OpError> {
+fn validate_operation(arbiter: &ArbiterState, action: &Action) -> Option<OpError> {
     match action {
         Action::CreateSpace { space_key, .. } => {
             if arbiter.spaces.contains_key(space_key) {
@@ -1212,9 +1176,7 @@ mod tests {
     use super::*;
 
     /// The default access-levels policy embedded from the project policy file.
-    const DEFAULT_POLICY: &str = include_str!(
-        "../../../policies/arbiter/access-levels.rego"
-    );
+    const DEFAULT_POLICY: &str = include_str!("../../../policies/arbiter/access-levels.rego");
 
     // -----------------------------------------------------------------------
     // TestHarness — wraps ArbiterCore with auto-resolution loop
@@ -1235,8 +1197,13 @@ mod tests {
         }
 
         fn create_default_arbiter(&mut self, did: &str, owner: &str) {
-            let result = self.core.create_arbiter(did.into(), json!({}), owner.into());
-            assert!(matches!(result, OpResult::Ok(_)), "create_arbiter failed for {did}");
+            let result = self
+                .core
+                .create_arbiter(did.into(), json!({}), owner.into());
+            assert!(
+                matches!(result, OpResult::Ok(_)),
+                "create_arbiter failed for {did}"
+            );
         }
 
         fn create_arbiter(&mut self, did: &str, owner: &str, policy: &str) {
@@ -1260,9 +1227,11 @@ mod tests {
             let step = self.run_op(arbiter, caller, nsid, params);
             match step {
                 OpStep::Done(OpResult::Ok(_)) => {}
-                other => panic!(
-                    "Expected success for {caller}@{arbiter}/{space_key} ({nsid}), got {other:?}"
-                ),
+                other => {
+                    panic!(
+                        "Expected success for {caller}@{arbiter}/{space_key} ({nsid}), got {other:?}"
+                    )
+                }
             }
         }
 
@@ -1284,9 +1253,11 @@ mod tests {
                         e.error
                     );
                 }
-                other => panic!(
-                    "Expected denial for {caller}@{arbiter}/{space_key} ({nsid}), got {other:?}"
-                ),
+                other => {
+                    panic!(
+                        "Expected denial for {caller}@{arbiter}/{space_key} ({nsid}), got {other:?}"
+                    )
+                }
             }
         }
 
@@ -1305,27 +1276,21 @@ mod tests {
             );
             match step {
                 OpStep::Done(OpResult::Ok(ok)) => ok.members.unwrap_or_default(),
-                other => panic!(
-                    "Expected ok for resolveSpaceMembers, got {other:?}"
-                ),
+                other => panic!("Expected ok for resolveSpaceMembers, got {other:?}"),
             }
         }
 
         /// Get a mutable reference to a space (for modifying config).
         fn space_mut(&mut self, arbiter: &str, space_key: &str) -> &mut Space {
-            self.core.arbiters.get_mut(arbiter)
+            self.core
+                .arbiters
+                .get_mut(arbiter)
                 .and_then(|a| a.spaces.get_mut(space_key))
                 .expect("Space not found")
         }
 
         /// Run an operation through to completion, handling all suspensions.
-        fn run_op(
-            &mut self,
-            arbiter: &str,
-            caller: &str,
-            nsid: &str,
-            params: Value,
-        ) -> OpStep {
+        fn run_op(&mut self, arbiter: &str, caller: &str, nsid: &str, params: Value) -> OpStep {
             let step = self.core.process_operation(arbiter, caller, nsid, params);
             self.resolve_loop(step)
         }
@@ -1373,19 +1338,14 @@ mod tests {
                     // Call resolveSpaceMembers on the remote arbiter with auth
                     // using caller_did (the local arbiter's DID).
                     let params = json!({"spaceKey": space_key});
-                    let step = self.core.process_operation(
-                        remote_did,
-                        caller_did,
-                        path,
-                        params,
-                    );
+                    let step = self
+                        .core
+                        .process_operation(remote_did, caller_did, path, params);
                     let resolved_step = self.resolve_loop(step);
                     match resolved_step {
                         OpStep::Done(OpResult::Ok(ok)) => {
                             // Return member entries array as the policy expects
-                            ok.members
-                                .map(|m| json!(m))
-                                .unwrap_or(json!([]))
+                            ok.members.map(|m| json!(m)).unwrap_or(json!([]))
                         }
                         _ => json!([]),
                     }
@@ -1405,7 +1365,11 @@ mod tests {
             "Member {expected_did} not found in resolved list"
         );
         let found = found.unwrap();
-        let level = found.access.get("level").and_then(|v| v.as_str()).unwrap_or("");
+        let level = found
+            .access
+            .get("level")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         assert_eq!(
             level, expected_level,
             "Member {expected_did} expected level {expected_level}, got {level}"
@@ -1420,28 +1384,49 @@ mod tests {
     fn test_owner_can_create_spaces() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "docs", NSID::CREATE_SPACE,
-            json!({"spaceKey": "docs", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+      "org",
+      "alice",
+      "docs",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "docs", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
     }
 
     #[test]
     fn test_non_member_cannot_create_space() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_denied("org", "stranger", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_denied(
+      "org",
+      "stranger",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
     }
 
     #[test]
     fn test_owner_can_delete_arbiter() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        let step = h.run_op("org", "alice", NSID::DELETE_ARBITER,
-            json!({"spaceKey": "$admin"}));
-        assert!(matches!(step, OpStep::Deleted),
-            "Expected Deleted, got {step:?}");
+        let step = h.run_op(
+            "org",
+            "alice",
+            NSID::DELETE_ARBITER,
+            json!({"spaceKey": "$admin"}),
+        );
+        assert!(
+            matches!(step, OpStep::Deleted),
+            "Expected Deleted, got {step:?}"
+        );
         assert!(!h.core.arbiters.contains_key("org"));
     }
 
@@ -1449,30 +1434,60 @@ mod tests {
     fn test_non_owner_cannot_delete_arbiter() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_denied("org", "stranger", "$admin", NSID::DELETE_ARBITER,
-            json!({"spaceKey": "$admin"}));
+        h.assert_denied(
+            "org",
+            "stranger",
+            "$admin",
+            NSID::DELETE_ARBITER,
+            json!({"spaceKey": "$admin"}),
+        );
     }
 
     #[test]
     fn test_multiple_owners_cannot_delete_arbiter() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "Owner"}}));
-        h.assert_denied("org", "alice", "$admin", NSID::DELETE_ARBITER,
-            json!({"spaceKey": "$admin"}));
-        h.assert_denied("org", "bob", "$admin", NSID::DELETE_ARBITER,
-            json!({"spaceKey": "$admin"}));
+        h.assert_ok(
+            "org",
+            "alice",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "Owner"}}),
+        );
+        h.assert_denied(
+            "org",
+            "alice",
+            "$admin",
+            NSID::DELETE_ARBITER,
+            json!({"spaceKey": "$admin"}),
+        );
+        h.assert_denied(
+            "org",
+            "bob",
+            "$admin",
+            NSID::DELETE_ARBITER,
+            json!({"spaceKey": "$admin"}),
+        );
     }
 
     #[test]
     fn test_owner_can_delete_space() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::DELETE_SPACE,
-            json!({"spaceKey": "team"}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "org",
+            "alice",
+            "team",
+            NSID::DELETE_SPACE,
+            json!({"spaceKey": "team"}),
+        );
         assert!(!h.core.arbiters["org"].spaces.contains_key("team"));
     }
 
@@ -1480,8 +1495,12 @@ mod tests {
     fn test_owner_cannot_delete_admin_space() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        let step = h.run_op("org", "alice", NSID::DELETE_SPACE,
-            json!({"spaceKey": "$admin"}));
+        let step = h.run_op(
+            "org",
+            "alice",
+            NSID::DELETE_SPACE,
+            json!({"spaceKey": "$admin"}),
+        );
         assert!(matches!(step, OpStep::Done(OpResult::Err(_))));
         assert!(h.core.arbiters["org"].spaces.contains_key("$admin"));
     }
@@ -1494,50 +1513,115 @@ mod tests {
     fn test_owner_can_add_members() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "Owner"}}));
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+            "org",
+            "alice",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "Owner"}}),
+        );
+        h.assert_ok(
+            "org",
+            "alice",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "IsMember"}}),
+        );
     }
 
     #[test]
     fn test_read_member_cannot_create_space() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "ReadMemberList"}}));
-        h.assert_denied("org", "bob", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "$admin",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "ReadMemberList"}}),
+    );
+        h.assert_denied(
+      "org",
+      "bob",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
     }
 
     #[test]
     fn test_cannot_grant_higher_access_than_own() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "AddMembers"}}));
-        h.assert_ok("org", "bob", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "IsMember"}}));
-        h.assert_denied("org", "bob", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "dave", "access": {"level": "Owner"}}));
-        h.assert_denied("org", "bob", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "eve", "access": {"level": "ConfigureSpace"}}));
+        h.assert_ok(
+            "org",
+            "alice",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "AddMembers"}}),
+        );
+        h.assert_ok(
+            "org",
+            "bob",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "IsMember"}}),
+        );
+        h.assert_denied(
+            "org",
+            "bob",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "dave", "access": {"level": "Owner"}}),
+        );
+        h.assert_denied(
+      "org",
+      "bob",
+      "$admin",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "$admin", "memberDid": "eve", "access": {"level": "ConfigureSpace"}}),
+    );
     }
 
     #[test]
     fn test_need_remove_members_to_modify_existing() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "IsMember"}}));
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "AddMembers"}}));
-        h.assert_ok("org", "carol", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "dave", "access": {"level": "ReadMemberList"}}));
-        h.assert_denied("org", "carol", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "ReadMemberList"}}));
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "ReadMemberList"}}));
+        h.assert_ok(
+            "org",
+            "alice",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "IsMember"}}),
+        );
+        h.assert_ok(
+            "org",
+            "alice",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "AddMembers"}}),
+        );
+        h.assert_ok(
+      "org",
+      "carol",
+      "$admin",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "$admin", "memberDid": "dave", "access": {"level": "ReadMemberList"}}),
+    );
+        h.assert_denied(
+      "org",
+      "carol",
+      "$admin",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "ReadMemberList"}}),
+    );
+        h.assert_ok(
+      "org",
+      "alice",
+      "$admin",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "ReadMemberList"}}),
+    );
     }
 
     // ===================================================================
@@ -1557,10 +1641,20 @@ mod tests {
     fn test_resolve_includes_all_direct_members() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "IsMember"}}));
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "ReadMemberList"}}));
+        h.assert_ok(
+            "org",
+            "alice",
+            "$admin",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "$admin", "memberDid": "bob", "access": {"level": "IsMember"}}),
+        );
+        h.assert_ok(
+      "org",
+      "alice",
+      "$admin",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "$admin", "memberDid": "carol", "access": {"level": "ReadMemberList"}}),
+    );
         let members = h.resolved_members("org", "alice", "$admin");
         assert_member_exists(&members, "alice", "Owner");
         assert_member_exists(&members, "bob", "IsMember");
@@ -1575,10 +1669,20 @@ mod tests {
     fn test_access_limited_by_parent_delegation() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "Owner"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "org",
+            "alice",
+            "team",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "Owner"}}),
+        );
         h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "$admin", "memberDid": "space:team", "access": {"level": "ReadMemberList"}}));
         let members = h.resolved_members("org", "alice", "$admin");
@@ -1589,12 +1693,27 @@ mod tests {
     fn test_members_of_child_space_inherit_access() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "IsMember"}}));
-        h.assert_ok("org", "alice", "$admin", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "$admin", "memberDid": "space:team", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "org",
+            "alice",
+            "team",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "IsMember"}}),
+        );
+        h.assert_ok(
+      "org",
+      "alice",
+      "$admin",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "$admin", "memberDid": "space:team", "access": {"level": "IsMember"}}),
+    );
         let members = h.resolved_members("org", "alice", "$admin");
         assert_member_exists(&members, "bob", "IsMember");
     }
@@ -1603,10 +1722,20 @@ mod tests {
     fn test_public_members_allows_non_member_access() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "org",
+            "alice",
+            "team",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "IsMember"}}),
+        );
         h.space_mut("org", "team").config = json!({"publicMembers": true});
         let members = h.resolved_members("org", "stranger", "team");
         assert!(members.len() > 0);
@@ -1623,16 +1752,36 @@ mod tests {
         h.create_default_arbiter("org", "alice");
         h.create_default_arbiter("partner", "carol");
 
-        h.assert_ok("partner", "carol", "shared", NSID::CREATE_SPACE,
-            json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "partner",
+      "carol",
+      "shared",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.space_mut("partner", "shared").config = json!({"publicMembers": true});
-        h.assert_ok("partner", "carol", "shared", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}));
+        h.assert_ok(
+            "partner",
+            "carol",
+            "shared",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}),
+        );
 
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "partner|shared", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "team", "memberDid": "partner|shared", "access": {"level": "IsMember"}}),
+    );
 
         let members = h.resolved_members("org", "alice", "team");
         assert_member_exists(&members, "dave", "IsMember");
@@ -1644,14 +1793,29 @@ mod tests {
         h.create_default_arbiter("org", "alice");
         h.create_default_arbiter("partner", "carol");
 
-        h.assert_ok("partner", "carol", "shared", NSID::CREATE_SPACE,
-            json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "partner",
+      "carol",
+      "shared",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.space_mut("partner", "shared").config = json!({"publicMembers": true});
-        h.assert_ok("partner", "carol", "shared", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}));
+        h.assert_ok(
+            "partner",
+            "carol",
+            "shared",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}),
+        );
 
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "team", "memberDid": "partner|shared", "access": {"level": "ReadMemberList"}}));
 
@@ -1665,16 +1829,36 @@ mod tests {
         h.create_default_arbiter("org", "alice");
         h.create_default_arbiter("partner", "carol");
 
-        h.assert_ok("partner", "carol", "users", NSID::CREATE_SPACE,
-            json!({"spaceKey": "users", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "partner",
+      "carol",
+      "users",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "users", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.space_mut("partner", "users").config = json!({"publicMembers": true});
-        h.assert_ok("partner", "carol", "users", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "users", "memberDid": "dave", "access": {"level": "Owner"}}));
+        h.assert_ok(
+            "partner",
+            "carol",
+            "users",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "users", "memberDid": "dave", "access": {"level": "Owner"}}),
+        );
 
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "partner|users", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "team", "memberDid": "partner|users", "access": {"level": "IsMember"}}),
+    );
 
         let members = h.resolved_members("org", "alice", "team");
         assert_member_exists(&members, "dave", "IsMember");
@@ -1688,17 +1872,29 @@ mod tests {
 
         h.assert_ok("partner", "carol", "restricted", NSID::CREATE_SPACE,
             json!({"spaceKey": "restricted", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("partner", "carol", "restricted", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "restricted", "memberDid": "dave", "access": {"level": "Owner"}}));
+        h.assert_ok(
+            "partner",
+            "carol",
+            "restricted",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "restricted", "memberDid": "dave", "access": {"level": "Owner"}}),
+        );
 
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "team", "memberDid": "partner|restricted", "access": {"level": "IsMember"}}));
 
         let members = h.resolved_members("org", "alice", "team");
-        assert!(!members.iter().any(|m| m.did == "dave"),
-            "Dave should NOT appear — remote arbiter should deny org");
+        assert!(
+            !members.iter().any(|m| m.did == "dave"),
+            "Dave should NOT appear — remote arbiter should deny org"
+        );
     }
 
     #[test]
@@ -1707,17 +1903,42 @@ mod tests {
         h.create_default_arbiter("org", "alice");
         h.create_default_arbiter("partner", "carol");
 
-        h.assert_ok("partner", "carol", "shared", NSID::CREATE_SPACE,
-            json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("partner", "carol", "shared", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}));
-        h.assert_ok("partner", "carol", "shared", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "shared", "memberDid": "org", "access": {"level": "ReadMemberList"}}));
+        h.assert_ok(
+      "partner",
+      "carol",
+      "shared",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "partner",
+            "carol",
+            "shared",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}),
+        );
+        h.assert_ok(
+      "partner",
+      "carol",
+      "shared",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "shared", "memberDid": "org", "access": {"level": "ReadMemberList"}}),
+    );
 
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "partner|shared", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "team", "memberDid": "partner|shared", "access": {"level": "IsMember"}}),
+    );
 
         let members = h.resolved_members("org", "alice", "team");
         assert_member_exists(&members, "dave", "IsMember");
@@ -1739,10 +1960,20 @@ mod tests {
         "#;
         let mut h = TestHarness::new();
         h.create_arbiter("org", "alice", allow_all);
-        h.assert_ok("org", "stranger", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "stranger", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "alice", "access": {"level": "Owner"}}));
+        h.assert_ok(
+      "org",
+      "stranger",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "org",
+            "stranger",
+            "team",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "team", "memberDid": "alice", "access": {"level": "Owner"}}),
+        );
         let members = h.resolved_members("org", "stranger", "$admin");
         assert_member_exists(&members, "stranger", "Owner");
     }
@@ -1757,8 +1988,13 @@ mod tests {
         "#;
         let mut h = TestHarness::new();
         h.create_arbiter("org", "alice", deny_all);
-        h.assert_denied("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_denied(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
     }
 
     // ===================================================================
@@ -1771,14 +2007,29 @@ mod tests {
         h.create_default_arbiter("org", "alice");
         h.create_default_arbiter("partner", "carol");
 
-        h.assert_ok("partner", "carol", "shared", NSID::CREATE_SPACE,
-            json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "partner",
+      "carol",
+      "shared",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "shared", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.space_mut("partner", "shared").config = json!({"publicMembers": true});
-        h.assert_ok("partner", "carol", "shared", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}));
+        h.assert_ok(
+            "partner",
+            "carol",
+            "shared",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "shared", "memberDid": "dave", "access": {"level": "Owner"}}),
+        );
 
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "team", "memberDid": "partner|shared", "access": {"level": "ReadMemberList"}}));
 
@@ -1789,8 +2040,10 @@ mod tests {
         // Offline: Dave absent
         h.core.toggle_arbiter_offline("partner");
         let offline = h.resolved_members("org", "alice", "team");
-        assert!(!offline.iter().any(|m| m.did == "dave"),
-            "Dave should be absent when partner is offline");
+        assert!(
+            !offline.iter().any(|m| m.did == "dave"),
+            "Dave should be absent when partner is offline"
+        );
 
         // Back online: Dave returns
         h.core.toggle_arbiter_offline("partner");
@@ -1802,14 +2055,29 @@ mod tests {
     fn test_public_members_toggle_controls_stranger_access() {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "org",
+            "alice",
+            "team",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "IsMember"}}),
+        );
 
         // Not public: stranger denied
-        h.assert_denied("org", "stranger", "team", NSID::RESOLVE_SPACE_MEMBERS,
-            json!({"spaceKey": "team"}));
+        h.assert_denied(
+            "org",
+            "stranger",
+            "team",
+            NSID::RESOLVE_SPACE_MEMBERS,
+            json!({"spaceKey": "team"}),
+        );
 
         // Make public: stranger can see
         h.space_mut("org", "team").config = json!({"publicMembers": true});
@@ -1818,8 +2086,13 @@ mod tests {
 
         // Un-public: stranger denied again
         h.space_mut("org", "team").config = json!({"publicMembers": false});
-        h.assert_denied("org", "stranger", "team", NSID::RESOLVE_SPACE_MEMBERS,
-            json!({"spaceKey": "team"}));
+        h.assert_denied(
+            "org",
+            "stranger",
+            "team",
+            NSID::RESOLVE_SPACE_MEMBERS,
+            json!({"spaceKey": "team"}),
+        );
     }
 
     #[test]
@@ -1827,19 +2100,44 @@ mod tests {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
 
-        h.assert_ok("org", "alice", "team", NSID::CREATE_SPACE,
-            json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("org", "alice", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "Owner"}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "team",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "team", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+            "org",
+            "alice",
+            "team",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "team", "memberDid": "bob", "access": {"level": "Owner"}}),
+        );
 
-        h.assert_ok("org", "bob", "team", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "team", "memberDid": "carol", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+            "org",
+            "bob",
+            "team",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "team", "memberDid": "carol", "access": {"level": "IsMember"}}),
+        );
 
-        h.assert_denied("org", "bob", "newspace", NSID::CREATE_SPACE,
-            json!({"spaceKey": "newspace", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_denied(
+      "org",
+      "bob",
+      "newspace",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "newspace", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
 
-        h.assert_ok("org", "alice", "newspace", NSID::CREATE_SPACE,
-            json!({"spaceKey": "newspace", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "org",
+      "alice",
+      "newspace",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "newspace", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
     }
 
     // ===================================================================
@@ -1892,21 +2190,41 @@ mod tests {
         let mut h = TestHarness::new();
         h.create_default_arbiter("arb1", "alice");
 
-        h.assert_ok("arb1", "alice", "members", NSID::CREATE_SPACE,
-            json!({"spaceKey": "members", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "arb1",
+      "alice",
+      "members",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "members", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.assert_ok("arb1", "alice", "moderators", NSID::CREATE_SPACE,
             json!({"spaceKey": "moderators", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("arb1", "alice", "#general", NSID::CREATE_SPACE,
-            json!({"spaceKey": "#general", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "arb1",
+      "alice",
+      "#general",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "#general", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
 
         h.assert_ok("arb1", "alice", "members", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "members", "memberDid": "space:moderators", "access": {"level": "RemoveMembers"}}));
         h.assert_ok("arb1", "alice", "#general", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "#general", "memberDid": "space:members", "access": {"level": "RemoveMembers"}}));
-        h.assert_ok("arb1", "alice", "moderators", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "moderators", "memberDid": "carol", "access": {"level": "RemoveMembers"}}));
-        h.assert_ok("arb1", "alice", "members", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "members", "memberDid": "george", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+      "arb1",
+      "alice",
+      "moderators",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "moderators", "memberDid": "carol", "access": {"level": "RemoveMembers"}}),
+    );
+        h.assert_ok(
+            "arb1",
+            "alice",
+            "members",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "members", "memberDid": "george", "access": {"level": "IsMember"}}),
+        );
 
         let members = h.resolved_members("arb1", "alice", "#general");
         assert_member_exists(&members, "alice", "Owner");
@@ -1923,8 +2241,13 @@ mod tests {
         let mut h = TestHarness::new();
 
         h.create_default_arbiter("muni-town", "alice");
-        h.assert_ok("muni-town", "alice", "members", NSID::CREATE_SPACE,
-            json!({"spaceKey": "members", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "muni-town",
+      "alice",
+      "members",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "members", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
         h.assert_ok("muni-town", "alice", "moderators", NSID::CREATE_SPACE,
             json!({"spaceKey": "moderators", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
 
@@ -1932,19 +2255,44 @@ mod tests {
 
         h.assert_ok("muni-town", "alice", "members", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "members", "memberDid": "space:moderators", "access": {"level": "RemoveMembers"}}));
-        h.assert_ok("muni-town", "alice", "members", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "members", "memberDid": "george", "access": {"level": "IsMember"}}));
-        h.assert_ok("muni-town", "alice", "moderators", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "moderators", "memberDid": "carol", "access": {"level": "RemoveMembers"}}));
+        h.assert_ok(
+            "muni-town",
+            "alice",
+            "members",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "members", "memberDid": "george", "access": {"level": "IsMember"}}),
+        );
+        h.assert_ok(
+      "muni-town",
+      "alice",
+      "moderators",
+      NSID::SET_SPACE_MEMBER_ACCESS,
+      json!({"spaceKey": "moderators", "memberDid": "carol", "access": {"level": "RemoveMembers"}}),
+    );
 
         h.create_default_arbiter("spicy-lobster", "bob");
-        h.assert_ok("spicy-lobster", "bob", "members", NSID::CREATE_SPACE,
-            json!({"spaceKey": "members", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
-        h.assert_ok("spicy-lobster", "bob", "#general", NSID::CREATE_SPACE,
-            json!({"spaceKey": "#general", "spaceType": "town.muni.arbiter.config.space", "config": {}}));
+        h.assert_ok(
+      "spicy-lobster",
+      "bob",
+      "members",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "members", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
+        h.assert_ok(
+      "spicy-lobster",
+      "bob",
+      "#general",
+      NSID::CREATE_SPACE,
+      json!({"spaceKey": "#general", "spaceType": "town.muni.arbiter.config.space", "config": {}}),
+    );
 
-        h.assert_ok("spicy-lobster", "bob", "members", NSID::SET_SPACE_MEMBER_ACCESS,
-            json!({"spaceKey": "members", "memberDid": "mary", "access": {"level": "IsMember"}}));
+        h.assert_ok(
+            "spicy-lobster",
+            "bob",
+            "members",
+            NSID::SET_SPACE_MEMBER_ACCESS,
+            json!({"spaceKey": "members", "memberDid": "mary", "access": {"level": "IsMember"}}),
+        );
         h.assert_ok("spicy-lobster", "bob", "members", NSID::SET_SPACE_MEMBER_ACCESS,
             json!({"spaceKey": "members", "memberDid": "muni-town|members", "access": {"level": "IsMember"}}));
         h.assert_ok("spicy-lobster", "bob", "#general", NSID::SET_SPACE_MEMBER_ACCESS,
@@ -1958,4 +2306,3 @@ mod tests {
         assert_member_exists(&members, "carol", "IsMember");
     }
 }
-

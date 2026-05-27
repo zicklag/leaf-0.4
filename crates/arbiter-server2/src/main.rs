@@ -55,8 +55,7 @@ impl AppConfig {
     fn from_env() -> Self {
         Self {
             listen: std::env::var("LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
-            hostname: std::env::var("HOSTNAME")
-                .unwrap_or_else(|_| "localhost:8080".to_string()),
+            hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost:8080".to_string()),
             data_dir: std::env::var("DATA_DIR")
                 .unwrap_or_else(|_| "./data/arbiters".to_string())
                 .into(),
@@ -118,8 +117,7 @@ impl salvo::Handler for ServerDataMiddleware {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -186,14 +184,13 @@ async fn main() -> anyhow::Result<()> {
 // Router
 // ---------------------------------------------------------------------------
 
-fn build_router(
-    state: Arc<ServerState>,
-    auth_config: Arc<AuthConfig>,
-) -> Router {
+fn build_router(state: Arc<ServerState>, auth_config: Arc<AuthConfig>) -> Router {
     let auth_middleware = auth::AuthMiddleware::new(auth_config);
 
     Router::new()
-        .hoop(ServerDataMiddleware { state: state.clone() })
+        .hoop(ServerDataMiddleware {
+            state: state.clone(),
+        })
         // Create
         .push(
             Router::with_path("/xrpc/town.muni.arbiter.createArbiter")
@@ -287,11 +284,7 @@ async fn index(res: &mut Response) {
 // Persistence loop
 // ---------------------------------------------------------------------------
 
-async fn persistence_loop(
-    state: Arc<ServerState>,
-    persister: Persister,
-    interval_secs: u64,
-) {
+async fn persistence_loop(state: Arc<ServerState>, persister: Persister, interval_secs: u64) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
 
