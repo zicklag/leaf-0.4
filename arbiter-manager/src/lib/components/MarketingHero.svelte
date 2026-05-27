@@ -19,7 +19,7 @@
     <div class="mt-10 flex flex-col items-center gap-4">
       <Button size="lg" onclick={login}>Sign in with ATProto</Button>
       <p class="text-sm text-base-500 dark:text-base-500">
-        Use your existing AT Protocol account to get started.
+        Sign in with your Atmosphere account to create or manage your own organization or community accounts.
       </p>
     </div>
 

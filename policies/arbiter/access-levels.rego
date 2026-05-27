@@ -3,18 +3,19 @@
 # This policy evaluates whether a given XRPC operation is allowed. It
 # receives:
 #
-#   data.arbiter             — the arbiter's full state (config + spaces)
-#   data.arbiter.spaces[key] — a space with its config and members
+#   data.arbiter.config       — the arbiter's configuration object
 #   input.caller.did         — the requester's DID
-#   input.caller.access      — the requester's pre-computed access level
 #   input.operation.nsid     — the XRPC method NSID
 #   input.operation.params   — the method parameters
 #
-# The policy can request additional data via two host built-ins:
-#   xrpc_local(path, params)   — query the local arbiter
+# The policy queries space membership data on-demand via:
+#   xrpc_local(path, params)   — query the local arbiter (native NSIDs resolved internally)
 #   xrpc_remote(did, path, params) — query a remote arbiter
 #
 # XRPC queries from the policy are ALWAYS read-only (never procedures).
+# Space membership data is NOT passed upfront — it's fetched via xrpc_local
+# as needed, avoiding the overhead of passing thousands of members to every
+# policy evaluation.
 
 package arbiter
 
@@ -39,25 +40,22 @@ access_rank("Owner") := 7
 member_rank(member) := access_rank(access_level(member.access))
 
 # ---------------------------------------------------------------------------
-# Space data access helpers
+# Space data access via xrpc_local (on-demand queries)
 # ---------------------------------------------------------------------------
 
+# Fetch space members via local XRPC — this suspends the policy VM and the
+# IO layer resolves it by querying the arbiter core directly (bypassing policy).
+# Fetch space members via local XRPC — returns the full response object.
+# The policy extracts the `.members` field.
 space_members(space_key) := members if {
-	data.arbiter.spaces[space_key]
-	members := data.arbiter.spaces[space_key].members
+	resp := xrpc_local("town.muni.arbiter.getSpaceMembers", {"spaceKey": space_key})
+	members := resp.members
 }
 
-space_members(space_key) := [] if {
-	not data.arbiter.spaces[space_key]
-}
-
+# Fetch space config via local XRPC — extracts the `.config` field.
 space_config(space_key) := config if {
-	data.arbiter.spaces[space_key]
-	config := data.arbiter.spaces[space_key].config
-}
-
-space_config(space_key) := {} if {
-	not data.arbiter.spaces[space_key]
+	resp := xrpc_local("town.muni.arbiter.getSpaceConfig", {"spaceKey": space_key})
+	config := resp.config
 }
 
 # ---------------------------------------------------------------------------
@@ -86,7 +84,8 @@ remote_delegation contains member if {
 	space_key := parts[1]
 
 	# This resolves asynchronously via xrpc_remote -> __builtin_host_await
-	some remote_entry in xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	some remote_entry in resp.members
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, entry.access),
@@ -102,7 +101,8 @@ remote_delegation contains member if {
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
 	space_key := parts[1]
-	some remote_entry in xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	some remote_entry in resp.members
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, entry.access),
@@ -137,7 +137,8 @@ _expand_remote(child_key, parent_access) := [member |
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
 	space_key := parts[1]
-	some remote_entry in xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	some remote_entry in resp.members
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, min_access(entry.access, parent_access)),
@@ -234,7 +235,8 @@ missing_spaces contains ms if {
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
 	space_key := parts[1]
-	count(xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})) == 0
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	count(resp.members) == 0
 	ms := {"arbiterDid": arbiter_did, "spaceKey": space_key}
 }
 

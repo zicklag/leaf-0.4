@@ -184,34 +184,37 @@ export class Simulator {
 
     switch (path) {
       case NSID.getArbiterConfig:
-        return arbiter.config;
+        return { config: arbiter.config };
 
       case NSID.getSpaceConfig: {
         const sk = params.spaceKey as string | undefined;
-        return sk ? arbiter.spaces.get(sk)?.config ?? null : null;
+        return { config: sk ? arbiter.spaces.get(sk)?.config ?? null : null };
       }
 
       case NSID.getSpaceMembers: {
         const sk = params.spaceKey as string | undefined;
-        return sk ? arbiter.spaces.get(sk)?.members ?? [] : [];
+        return { members: sk ? arbiter.spaces.get(sk)?.members ?? [] : [] };
       }
 
       case NSID.resolveSpaceMembers: {
         // Return fully resolved members so the calling policy receives real
         // DIDs — no space:<key> entries that only make sense on this arbiter.
         const sk = params.spaceKey as string | undefined;
-        if (!sk) return [];
-        return this.resolveSpaceMembersInner(
+        if (!sk) return { members: [] };
+        const members = await this.resolveSpaceMembersInner(
           arbiter,
           callerDid ?? arbiterDid,
           sk,
         );
+        return { members };
       }
 
       case NSID.listSpaces:
-        return Array.from(arbiter.spaces.values()).map((s) => ({
-          key: s.key, spaceType: s.spaceType,
-        }));
+        return {
+          spaces: Array.from(arbiter.spaces.values()).map((s) => ({
+            key: s.key, spaceType: s.spaceType,
+          })),
+        };
 
       default:
         return null;
@@ -452,15 +455,9 @@ export class Simulator {
 
   /** Convert an arbiter's state to a plain JS object for the policy data doc. */
   private arbiterToData(arbiter: ArbiterState): Record<string, unknown> {
-    const spaces: Record<string, unknown> = {};
-    for (const [key, space] of arbiter.spaces) {
-      spaces[key] = {
-        spaceType: space.spaceType,
-        config: space.config,
-        members: space.members.map((m) => ({ did: m.did, access: m.access })),
-      };
-    }
-    return { arbiter: { config: arbiter.config, spaces } };
+    // Only the arbiter's config is provided upfront.
+    // Space membership data is queried on-demand via xrpc_local().
+    return { arbiter: { config: arbiter.config } };
   }
 
   // -----------------------------------------------------------------------

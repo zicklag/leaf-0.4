@@ -2,7 +2,7 @@
  * Handle the OAuth callback using the client.init() pattern.
  * Call this on app mount — the library auto-detects the callback URL.
  */
-import { initOAuth, handleOAuthCallback } from './auth';
+import { initOAuth, handleOAuthCallback, getSession } from './auth';
 import { setSession } from './store.svelte';
 
 export async function processOAuthCallback(): Promise<boolean> {
@@ -10,6 +10,10 @@ export async function processOAuthCallback(): Promise<boolean> {
     // First try the init() approach — it auto-detects callbacks
     const result = await initOAuth();
     if (result) {
+      // initOAuth saves to localStorage and _currentSession, but we
+      // need to update the Svelte store so the UI reacts immediately
+      const session = getSession();
+      if (session) setSession(session);
       return true;
     }
 

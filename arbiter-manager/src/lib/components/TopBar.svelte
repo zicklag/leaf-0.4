@@ -13,9 +13,9 @@
   class="flex items-center justify-between px-4 py-2.5 border-b border-base-200 dark:border-base-800 bg-base-50 dark:bg-base-950 shrink-0"
 >
   <div class="flex items-center gap-3">
-    <span class="text-lg font-semibold tracking-tight text-base-900 dark:text-base-50">
+    <a href="/" class="text-lg font-semibold tracking-tight text-base-900 dark:text-base-50 no-underline hover:text-accent-600 dark:hover:text-accent-400 transition-colors">
       Arbiter Manager
-    </span>
+    </a>
   </div>
 
   <div class="flex items-center gap-2">

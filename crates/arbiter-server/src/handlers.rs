@@ -54,22 +54,32 @@ async fn resolve_loop(
 ) -> OpStep {
     match step {
         OpStep::Suspended { job_id, request } => match request {
-            arbiter_core::CoreRequest::Local { path, input } => {
-                // The policy is requesting data from this arbiter.
-                // Execute the query directly, bypassing the policy check
-                // (the policy itself is the one requesting this data).
-                tracing::debug!(%path, "Resolving local XRPC request");
-                let resolved = core.execute_local_query(&path, &input);
-                let value = match &resolved {
-                    OpStep::Done(OpResult::Ok(ok)) => {
-                        serde_json::to_value(ok).unwrap_or(serde_json::json!({}))
+            arbiter_core::CoreRequest::Local {
+                arbiter_did,
+                path,
+                input,
+            } => {
+                let resolved = if core.is_native_query(&path) {
+                    // Native arbiter NSID — execute directly on the core
+                    // bypassing policy (the policy itself is calling).
+                    tracing::debug!(%arbiter_did, %path, "Resolving local native query");
+                    match core.execute_query_direct(&arbiter_did, &path, &input) {
+                        OpStep::Done(OpResult::Ok(ok)) => {
+                            // Return the full XRPC response object.
+                            // The policy extracts the relevant field.
+                            serde_json::to_value(ok).unwrap_or(serde_json::json!([]))
+                        }
+                        _ => {
+                            tracing::warn!(%path, "Local native query failed");
+                            serde_json::json!([])
+                        }
                     }
-                    _ => {
-                        tracing::warn!(%path, "Local query returned non-Ok result");
-                        serde_json::json!([])
-                    }
+                } else {
+                    // Foreign NSID — proxy to this arbiter's configured backend
+                    tracing::debug!(%arbiter_did, %path, "Proxying local XRPC to backend");
+                    proxy_to_backend(client, &arbiter_did, &path, &input).await
                 };
-                let resumed = core.resume_operation(job_id, value);
+                let resumed = core.resume_operation(job_id, resolved);
                 Box::pin(resolve_loop(core, client, resumed)).await
             }
             arbiter_core::CoreRequest::Remote {
@@ -1101,4 +1111,19 @@ pub async fn proxy_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response
             res.render(Json(error_response("ErrTimeout")));
         }
     }
+}
+
+/// Proxy a local XRPC request to an arbiter's configured backend.
+///
+/// Called by `resolve_loop` when the policy requests local data via
+/// `xrpc_local()` and the NSID is not a native arbiter method.
+/// Proxy a local XRPC request to an arbiter's configured backend.
+async fn proxy_to_backend(
+    _client: &reqwest::Client,
+    arbiter_did: &str,
+    nsid: &str,
+    _params: &serde_json::Value,
+) -> serde_json::Value {
+    tracing::warn!(%arbiter_did, %nsid, "proxy_to_backend needs backendUrl lookup - returning empty");
+    serde_json::json!([])
 }

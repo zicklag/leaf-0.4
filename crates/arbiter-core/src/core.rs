@@ -123,8 +123,19 @@ pub enum OpResult {
 /// A request for the IO layer to resolve.
 #[derive(Debug, Clone)]
 pub enum CoreRequest {
-    /// Resolve an XRPC query on the local arbiter (can be handled internally).
-    Local { path: String, input: Value },
+    /// Proxy an XRPC query to this arbiter's configured backend.
+    ///
+    /// The policy requested local data via `xrpc_local()`. For native arbiter
+    /// NSIDs the policy accesses data directly through Rego rules; this variant
+    /// is for foreign NSIDs that need proxying to the backend service.
+    Local {
+        /// DID of the arbiter whose backend should handle this.
+        arbiter_did: Did,
+        /// The XRPC method NSID to proxy.
+        path: String,
+        /// Input parameters for the query.
+        input: Value,
+    },
     /// Resolve an XRPC query on a remote arbiter.
     Remote {
         /// DID of the caller (used for auth on the remote side).
@@ -406,6 +417,41 @@ impl ArbiterCore {
         }
     }
 
+    /// Execute a native arbiter query directly on the core, bypassing policy.
+    ///
+    /// Used by the IO layer to resolve `xrpc_local` calls from the policy
+    /// for native arbiter NSIDs (getSpaceMembers, getSpaceConfig, etc.).
+    /// The action is built from the NSID and params, then executed without
+    /// any authorization check since the policy itself is the caller.
+    pub fn execute_query_direct(
+        &mut self,
+        arbiter_did: &str,
+        nsid: &str,
+        params: &Value,
+    ) -> OpStep {
+        let action = match build_action(nsid, params) {
+            Some(a) => a,
+            None => {
+                return OpStep::Done(OpResult::Err(OpError {
+                    error: format!("ErrUnknownNSID: {nsid}"),
+                }));
+            }
+        };
+        self.execute_authorized_action(
+            arbiter_did.to_string(),
+            "",
+            nsid,
+            params,
+            action,
+        )
+    }
+
+    /// Check whether a given NSID is a native arbiter query that can be
+    /// handled internally via [`execute_query_direct`].
+    pub fn is_native_query(&self, nsid: &str) -> bool {
+        build_action(nsid, &Value::Null).is_some()
+    }
+
     /// Resume a suspended operation with resolved data from a remote or
     /// local XRPC query.
     ///
@@ -423,32 +469,6 @@ impl ArbiterCore {
         };
 
         self.continue_evaluation(pending, resolved_value)
-    }
-
-    /// Execute a local operation bypassing the policy check.
-    ///
-    /// Used when the policy itself requests local data via `xrpc_local()`.
-    /// The action is dispatched directly without any authorization check.
-    pub fn execute_local_query(&mut self, nsid: &str, params: &Value) -> OpStep {
-        let action = match build_action(nsid, params) {
-            Some(a) => a,
-            None => {
-                return OpStep::Done(OpResult::Err(OpError {
-                    error: format!("ErrUnknownNSID: {nsid}"),
-                }));
-            }
-        };
-
-        // Execute the action directly with a placeholder arbiter DID.
-        // The arbiter_did is only used for mutations (which won't happen
-        // in a local query context), but we need something for the API.
-        self.execute_authorized_action(
-            String::new(),
-            "",
-            nsid,
-            params,
-            action,
-        )
     }
 
     // -------------------------------------------------------------------
@@ -736,6 +756,7 @@ impl ArbiterCore {
 
         let core_request = match &request {
             HostRequest::XrpcLocal { path, input } => CoreRequest::Local {
+                arbiter_did: arbiter_did.clone(),
                 path: path.clone(),
                 input: regorus_to_json(input),
             },
@@ -1346,8 +1367,20 @@ mod tests {
         /// Resolve a single CoreRequest to a JSON value.
         fn resolve_request(&mut self, request: &CoreRequest) -> Value {
             match request {
-                CoreRequest::Local { path: _, input: _ } => {
-                    json!([])
+                CoreRequest::Local {
+                    arbiter_did,
+                    path,
+                    input,
+                } => {
+                    // Native arbiter query — execute directly, bypassing policy
+                    match self.core.execute_query_direct(arbiter_did, path, input) {
+                        OpStep::Done(OpResult::Ok(ok)) => {
+                            // Return the full XRPC response object.
+                            // The policy extracts the relevant field.
+                            serde_json::to_value(ok).unwrap_or(json!([]))
+                        }
+                        _ => json!([]),
+                    }
                 }
                 CoreRequest::Remote {
                     caller_did,
@@ -1380,8 +1413,9 @@ mod tests {
                     let resolved_step = self.resolve_loop(step);
                     match resolved_step {
                         OpStep::Done(OpResult::Ok(ok)) => {
-                            // Return member entries array as the policy expects
-                            ok.members.map(|m| json!(m)).unwrap_or(json!([]))
+                            // Return the full XRPC response object.
+                            // The policy extracts the relevant field (e.g., .members).
+                            serde_json::to_value(ok).unwrap_or(json!([]))
                         }
                         _ => json!([]),
                     }

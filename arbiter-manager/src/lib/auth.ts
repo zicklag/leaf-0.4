@@ -45,7 +45,7 @@ function getClient(): BrowserOAuthClient {
       (isLoopbackOrigin() ? undefined : 'https://your-app.com/oauth-client-metadata.json');
 
     _client = new BrowserOAuthClient({
-      handleResolver: 'https://resolve.handle.net/.well-known/atproto-did',
+      handleResolver: 'https://resolver.roomy.chat',
       clientMetadata: clientId as any,
     });
   }

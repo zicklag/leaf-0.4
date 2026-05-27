@@ -139,35 +139,14 @@ pub fn nsid_type(nsid: &str) -> NsidType {
 
 /// Build the `data` document for the Rego policy from an arbiter's state.
 ///
+/// Only the arbiter's config is provided upfront. Space membership data
+/// is queried on-demand via `xrpc_local()` when the policy needs it.
+///
 /// Returns a `serde_json::Value` — call [`json_to_regorus`] to pass to `VmSession`.
 pub fn build_data_from_arbiter(arbiter: &ArbiterState) -> JsonValue {
-    let mut spaces = serde_json::Map::new();
-    for (key, space) in &arbiter.spaces {
-        let members: Vec<JsonValue> = space
-            .members
-            .iter()
-            .map(|m| {
-                json!({
-                    "did": m.did,
-                    "access": m.access,
-                })
-            })
-            .collect();
-
-        spaces.insert(
-            key.clone(),
-            json!({
-                "spaceType": space.space_type,
-                "config": space.config,
-                "members": members,
-            }),
-        );
-    }
-
     json!({
         "arbiter": {
             "config": arbiter.config,
-            "spaces": spaces,
         }
     })
 }
