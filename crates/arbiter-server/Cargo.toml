@@ -8,7 +8,6 @@ name = "arbiter-server"
 path = "src/main.rs"
 
 [dependencies]
-arbiter-core = { path = "../arbiter-core" }
 policy-core = { path = "../policy-core" }
 anyhow = "1"
 async-trait = "0.1"
@@ -16,14 +15,15 @@ atproto-identity = "0.14"
 atproto-oauth = { version = "0.14", default-features = false }
 atproto-plc = "0.2"
 base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
 salvo = { version = "0.76", features = ["server"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+regorus = "0.10"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-clap = { version = "4", features = ["derive", "env"] }
 bs58 = "0.5"
 hex = "0.4"
 ulid = "1"

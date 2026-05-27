@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
-use arbiter_core::ServerSnapshot;
+use crate::state::ServerSnapshot;
 
 /// Persists arbiter state to disk as a single JSON file.
 #[derive(Clone)]
