@@ -349,7 +349,7 @@ impl ArbiterCore {
 
     /// Check if an arbiter is offline.
     pub fn is_arbiter_offline(&self, did: &str) -> bool {
-        self.arbiters.get(did).map_or(true, |a| !a.online)
+        self.arbiters.get(did).is_none_or(|a| !a.online)
     }
 
     // -------------------------------------------------------------------
@@ -887,13 +887,12 @@ impl ArbiterCore {
                 space_type,
                 config,
             } => {
-                if let Some(arb) = self.arbiters.get_mut(&arbiter_did) {
-                    if let Some(space) = arb.spaces.get_mut(&space_key) {
+                if let Some(arb) = self.arbiters.get_mut(&arbiter_did)
+                    && let Some(space) = arb.spaces.get_mut(&space_key) {
                         space.space_type = space_type;
                         space.config = config;
                         arb.version += 1;
                     }
-                }
                 self.time += 1;
                 OpStep::Done(OpResult::Ok(OpOk {
                     config: None,
@@ -920,8 +919,8 @@ impl ArbiterCore {
                 member_did,
                 access,
             } => {
-                if let Some(arb) = self.arbiters.get_mut(&arbiter_did) {
-                    if let Some(space) = arb.spaces.get_mut(&space_key) {
+                if let Some(arb) = self.arbiters.get_mut(&arbiter_did)
+                    && let Some(space) = arb.spaces.get_mut(&space_key) {
                         let idx = space.members.iter().position(|m| m.did == member_did);
                         if let Some(i) = idx {
                             space.members[i].access = access;
@@ -933,7 +932,6 @@ impl ArbiterCore {
                         }
                         arb.version += 1;
                     }
-                }
                 self.time += 1;
                 OpStep::Done(OpResult::Ok(OpOk {
                     config: None,
@@ -946,12 +944,11 @@ impl ArbiterCore {
                 space_key,
                 member_did,
             } => {
-                if let Some(arb) = self.arbiters.get_mut(&arbiter_did) {
-                    if let Some(space) = arb.spaces.get_mut(&space_key) {
+                if let Some(arb) = self.arbiters.get_mut(&arbiter_did)
+                    && let Some(space) = arb.spaces.get_mut(&space_key) {
                         space.members.retain(|m| m.did != member_did);
                         arb.version += 1;
                     }
-                }
                 self.time += 1;
                 OpStep::Done(OpResult::Ok(OpOk {
                     config: None,

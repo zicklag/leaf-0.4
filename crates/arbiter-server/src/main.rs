@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use clap::Parser;
 use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
 use salvo::writing::Json;
@@ -40,32 +41,32 @@ use auth::AuthConfig;
 use persistence::Persister;
 
 // ---------------------------------------------------------------------------
-// CLI / env configuration
+// CLI / env configuration (clap + env)
 // ---------------------------------------------------------------------------
 
+/// Muni Town Arbiter Server v2 — AT Protocol XRPC HTTP server.
+#[derive(Parser, Debug)]
+#[command(name = "arbiter-server", version, about)]
 struct AppConfig {
+    /// Address to bind the HTTP server on.
+    #[arg(short, long = "listen", env = "LISTEN", default_value = "0.0.0.0:8203")]
     listen: String,
-    hostname: String,
-    data_dir: std::path::PathBuf,
-    unsafe_auth_token: Option<String>,
-    persist_interval_secs: u64,
-}
 
-impl AppConfig {
-    fn from_env() -> Self {
-        Self {
-            listen: std::env::var("LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_string()),
-            hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost:8080".to_string()),
-            data_dir: std::env::var("DATA_DIR")
-                .unwrap_or_else(|_| "./data/arbiters".to_string())
-                .into(),
-            unsafe_auth_token: std::env::var("UNSAFE_AUTH_TOKEN").ok(),
-            persist_interval_secs: std::env::var("PERSIST_INTERVAL")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(5),
-        }
-    }
+    /// Public hostname (used to form the server's did:web).
+    #[arg(short = 'H', long = "hostname", env = "HOSTNAME", default_value = "localhost:8080")]
+    hostname: String,
+
+    /// Directory to persist arbiter state.
+    #[arg(short, long = "data-dir", env = "DATA_DIR", default_value = "./data/arbiters")]
+    data_dir: std::path::PathBuf,
+
+    /// Unsafe development auth token (bypasses real auth).
+    #[arg(long = "unsafe-auth-token", env = "UNSAFE_AUTH_TOKEN")]
+    unsafe_auth_token: Option<String>,
+
+    /// Interval (seconds) between automatic state persistence.
+    #[arg(long = "persist-interval", env = "PERSIST_INTERVAL", default_value = "5")]
+    persist_interval_secs: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = AppConfig::from_env();
+    let config = AppConfig::parse();
     let default_policy = include_str!("../../../policies/arbiter/access-levels.rego");
     let server_did = format!("did:web:{}", config.hostname.replace(':', "%3A"));
 

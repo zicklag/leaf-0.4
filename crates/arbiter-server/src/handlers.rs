@@ -78,10 +78,7 @@ async fn resolve_loop(
     }
 }
 
-/// Fetch data from a remote arbiter.
-// Helper: build XRPC response
-// ---------------------------------------------------------------------------
-
+/// Helper: build XRPC response
 fn error_response(error: &str) -> serde_json::Value {
     serde_json::json!({
         "error": error,
