@@ -260,8 +260,15 @@ fn build_router(
         )
         .push(
             Router::with_path("/xrpc/town.muni.arbiter.removeSpaceMember")
-                .hoop(auth_middleware)
+                .hoop(auth_middleware.clone())
                 .post(handlers::remove_space_member),
+        )
+        // Catch-all proxy for foreign (non-arbiter) XRPC methods
+        .push(
+            Router::with_path("/xrpc/{**rest}")
+                .hoop(auth_middleware)
+                .post(handlers::proxy_xrpc)
+                .get(handlers::proxy_xrpc),
         )
         // Health
         .push(Router::with_path("/").get(index))

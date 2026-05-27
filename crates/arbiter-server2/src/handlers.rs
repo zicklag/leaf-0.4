@@ -238,6 +238,7 @@ pub async fn delete_arbiter(req: &mut Request, depot: &mut Depot, res: &mut Resp
         OpStep::Done(OpResult::Ok(_)) => res.render(Json(serde_json::json!({}))),
         OpStep::Done(OpResult::Err(e)) => res.render(Json(error_response(&e.error))),
         OpStep::Suspended { .. } => res.render(Json(error_response("ErrTimeout"))),
+        OpStep::ProxyRequest { .. } => res.render(Json(error_response("ErrUnexpectedProxy"))),
     }
 }
 
@@ -605,6 +606,145 @@ fn respond_step(
     match step {
         OpStep::Done(OpResult::Ok(ok)) => {
             res.render(Json(map_ok(ok)));
+        }
+        OpStep::Done(OpResult::Err(e)) => {
+            res.status_code(salvo::http::StatusCode::FORBIDDEN);
+            res.render(Json(error_response(&e.error)));
+        }
+        OpStep::Deleted => {
+            res.render(Json(serde_json::json!({})));
+        }
+        OpStep::Suspended { .. } => {
+            res.status_code(salvo::http::StatusCode::GATEWAY_TIMEOUT);
+            res.render(Json(error_response("ErrTimeout")));
+        }
+        OpStep::ProxyRequest { .. } => {
+            // Should not reach here — proxy requests are handled
+            // by `proxy_xrpc` and don't call `respond_step`.
+            res.status_code(salvo::http::StatusCode::INTERNAL_SERVER_ERROR);
+            res.render(Json(error_response("ErrUnexpectedProxyResponse")));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proxy handler — for foreign (non-arbiter) XRPC methods
+// ---------------------------------------------------------------------------
+
+/// Handle a foreign XRPC method by checking the arbiter policy and
+/// proxying to the configured backend if allowed.
+#[handler]
+pub async fn proxy_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let state = depot
+        .get::<Arc<ServerState>>("state")
+        .cloned()
+        .unwrap();
+    let caller = caller_did(depot);
+
+    // Extract NSID from the request path
+    let path = req.uri().path();
+    let nsid = path
+        .strip_prefix("/xrpc/")
+        .unwrap_or(path)
+        .to_string();
+
+    // Extract arbiter DID and params from body (POST) or query (GET)
+    let params = if req.method() == salvo::http::Method::GET {
+        let mut map = serde_json::Map::new();
+        if let Some(v) = req.query::<String>("arbiterDid") {
+            map.insert("arbiterDid".into(), serde_json::Value::String(v));
+        }
+        serde_json::Value::Object(map)
+    } else {
+        req.parse_json::<serde_json::Value>().await.unwrap_or_default()
+    };
+
+    let arbiter_did = params
+        .get("arbiterDid")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| req.query::<String>("arbiterDid"))
+        .unwrap_or_default();
+
+    if arbiter_did.is_empty() {
+        res.status_code(salvo::http::StatusCode::BAD_REQUEST);
+        res.render(Json(error_response("ErrInvalidRequest: missing arbiterDid")));
+        return;
+    }
+
+    // Run the policy check
+    let step = run_operation(&state, &arbiter_did, &caller, &nsid, params).await;
+
+    match step {
+        OpStep::ProxyRequest {
+            arbiter_did,
+            caller_did: _,
+            nsid,
+            params,
+        } => {
+            // Read the backend URL from the arbiter's config
+            let backend_url = {
+                let core = state.core.lock().await;
+                core.arbiters
+                    .get(&arbiter_did)
+                    .and_then(|a| a.config.get("backendUrl"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            };
+
+            let Some(backend_url) = backend_url else {
+                res.status_code(salvo::http::StatusCode::BAD_GATEWAY);
+                res.render(Json(error_response("ErrBackendNotConfigured")));
+                return;
+            };
+
+            // Build the backend URL
+            let proxy_url = format!("{}/xrpc/{}", backend_url.trim_end_matches('/'), nsid);
+
+            // Proxy the request
+            let client = &state.client;
+            let proxy_req = if req.method() == salvo::http::Method::GET {
+                client.get(&proxy_url)
+            } else {
+                // Forward the body as JSON
+                client.post(&proxy_url).json(&params)
+            };
+
+            match proxy_req.send().await {
+                Ok(backend_resp) => {
+                    // Forward the status
+                    let status = backend_resp.status();
+                    res.status_code(salvo::http::StatusCode::from_u16(status.as_u16())
+                        .unwrap_or(salvo::http::StatusCode::OK));
+
+                    // Forward the body — get bytes then try JSON
+                    match backend_resp.bytes().await {
+                        Ok(bytes) => {
+                            if let Ok(body) =
+                                serde_json::from_slice::<serde_json::Value>(&bytes)
+                            {
+                                res.render(Json(body));
+                            } else {
+                                // Return as raw text
+                                let text = String::from_utf8_lossy(&bytes);
+                                res.render(text.to_string());
+                            }
+                        }
+                        Err(_) => {
+                            res.render(Json(serde_json::json!({})));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(%backend_url, %e, "Backend proxy failed");
+                    res.status_code(salvo::http::StatusCode::BAD_GATEWAY);
+                    res.render(Json(error_response("ErrBackendUnreachable")));
+                }
+            }
+        }
+        OpStep::Done(OpResult::Ok(_)) => {
+            // Shouldn't happen for foreign methods, but handle gracefully
+            res.render(Json(serde_json::json!({})));
         }
         OpStep::Done(OpResult::Err(e)) => {
             res.status_code(salvo::http::StatusCode::FORBIDDEN);

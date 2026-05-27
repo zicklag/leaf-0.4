@@ -158,6 +158,15 @@ pub enum OpStep {
     },
     /// The arbiter was deleted (only from deleteArbiter).
     Deleted,
+    /// Policy check passed for a foreign (non-arbiter) XRPC method.
+    /// The IO layer should proxy the request to the arbiter's configured
+    /// backend. The backend URL is read from the arbiter's config.
+    ProxyRequest {
+        arbiter_did: Did,
+        caller_did: Did,
+        nsid: String,
+        params: Value,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +188,12 @@ enum PendingPhase {
     ResolvingMembers {
         #[allow(dead_code)]
         caller_did: Did,
+    },
+    /// Authorizing a foreign (non-arbiter) XRPC method.
+    AuthorizingForeign {
+        caller_did: Did,
+        nsid: String,
+        params: Value,
     },
 }
 
@@ -374,26 +389,34 @@ impl ArbiterCore {
             }
         };
 
-        // Determine the action from the NSID and params
-        let action = match build_action(nsid, &params) {
-            Some(a) => a,
-            None => {
-                return OpStep::Done(OpResult::Err(OpError {
-                    error: "ErrUnknownOperation".into(),
-                }))
+        // Determine the action from the NSID and params.
+        // Native arbiter methods get structural validation + action dispatch.
+        // Foreign XRPC methods just get policy auth + proxy signal.
+        match build_action(nsid, &params) {
+            Some(action) => {
+                // Structural validation (pre-policy checks)
+                if let Some(err) = validate_operation(arbiter, &action) {
+                    return OpStep::Done(OpResult::Err(err));
+                }
+                self.start_auth_check(
+                    arbiter_did.to_string(),
+                    caller_did.to_string(),
+                    nsid.to_string(),
+                    params,
+                    action,
+                )
             }
-        };
-
-        // Structural validation (pre-policy checks)
-        if let Some(err) = validate_operation(arbiter, &action) {
-            return OpStep::Done(OpResult::Err(err));
+            None => {
+                // Foreign XRPC method — just check policy for auth.
+                // If allowed, the IO layer proxies to the arbiter's backend.
+                self.start_foreign_auth_check(
+                    arbiter_did.to_string(),
+                    caller_did.to_string(),
+                    nsid.to_string(),
+                    params,
+                )
+            }
         }
-
-        // For mutations, we need to check policy first, then execute.
-        // For queries, we check policy then return data.
-        // For resolveSpaceMembers, we check policy then evaluate resolve_result.
-
-        self.start_auth_check(arbiter_did.to_string(), caller_did.to_string(), nsid.to_string(), params, action)
     }
 
     /// Resume a suspended operation with resolved data from a remote or
@@ -538,6 +561,53 @@ impl ArbiterCore {
         )
     }
 
+    /// Start a policy authorization check for a foreign (non-arbiter) XRPC
+    /// method. If allowed, returns [`OpStep::ProxyRequest`]; if denied,
+    /// returns an error.
+    fn start_foreign_auth_check(
+        &mut self,
+        arbiter_did: Did,
+        caller_did: Did,
+        nsid: String,
+        params: Value,
+    ) -> OpStep {
+        let arbiter = match self.arbiters.get(&arbiter_did) {
+            Some(a) => a,
+            None => {
+                return OpStep::Done(OpResult::Err(OpError {
+                    error: "ErrArbiterNotExists".into(),
+                }))
+            }
+        };
+
+        let data = json_to_regorus(&build_data_from_arbiter(arbiter));
+        let input = json_to_regorus(&build_op_input(&caller_did, &nsid, &params));
+
+        let session = match VmSession::new(
+            &arbiter.policy,
+            &data,
+            &input,
+            &["data.arbiter.allow"],
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                return OpStep::Done(OpResult::Err(OpError {
+                    error: format!("ErrPolicyCompile: {e}"),
+                }))
+            }
+        };
+
+        self.handle_session_result(
+            arbiter_did,
+            session,
+            PendingPhase::AuthorizingForeign {
+                caller_did,
+                nsid,
+                params,
+            },
+        )
+    }
+
     /// Handle the result of a VmSession step (start or resume).
     fn handle_session_result(
         &mut self,
@@ -627,6 +697,26 @@ impl ArbiterCore {
                     missing_spaces: Some(missing),
                     spaces: None,
                 }))
+            }
+            PendingPhase::AuthorizingForeign {
+                caller_did,
+                nsid,
+                params,
+            } => {
+                let allowed = value.as_bool().unwrap_or(false);
+                if !allowed {
+                    return OpStep::Done(OpResult::Err(OpError {
+                        error: "ErrPermissionDenied".into(),
+                    }));
+                }
+                // Policy passed — signal the IO layer to proxy this request
+                // to the arbiter's configured backend.
+                OpStep::ProxyRequest {
+                    arbiter_did,
+                    caller_did,
+                    nsid,
+                    params,
+                }
             }
         }
     }
