@@ -1189,10 +1189,6 @@ mod tests {
             Self { core }
         }
 
-        fn access(level: &str) -> Value {
-            json!({"level": level})
-        }
-
         fn create_default_arbiter(&mut self, did: &str, owner: &str) {
             let result = self
                 .core
@@ -1630,7 +1626,7 @@ mod tests {
         let mut h = TestHarness::new();
         h.create_default_arbiter("org", "alice");
         let members = h.resolved_members("org", "alice", "$admin");
-        assert!(members.len() > 0);
+        assert!(!members.is_empty());
         assert_member_exists(&members, "alice", "Owner");
     }
 
@@ -1735,7 +1731,7 @@ mod tests {
         );
         h.space_mut("org", "team").config = json!({"publicMembers": true});
         let members = h.resolved_members("org", "stranger", "team");
-        assert!(members.len() > 0);
+        assert!(!members.is_empty());
         assert_member_exists(&members, "bob", "IsMember");
     }
 
