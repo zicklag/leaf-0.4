@@ -167,13 +167,13 @@ export const regoLanguage = StreamLanguage.define<unknown>({
     // ----- Numbers --------------------------------------------------------
     if (ch === 45 /* - */ || isDigit(ch)) {
       const start = stream.pos;
-      stream.nextIf(45); // optional minus sign
+      if (stream.peek() === 45) stream.next(); // optional minus sign
       if (isDigit(stream.peek())) {
         stream.eatWhile(isDigit);
-        if (stream.nextIf(46)) stream.eatWhile(isDigit); // decimal part
+        if (stream.peek() === 46) { stream.next(); stream.eatWhile(isDigit); } // decimal part
         if (stream.peek() === 69 || stream.peek() === 101) {
           stream.next();
-          stream.nextIf(43) || stream.nextIf(45);
+          if (stream.peek() === 43 || stream.peek() === 45) stream.next();
           if (isDigit(stream.peek())) stream.eatWhile(isDigit);
         }
         return 'number';
@@ -284,4 +284,3 @@ export const regoLanguage = StreamLanguage.define<unknown>({
   },
 });
 
-// FORCE_RECOMPILE_1779840060

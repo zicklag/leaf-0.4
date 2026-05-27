@@ -3,7 +3,8 @@
   import { EditorView, basicSetup } from 'codemirror';
   import { EditorState } from '@codemirror/state';
   import { oneDark } from '@codemirror/theme-one-dark';
-  import { regoLanguage } from '../lib/rego-lang';
+  import { javascriptLanguage } from '@codemirror/lang-javascript';
+  // import { regoLanguage } from '../lib/rego-lang';
 
   let editorView: EditorView | undefined;
   let validationMsg = $state<string | null>(null);
@@ -17,7 +18,7 @@
 
     return [
       basicSetup,
-      regoLanguage,
+      javascriptLanguage,
       ...theme,
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
