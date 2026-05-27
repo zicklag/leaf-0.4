@@ -2,20 +2,24 @@
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
   import { isAuthenticated } from '$lib/store.svelte';
-  import MarketingHero from '$lib/components/MarketingHero.svelte';
+  import Sidebar from '$lib/components/Sidebar.svelte';
 
   let authenticated = $state(false);
 
   isAuthenticated.subscribe((v) => (authenticated = v));
 
-  // If already authenticated on the root page, go to the dashboard
   $effect(() => {
-    if (authenticated && browser) {
-      goto('/dashboard', { replaceState: true });
+    if (!authenticated && browser) {
+      goto('/', { replaceState: true });
     }
   });
+
+  let { children } = $props();
 </script>
 
-{#if !authenticated}
-  <MarketingHero />
+{#if authenticated}
+  <Sidebar />
+  <main class="flex-1 overflow-auto">
+    {@render children()}
+  </main>
 {/if}

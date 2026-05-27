@@ -43,9 +43,10 @@
       }
 
       // Add to managed communities
-      const { addManagedCommunity, selectedArbiterDid } = await import('$lib/store.svelte');
+      const { addManagedCommunity } = await import('$lib/store.svelte');
+      const { goto } = await import('$app/navigation');
       addManagedCommunity(did, value);
-      selectedArbiterDid.set(did);
+      goto(`/dashboard/${encodeURIComponent(did)}`);
       open = false;
     } catch (e) {
       error = String(e);

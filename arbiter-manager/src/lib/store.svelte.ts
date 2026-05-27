@@ -1,21 +1,12 @@
 import { writable, derived } from 'svelte/store';
 import { browser } from '$app/environment';
-import { queryStore, queryClient } from './query-client';
+import { queryClient } from './query-client';
 import { ArbiterClient } from './api';
 import { restoreSession, getSession, clearSession, login as authLogin } from './auth';
 
 // Re-export auth helpers so components can import from a single module
 export { restoreSession, getSession };
-import type {
-  AuthSession,
-  Did,
-  SpaceKey,
-  ManagedCommunity,
-  SpaceSummary,
-  MemberEntry,
-  ResolvedMemberEntry,
-  MissingSpaceEntry,
-} from './types';
+import type { AuthSession, Did, ManagedCommunity } from './types';
 
 const MANAGED_DIDS_KEY = 'arbiter-manager-communities';
 
@@ -44,15 +35,6 @@ export function logout() {
 
 export function setSession(s: AuthSession) {
   session.set(s);
-}
-
-// ---------------------------------------------------------------------------
-// Arbiter client derived from session
-// ---------------------------------------------------------------------------
-
-function getClient(session: AuthSession | null): ArbiterClient | null {
-  if (!session) return null;
-  return new ArbiterClient(session.pdsUrl, session.accessJwt);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,48 +76,14 @@ export function removeManagedCommunity(did: Did) {
 }
 
 // ---------------------------------------------------------------------------
-// Selected arbiter / space
+// TanStack Query helpers
 // ---------------------------------------------------------------------------
 
-export const selectedArbiterDid = writable<Did | null>(null);
-export const selectedSpaceKey = writable<SpaceKey | null>(null);
-
-// ---------------------------------------------------------------------------
-// Query helpers
-// ---------------------------------------------------------------------------
-
-function client(): ArbiterClient {
-  const session = getSession();
-  const c = getClient(session);
-  if (!c) throw new Error('Not authenticated');
-  return c;
+export function getClientForDid(did: Did): ArbiterClient {
+  const s = getSession();
+  if (!s) throw new Error('Not authenticated');
+  return new ArbiterClient(s.pdsUrl, s.accessJwt);
 }
-
-// ---------------------------------------------------------------------------
-// TanStack Query hooks (wrapped as Svelte stores for ergonomic use)
-// ---------------------------------------------------------------------------
-
-export const arbiterConfigQuery = queryStore({
-  queryKey: ['arbiterConfig'],
-  queryFn: async () => {
-    const did = getSelectedDid();
-    return client().getArbiterConfig(did);
-  },
-  enabled: false, // We'll use derived keys with TanStack's Svelte integration
-});
 
 // For better ergonomics we'll expose query/mutation functions directly
 // that components can use with TanStack Query's createQuery / createMutation
-
-export function getSelectedDid(): Did {
-  let did: Did | null = null;
-  selectedArbiterDid.subscribe((d) => (did = d))();
-  if (!did) throw new Error('No arbiter selected');
-  return did;
-}
-
-export function getSelectedSpace(): SpaceKey | null {
-  let key: SpaceKey | null = null;
-  selectedSpaceKey.subscribe((k) => (key = k))();
-  return key;
-}

@@ -42,9 +42,7 @@ function getClient(): BrowserOAuthClient {
     // Dev (loopback): pass undefined to use hardcoded loopback metadata
     const clientId =
       import.meta.env.PUBLIC_OAUTH_CLIENT_ID ||
-      (isLoopbackOrigin()
-        ? undefined
-        : 'https://your-app.com/oauth-client-metadata.json');
+      (isLoopbackOrigin() ? undefined : 'https://your-app.com/oauth-client-metadata.json');
 
     _client = new BrowserOAuthClient({
       handleResolver: 'https://resolve.handle.net/.well-known/atproto-did',

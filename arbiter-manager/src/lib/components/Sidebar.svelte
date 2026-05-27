@@ -1,22 +1,21 @@
 <script lang="ts">
+  import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { Button, Box } from '@foxui/core';
-  import {
-    managedCommunities,
-    selectedArbiterDid,
-    removeManagedCommunity,
-  } from '$lib/store.svelte';
-
+  import { managedCommunities, removeManagedCommunity } from '$lib/store.svelte';
   import LookupArbiterSheet from './LookupArbiterSheet.svelte';
 
   let communities = $state<typeof managedCommunities>();
-  let selectedDid = $state<string | null>(null);
   let showLookup = $state(false);
+  let currentPage = $state(page);
 
   managedCommunities.subscribe((v) => (communities = v));
-  selectedArbiterDid.subscribe((v) => (selectedDid = v));
+  page.subscribe((p) => (currentPage = p));
+
+  const currentDid = $derived(currentPage.params.did as string | undefined);
 
   function select(did: string) {
-    selectedArbiterDid.set(did);
+    goto(`/dashboard/${encodeURIComponent(did)}`);
   }
 </script>
 
@@ -39,7 +38,7 @@
         <div
           role="button"
           tabindex="0"
-          class="w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between group cursor-pointer {selectedDid ===
+          class="w-full text-left px-3 py-2 rounded-lg text-sm transition-colors flex items-center justify-between group cursor-pointer {currentDid ===
           community.did
             ? 'bg-accent-100 dark:bg-accent-900/30 text-base-900 dark:text-base-50'
             : 'hover:bg-base-200 dark:hover:bg-base-800'}"
@@ -62,7 +61,7 @@
             onclick={(e) => {
               e.stopPropagation();
               removeManagedCommunity(community.did);
-              if (selectedDid === community.did) selectedArbiterDid.set(null);
+              if (currentDid === community.did) goto('/dashboard');
             }}
             aria-label="Remove {community.label}"
           >
