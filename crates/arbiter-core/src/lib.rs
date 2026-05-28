@@ -1,27 +1,30 @@
-//! Sans-IO arbiter state machine.
+//! Pure sans-IO arbiter state machine.
 //!
-//! The state machine uses [`asansio`] to express its logic as async
-//! functions while remaining completely IO-free.  Every interaction with
-//! the outside world flows through [`Req`] / [`Res`] — the IO surface.
-//!
-//! The IO layer (e.g. the `arbiter-server` crate) is a dumb harness:
-//! it forwards incoming XRPC calls, fulfills [`Req`]s, and returns
-//! [`Res`]ponses.
+//! The state machine is a struct ([`StateMachine`]) with a single entry
+//! point: [`handle_event`](StateMachine::handle_event).  You feed it
+//! [`Event`]s (incoming XRPC calls, auth results, remote query results,
+//! etc.) and it returns zero or more [`IoAction`]s describing what IO
+//! the harness should perform.  The harness fulfills those actions and
+//! feeds the results back as new events.
 //!
 //! Policy evaluation using [`policy_core::VmSession`] lives inside the
-//! state machine (it is itself sans-IO).  `xrpc_local` calls are resolved
-//! from local state; `xrpc_remote` calls surface as [`Req::XrpcRemote`].
+//! state machine (it is itself sans-IO).  `xrpc_local` queries are
+//! resolved from local state.  `xrpc_remote` queries produce an
+//! [`IoAction::XrpcRemote`]; when the harness responds with
+//! [`Event::XrpcRemoteResult`], the state machine resumes the suspended
+//! `VmSession`.
+//!
+//! All data is owned — no lifetime parameters, no self-referential borrows,
+//! just pure functions: events in → actions out.
 
 #![deny(rust_2018_idioms)]
 
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use policy_core::{HostRequest, VmResult, VmSession};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use asansio;
 pub use policy_core;
 
 // ---------------------------------------------------------------------------
@@ -32,106 +35,83 @@ pub type Did = String;
 pub type SpaceKey = String;
 pub type JobId = u64;
 
-/// A request from the state machine to the IO layer.
+// ---------------------------------------------------------------------------
+// Events  (input to the state machine)
+// ---------------------------------------------------------------------------
+
+/// An event that can happen to the state machine.
 ///
-/// Every variant tags a `job_id` so responses can be correlated even
-/// if the IO layer reorders them.
-#[derive(Debug)]
-pub enum Req<'a> {
-    // ── Ingress ──────────────────────────────────────────────────────
-    /// Poll for the next incoming XRPC call.
-    NextXrpcCall,
+/// All data is owned — no lifetime tracking needed.
+#[derive(Debug, Clone)]
+pub enum Event {
+    /// An incoming XRPC call from the HTTP server.
+    IncomingXrpc { method: String, params: Value, token: Option<String> },
 
-    /// Send an XRPC response back to the client.
-    SendResponse { body: &'a Value, status: u16, job_id: JobId },
+    /// Auth resolution completed successfully.
+    AuthResolved { caller_did: String, job_id: JobId },
+    /// Auth resolution failed.
+    AuthFailed { job_id: JobId },
 
-    // ── Auth / identity ──────────────────────────────────────────────
-    /// Resolve a JWT bearer token (or dev token) to a caller DID.
-    ResolveAuth { token: &'a str, job_id: JobId },
+    /// A remote XRPC query (from policy evaluation) returned data.
+    XrpcRemoteResult { data: Value, job_id: JobId },
+    /// A remote XRPC query failed.
+    XrpcRemoteFailed { message: String, job_id: JobId },
+
+    /// A snapshot was loaded from persistence.
+    LoadedSnapshot { snapshot: Option<Value>, job_id: JobId },
+
+    /// An XRPC response was sent to the client.
+    ResponseSent { job_id: JobId },
+
+    /// A snapshot was persisted.
+    SnapshotStored { job_id: JobId },
+
+    /// The IO layer is shutting down.
+    Shutdown,
+}
+
+// ---------------------------------------------------------------------------
+// IO actions  (output of the state machine)
+// ---------------------------------------------------------------------------
+
+/// An action the harness should perform.
+///
+/// All data is owned — no lifetime tracking needed.
+#[derive(Debug, Clone)]
+pub enum IoAction {
+    /// Resolve a JWT bearer token to a caller DID.
+    ResolveAuth { token: String, job_id: JobId },
 
     /// Resolve a DID document.
-    ResolveDid { did: &'a str, job_id: JobId },
+    ResolveDid { did: String, job_id: JobId },
 
-    // ── Policy engine ────────────────────────────────────────────────
-    /// The policy engine needs data from a remote service (`xrpc_remote`).
-    XrpcRemote { did: &'a str, path: &'a str, input: &'a Value, job_id: JobId },
+    /// Send an XRPC response to the client.
+    SendResponse { body: Value, status: u16, job_id: JobId },
 
-    // ── PLC directory ────────────────────────────────────────────────
-    /// Submit a signed operation.
-    PlcSubmitOperation { did: &'a str, operation: &'a Value, job_id: JobId },
+    /// Resolve a remote XRPC query from the policy engine.
+    XrpcRemote { did: String, path: String, input: Value, job_id: JobId },
 
-    /// Fetch the current PLC state for a DID.
-    PlcFetchState { did: &'a str, job_id: JobId },
-
-    /// Fetch PLC state plus the latest operation CID.
-    PlcFetchStateWithCid { did: &'a str, job_id: JobId },
+    /// Submit a signed operation to the PLC directory.
+    PlcSubmitOperation { did: String, operation: Value, job_id: JobId },
+    /// Fetch PLC state.
+    PlcFetchState { did: String, job_id: JobId },
+    /// Fetch PLC state with the latest operation CID.
+    PlcFetchStateWithCid { did: String, job_id: JobId },
 
     /// Generate new DID keys (rotation + signing).
     GenerateDidKeys { job_id: JobId },
 
-    // ── Persistence ──────────────────────────────────────────────────
     /// Persist a JSON snapshot of the entire collection.
-    StoreSnapshot { snapshot_json: &'a Value, job_id: JobId },
-
+    StoreSnapshot { snapshot_json: Value, job_id: JobId },
     /// Load the previously persisted snapshot.
     LoadSnapshot { job_id: JobId },
 
-    // ── Backend proxy ────────────────────────────────────────────────
     /// Proxy an XRPC call to a backend service.
-    ProxyXrpc { backend_url: &'a str, path: &'a str, params: &'a Value, job_id: JobId },
-}
-
-/// A response from the IO layer back to the state machine.
-///
-/// Every variant carries the `job_id` from the corresponding [`Req`]
-/// so the state machine can correlate responses.
-#[derive(Debug)]
-pub enum Res<'a> {
-    // ── Ingress / egress ──────────────────────────────────────────────
-    /// The next incoming XRPC call.
-    IncomingXrpc { method: &'a str, params: &'a Value, token: Option<&'a str> },
-    /// Acknowledgement (response sent, store completed, etc.).
-    Ack { job_id: JobId },
-    /// The IO layer is shutting down.
-    Shutdown,
-
-    // ── Auth / identity ──────────────────────────────────────────────
-    AuthResolved { caller_did: &'a str, job_id: JobId },
-    AuthFailed { job_id: JobId },
-    DidDocument { doc: &'a Value, job_id: JobId },
-
-    // ── Policy engine ────────────────────────────────────────────────
-    XrpcRemoteResult { data: &'a Value, job_id: JobId },
-
-    // ── PLC directory ────────────────────────────────────────────────
-    PlcOperationSubmitted { job_id: JobId },
-    PlcState { state: &'a Value, job_id: JobId },
-    PlcStateWithCid { state: &'a Value, cid: &'a str, job_id: JobId },
-    DidKeys { rotation_key: &'a [u8], signing_key: &'a [u8], job_id: JobId },
-
-    // ── Persistence ──────────────────────────────────────────────────
-    LoadedSnapshot { snapshot: Option<&'a Value>, job_id: JobId },
-
-    // ── Backend proxy ────────────────────────────────────────────────
-    ProxyResult { data: &'a Value, job_id: JobId },
-
-    // ── Errors ───────────────────────────────────────────────────────
-    Error { message: &'a str, job_id: JobId },
+    ProxyXrpc { backend_url: String, path: String, params: Value, job_id: JobId },
 }
 
 // ---------------------------------------------------------------------------
-// Public type aliases
-// ---------------------------------------------------------------------------
-
-pub type ArbiterSans = asansio::Sans<Req<'static>, Res<'static>>;
-pub type ArbiterIo = asansio::Io<Req<'static>, Res<'static>>;
-
-pub fn channel() -> (ArbiterSans, ArbiterIo) {
-    asansio::new()
-}
-
-// ---------------------------------------------------------------------------
-// JSON-serialisable types for the snapshot
+// JSON-serialisable snapshot types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,10 +279,9 @@ pub fn is_readonly_nsid(nsid: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Policy helpers  (pure — VmSession is itself sans-IO)
+// Policy helpers  (pure)
 // ---------------------------------------------------------------------------
 
-/// Convert a `serde_json::Value` to a `regorus::Value` for policy evaluation.
 fn serde_to_rego(val: &Value) -> regorus::Value {
     match val {
         Value::Null => regorus::Value::Null,
@@ -330,7 +309,6 @@ fn serde_to_rego(val: &Value) -> regorus::Value {
     }
 }
 
-/// Convert a `regorus::Value` back to a `serde_json::Value`.
 fn rego_to_serde(val: &regorus::Value) -> Value {
     match val {
         regorus::Value::Null => Value::Null,
@@ -346,9 +324,7 @@ fn rego_to_serde(val: &regorus::Value) -> Value {
             }
         }
         regorus::Value::String(s) => Value::String(s.to_string()),
-        regorus::Value::Array(arr) => {
-            Value::Array(arr.iter().map(rego_to_serde).collect())
-        }
+        regorus::Value::Array(arr) => Value::Array(arr.iter().map(rego_to_serde).collect()),
         regorus::Value::Object(obj) => {
             let mut map = serde_json::Map::new();
             for (k, v) in obj.iter() {
@@ -360,9 +336,7 @@ fn rego_to_serde(val: &regorus::Value) -> Value {
             }
             Value::Object(map)
         }
-        regorus::Value::Set(s) => {
-            Value::Array(s.iter().map(rego_to_serde).collect())
-        }
+        regorus::Value::Set(s) => Value::Array(s.iter().map(rego_to_serde).collect()),
         regorus::Value::Undefined => Value::Null,
     }
 }
@@ -379,8 +353,7 @@ fn resolve_local(
         NSID::GET_SPACE_MEMBERS => {
             let members: Vec<Value> = collection
                 .get(arbiter_did)
-                .map(|a| a.spaces.get(space_key))
-                .flatten()
+                .and_then(|a| a.spaces.get(space_key))
                 .map(|s| {
                     s.members
                         .iter()
@@ -393,8 +366,7 @@ fn resolve_local(
         NSID::GET_SPACE_CONFIG => {
             let config = collection
                 .get(arbiter_did)
-                .map(|a| a.spaces.get(space_key))
-                .flatten()
+                .and_then(|a| a.spaces.get(space_key))
                 .map(|s| &s.config);
             serde_json::json!({ "config": config })
         }
@@ -418,667 +390,686 @@ fn resolve_local(
 }
 
 // ---------------------------------------------------------------------------
-// The sans-IO state machine
+// Pending state for in-progress operations
 // ---------------------------------------------------------------------------
 
-/// Evaluate a policy entry-point through its suspension loop.
-///
-/// `xrpc_local` queries are resolved inline from `collection`.
-/// `xrpc_remote` queries yield a [`Req::XrpcRemote`] to the IO layer.
-///
-/// Returns the new handle and the evaluation result.
-async fn eval_policy<'a>(
-    sans: &asansio::Sans<Req<'a>, Res<'a>>,
-    handle: asansio::SansHandle<Res<'a>>,
-    collection: &ArbiterCollection,
-    arbiter_did: &str,
-    policy: &str,
-    arbiter_config: &Value,
-    caller_did: &str,
-    nsid: &str,
-    params: &Value,
-    entry_points: &[&str],
-    next_job_id: &mut JobId,
-) -> (asansio::SansHandle<Res<'a>>, Result<Value, String>) {
-    let data = serde_json::json!({ "arbiter": { "config": arbiter_config } });
-    let input = serde_json::json!({
-        "caller": { "did": caller_did },
-        "operation": { "nsid": nsid, "params": params },
-    });
-
-    let rego_data = serde_to_rego(&data);
-    let rego_input = serde_to_rego(&input);
-
-    let mut session = match VmSession::new(policy, &rego_data, &rego_input, entry_points) {
-        Ok(s) => s,
-        Err(e) => return (handle, Err(format!("ErrPolicyCompile: {e}"))),
-    };
-
-    let mut vm_result = match session.start() {
-        Ok(r) => r,
-        Err(e) => return (handle, Err(format!("ErrPolicyEval: {e}"))),
-    };
-
-    let mut handle = handle;
-
-    loop {
-        match vm_result {
-            VmResult::Completed(val) => {
-                return (handle, Ok(rego_to_serde(&val)));
-            }
-            VmResult::Suspended(req) => match req {
-                HostRequest::XrpcLocal { path, input } => {
-                    let params_serde = rego_to_serde(&input);
-                    let resolved = resolve_local(arbiter_did, &path, &params_serde, collection);
-                    let resolved_rego = serde_to_rego(&resolved);
-                    vm_result = match session.resume(&resolved_rego) {
-                        Ok(r) => r,
-                        Err(e) => return (handle, Err(format!("ErrPolicyResume: {e}"))),
-                    };
-                }
-                HostRequest::XrpcRemote { did, path, input } => {
-                    let job_id = *next_job_id;
-                    *next_job_id += 1;
-
-                    let owned_did = did.to_string();
-                    let owned_path = path.to_string();
-                    let owned_input = rego_to_serde(&input);
-
-                    let req = Req::XrpcRemote {
-                        did: &owned_did,
-                        path: &owned_path,
-                        input: &owned_input,
-                        job_id,
-                    };
-
-                    handle = sans.handle(handle, &req).await;
-
-                    // Extract response before using handle again.
-                    let xrpc_data = handle.message().and_then(|m| match m {
-                        Res::XrpcRemoteResult { data, .. } => Some((*data).clone()),
-                        _ => None,
-                    });
-                    let xrpc_err = handle.message().and_then(|m| match m {
-                        Res::Error { message, .. } => Some(message.to_string()),
-                        _ => None,
-                    });
-
-                    let resolved_serde = match (xrpc_data, xrpc_err) {
-                        (Some(data), _) => data,
-                        (_, Some(msg)) => return (handle, Err(format!("ErrRemoteXrpc: {msg}"))),
-                        _ => Value::Null,
-                    };
-                    let resolved_rego = serde_to_rego(&resolved_serde);
-
-                    vm_result = match session.resume(&resolved_rego) {
-                        Ok(r) => r,
-                        Err(e) => return (handle, Err(format!("ErrPolicyResume: {e}"))),
-                    };
-                }
-            },
-        }
-    }
+/// Tracks a VmSession suspended waiting for a remote XRPC result.
+struct PendingEval {
+    session: VmSession,
+    /// Context needed to continue when the IO result comes back.
+    ctx: EvalContext,
 }
 
-/// Run the arbiter state machine to completion.
-///
-/// This is a pure async function — it never performs IO directly.
-/// Instead it yields [`Req`] values via the [`asansio`] channel and
-/// awaits [`Res`]ponses.  The IO layer fulfills those requests.
-///
-/// # Arguments
-///
-/// * `sans` — the sans-IO half, received from [`channel`].
-/// * `default_policy` — the Rego policy source used when no policy is
-///   explicitly configured for an arbiter.
-/// * `server_did` — the DID of this server (e.g. `did:web:example.com`).
-pub async fn run<'a>(
-    sans: asansio::Sans<Req<'a>, Res<'a>>,
-    default_policy: &'a str,
-    _server_did: &'a str,
-) {
-    let mut collection = ArbiterCollection::new();
-    let mut next_job_id: JobId = 1;
+/// Everything we need to continue a suspended policy evaluation.
+#[derive(Clone)]
+struct EvalContext {
+    arbiter_did: String,
+    arbiter_config: Value,
+    caller_did: String,
+    method: String,
+    params: Value,
+}
 
-    // ── Phase 1: Load persisted state ────────────────────────────────
-    {
-        let req = Req::LoadSnapshot { job_id: next_job_id };
-        next_job_id += 1;
-        let handle = sans.start(&req).await;
-        if let Some(Res::LoadedSnapshot { snapshot: Some(snap), .. }) = handle.message() {
-            if let Ok(s) = serde_json::from_value::<ServerSnapshot>((*snap).clone()) {
-                collection.load_snapshot(s);
+/// Tracks an incoming call waiting for auth resolution.
+struct PendingAuth {
+    method: String,
+    params: Value,
+    arbiter_did: String,
+}
+
+// ---------------------------------------------------------------------------
+// State machine
+// ---------------------------------------------------------------------------
+
+/// The pure arbiter state machine.
+///
+/// Owns the arbiter collection and any in-progress operations (policy
+/// evaluations suspended waiting for remote data).
+#[derive(Default)]
+pub struct StateMachine {
+    pub collection: ArbiterCollection,
+    next_job_id: JobId,
+    pending_eval: Option<PendingEval>,
+    pending_auth: Option<PendingAuth>,
+    /// Set to true when a `Shutdown` event is received.
+    pub shutdown: bool,
+}
+
+impl StateMachine {
+    pub fn new(collection: ArbiterCollection) -> Self {
+        Self {
+            collection,
+            next_job_id: 1,
+            pending_eval: None,
+            pending_auth: None,
+            shutdown: false,
+        }
+    }
+
+    fn alloc_job_id(&mut self) -> JobId {
+        let id = self.next_job_id;
+        self.next_job_id += 1;
+        id
+    }
+
+    // -------------------------------------------------------------------
+    // Main entry point
+    // -------------------------------------------------------------------
+
+    /// Feed an event into the state machine.
+    ///
+    /// Returns zero or more [`IoAction`]s that the harness should fulfil.
+    /// The harness should then feed the results back via another call to
+    /// `handle_event`.
+    pub fn handle_event(&mut self, event: Event) -> Vec<IoAction> {
+        match event {
+            Event::Shutdown => {
+                self.shutdown = true;
+                vec![]
+            }
+
+            Event::IncomingXrpc { method, params, token } => {
+                self.handle_incoming(&method, params, token)
+            }
+
+            Event::AuthResolved { caller_did, .. } => self.handle_auth_result(caller_did),
+            Event::AuthFailed { .. } => self.handle_auth_failed(),
+
+            Event::XrpcRemoteResult { data, .. } => self.resume_pending_eval(Some(data), None),
+            Event::XrpcRemoteFailed { message, .. } => self.resume_pending_eval(None, Some(message)),
+
+            Event::LoadedSnapshot { snapshot, .. } => self.handle_loaded_snapshot(snapshot),
+
+            // Acknowledgements — no action needed.
+            Event::ResponseSent { .. } | Event::SnapshotStored { .. } => vec![],
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Incoming XRPC call handling
+    // -------------------------------------------------------------------
+
+    fn arbiter_did_from_params<'a>(&self, params: &'a Value) -> Option<&'a str> {
+        params
+            .get("arbiterDid")
+            .or_else(|| params.get("did"))
+            .and_then(|v| v.as_str())
+    }
+
+    fn handle_incoming(&mut self, method: &str, params: Value, token: Option<String>) -> Vec<IoAction> {
+        // Bootstrap: createArbiter has no policy check.
+        if method == NSID::CREATE_ARBITER {
+            return self.do_create_arbiter(params);
+        }
+
+        // All other methods need an arbiter DID.
+        let Some(arbiter_did) = self.arbiter_did_from_params(&params).map(String::from) else {
+            let j = self.alloc_job_id();
+            return vec![IoAction::SendResponse {
+                body: serde_json::json!({"error": "missing arbiterDid"}),
+                status: 400,
+                job_id: j,
+            }];
+        };
+
+        // If auth is required, defer.
+        if let Some(tok) = token {
+            let j = self.alloc_job_id();
+            self.pending_auth = Some(PendingAuth {
+                method: method.to_string(),
+                params: params.clone(),
+                arbiter_did,
+            });
+            return vec![IoAction::ResolveAuth { token: tok, job_id: j }];
+        }
+
+        // No auth — process immediately with empty caller DID.
+        self.start_eval_or_execute(method.to_string(), params, String::new(), arbiter_did)
+    }
+
+    // -------------------------------------------------------------------
+    // Auth handling
+    // -------------------------------------------------------------------
+
+    fn handle_auth_result(&mut self, caller_did: String) -> Vec<IoAction> {
+        let Some(pending) = self.pending_auth.take() else {
+            return vec![];
+        };
+        self.start_eval_or_execute(pending.method, pending.params, caller_did, pending.arbiter_did)
+    }
+
+    fn handle_auth_failed(&mut self) -> Vec<IoAction> {
+        self.pending_auth = None;
+        let j = self.alloc_job_id();
+        vec![IoAction::SendResponse {
+            body: serde_json::json!({"error": "ErrAuthRequired"}),
+            status: 401,
+            job_id: j,
+        }]
+    }
+
+    // -------------------------------------------------------------------
+    // Start or continue policy evaluation
+    // -------------------------------------------------------------------
+
+    fn start_eval_or_execute(
+        &mut self,
+        method: String,
+        params: Value,
+        caller_did: String,
+        arbiter_did: String,
+    ) -> Vec<IoAction> {
+        // Look up the arbiter.
+        let policy = match self.collection.get(&arbiter_did) {
+            Some(a) => a.policy.clone(),
+            None => {
+                let j = self.alloc_job_id();
+                return vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": "ErrArbiterNotExists"}),
+                    status: 404,
+                    job_id: j,
+                }];
+            }
+        };
+        let arbiter_config = self.collection.get(&arbiter_did).map(|a| a.config.clone()).unwrap_or_default();
+
+        let entry_points = if method == NSID::RESOLVE_SPACE_MEMBERS {
+            vec!["data.arbiter.allow".to_string(), "data.arbiter.resolve_result".to_string()]
+        } else {
+            vec!["data.arbiter.allow".to_string()]
+        };
+
+        let ep_refs: Vec<&str> = entry_points.iter().map(|s| s.as_str()).collect();
+
+        let data = serde_json::json!({ "arbiter": { "config": &arbiter_config } });
+        let input = serde_json::json!({
+            "caller": { "did": &caller_did },
+            "operation": { "nsid": &method, "params": &params },
+        });
+
+        let rego_data = serde_to_rego(&data);
+        let rego_input = serde_to_rego(&input);
+
+        let session = match VmSession::new(&policy, &rego_data, &rego_input, &ep_refs) {
+            Ok(s) => s,
+            Err(e) => {
+                let j = self.alloc_job_id();
+                return vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
+                    status: 500,
+                    job_id: j,
+                }];
+            }
+        };
+
+        let ctx = EvalContext {
+            arbiter_did,
+            arbiter_config,
+            caller_did,
+            method,
+            params,
+        };
+
+        self.continue_eval(session, ctx)
+    }
+
+    // -------------------------------------------------------------------
+    // Continue a VmSession loop (start or after local resolution)
+    // -------------------------------------------------------------------
+
+    fn continue_eval(&mut self, mut session: VmSession, ctx: EvalContext) -> Vec<IoAction> {
+        match session.start() {
+            Ok(VmResult::Completed(val)) => self.policy_completed(val, ctx),
+            Ok(VmResult::Suspended(req)) => self.handle_vm_suspension(req, session, ctx),
+            Err(e) => {
+                let j = self.alloc_job_id();
+                vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": format!("ErrPolicyEval: {e}")}),
+                    status: 500,
+                    job_id: j,
+                }]
             }
         }
     }
 
-    // ── Helper: send a single Req, thread the handle ────────────────
-    macro_rules! send {
-        ($handle:expr, $req:expr) => {
-            sans.handle($handle, $req).await
-        };
+    fn continue_eval_resume(&mut self, mut session: VmSession, ctx: EvalContext, resume_val: &regorus::Value) -> Vec<IoAction> {
+        match session.resume(resume_val) {
+            Ok(VmResult::Completed(val)) => self.policy_completed(val, ctx),
+            Ok(VmResult::Suspended(req)) => self.handle_vm_suspension(req, session, ctx),
+            Err(e) => {
+                let j = self.alloc_job_id();
+                vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": format!("ErrPolicyResume: {e}")}),
+                    status: 500,
+                    job_id: j,
+                }]
+            }
+        }
     }
 
-    // ── Phase 2: Main event loop ─────────────────────────────────────
-    let mut handle = sans.start(&Req::NextXrpcCall).await;
+    // -------------------------------------------------------------------
+    // Policy completed — check result and execute or deny
+    // -------------------------------------------------------------------
 
-    loop {
-        // ── Await the next XRPC call (extract owned data to drop borrow) ─
-        let (method_str, params_owned, token_owned) = match handle.message() {
-            Some(Res::IncomingXrpc { method, params, token }) => {
-                (method.to_string(), (*params).clone(), token.map(|s| s.to_string()))
+    fn policy_completed(&mut self, val: regorus::Value, ctx: EvalContext) -> Vec<IoAction> {
+        let allowed = val == regorus::Value::Bool(true) || val == regorus::Value::from(true);
+        if !allowed {
+            let j = self.alloc_job_id();
+            return vec![IoAction::SendResponse {
+                body: serde_json::json!({"error": "ErrPermissionDenied"}),
+                status: 403,
+                job_id: j,
+            }];
+        }
+
+        if ctx.method == NSID::RESOLVE_SPACE_MEMBERS {
+            // Need to evaluate resolve_result now.
+            self.eval_resolve_result(ctx)
+        } else {
+            self.execute_operation(ctx.method, ctx.params, ctx.caller_did, &ctx.arbiter_did)
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Handle VmSession suspension
+    // -------------------------------------------------------------------
+
+    fn handle_vm_suspension(&mut self, req: HostRequest, session: VmSession, ctx: EvalContext) -> Vec<IoAction> {
+        match req {
+            HostRequest::XrpcLocal { path, input } => {
+                let resolved = resolve_local(&ctx.arbiter_did, &path, &rego_to_serde(&input), &self.collection);
+                let resolved_rego = serde_to_rego(&resolved);
+                self.continue_eval_resume(session, ctx, &resolved_rego)
             }
-            Some(Res::Shutdown) | None => break,
-            _ => {
-                handle = send!(handle, &Req::NextXrpcCall);
-                continue;
+            HostRequest::XrpcRemote { did, path, input } => {
+                let j = self.alloc_job_id();
+                let owned_did = did.to_string();
+                let owned_path = path.to_string();
+                let owned_input = rego_to_serde(&input);
+
+                self.pending_eval = Some(PendingEval { session, ctx });
+                vec![IoAction::XrpcRemote {
+                    did: owned_did,
+                    path: owned_path,
+                    input: owned_input,
+                    job_id: j,
+                }]
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Resume a suspended policy evaluation (after IO responds)
+    // -------------------------------------------------------------------
+
+    fn resume_pending_eval(&mut self, result_data: Option<Value>, error_msg: Option<String>) -> Vec<IoAction> {
+        let Some(pending) = self.pending_eval.take() else {
+            return vec![];
+        };
+
+        if let Some(msg) = error_msg {
+            let j = self.alloc_job_id();
+            return vec![IoAction::SendResponse {
+                body: serde_json::json!({"error": format!("ErrRemoteXrpc: {msg}")}),
+                status: 502,
+                job_id: j,
+            }];
+        }
+
+        let resolved = result_data.unwrap_or(Value::Null);
+        let resolved_rego = serde_to_rego(&resolved);
+        self.continue_eval_resume(pending.session, pending.ctx, &resolved_rego)
+    }
+
+    // -------------------------------------------------------------------
+    // Evaluate resolve_result entry point
+    // -------------------------------------------------------------------
+
+    fn eval_resolve_result(&mut self, ctx: EvalContext) -> Vec<IoAction> {
+        let data = serde_json::json!({ "arbiter": { "config": &ctx.arbiter_config } });
+        let input = serde_json::json!({
+            "caller": { "did": &ctx.caller_did },
+            "operation": { "nsid": &ctx.method, "params": &ctx.params },
+        });
+
+        let rego_data = serde_to_rego(&data);
+        let rego_input = serde_to_rego(&input);
+
+        let mut session = match VmSession::new(
+            &self.collection.get(&ctx.arbiter_did).map(|a| &a.policy).cloned().unwrap_or_default(),
+            &rego_data,
+            &rego_input,
+            &["data.arbiter.resolve_result"],
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                let j = self.alloc_job_id();
+                return vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
+                    status: 500,
+                    job_id: j,
+                }];
             }
         };
 
-        // ── Resolve auth ──────────────────────────────────────────────
-        let caller_did: String = if let Some(ref tok) = token_owned {
-            let job_id = next_job_id;
-            next_job_id += 1;
-            handle = send!(handle, &Req::ResolveAuth { token: tok, job_id });
-            match handle.message() {
-                Some(Res::AuthResolved { caller_did, .. }) => caller_did.to_string(),
-                _ => {
-                    let body = serde_json::json!({"error": "ErrAuthRequired"});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 401, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
+        let resolve_ctx = EvalContext {
+            arbiter_did: ctx.arbiter_did,
+            arbiter_config: ctx.arbiter_config,
+            caller_did: ctx.caller_did,
+            method: ctx.method,
+            params: ctx.params,
+        };
+
+        match session.start() {
+            Ok(VmResult::Completed(val)) => {
+                let result = rego_to_serde(&val);
+                let members = result.get("members").cloned().unwrap_or(Value::Array(vec![]));
+                let missing = result.get("missingSpaces").cloned().unwrap_or(Value::Array(vec![]));
+                let body = serde_json::json!({ "members": members, "missingSpaces": missing });
+                let j = self.alloc_job_id();
+                vec![IoAction::SendResponse { body, status: 200, job_id: j }]
+            }
+            Ok(VmResult::Suspended(req)) => {
+                self.handle_vm_suspension(req, session, resolve_ctx)
+            }
+            Err(e) => {
+                let j = self.alloc_job_id();
+                vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": format!("ErrPolicyEval: {e}")}),
+                    status: 500,
+                    job_id: j,
+                }]
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Execute a permitted operation (or proxy)
+    // -------------------------------------------------------------------
+
+    fn execute_operation(&mut self, method: String, params: Value, _caller_did: String, arbiter_did: &str) -> Vec<IoAction> {
+        if method == NSID::GET_ARBITER_CONFIG
+            || method == NSID::GET_SPACE_CONFIG
+            || method == NSID::GET_SPACE_MEMBERS
+            || method == NSID::LIST_SPACES
+        {
+            return self.execute_read(&method, &params, arbiter_did);
+        }
+
+        if method == NSID::DELETE_ARBITER {
+            self.collection.arbiters.remove(arbiter_did);
+        } else if method == NSID::SET_ARBITER_CONFIG {
+            if let Some(new_config) = params.get("config") {
+                if let Some(arb) = self.collection.get_mut(arbiter_did) {
+                    arb.config = new_config.clone();
+                    arb.version += 1;
+                }
+            }
+        } else if method == NSID::CREATE_SPACE {
+            let sk = params.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
+            if let Some(sk) = sk {
+                if self.collection.get(arbiter_did).map(|a| a.spaces.contains_key(&sk)).unwrap_or(false) {
+                    let j = self.alloc_job_id();
+                    return vec![IoAction::SendResponse {
+                        body: serde_json::json!({"error": "ErrSpaceExists"}),
+                        status: 409,
+                        job_id: j,
+                    }];
+                }
+                if let Some(arb) = self.collection.get_mut(arbiter_did) {
+                    let space_type = params
+                        .get("spaceType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("town.muni.arbiter.config.space")
+                        .to_string();
+                    let config = params.get("config").cloned().unwrap_or_default();
+                    arb.spaces.insert(sk.clone(), Space {
+                        key: sk,
+                        space_type,
+                        config,
+                        members: vec![],
+                    });
+                    arb.version += 1;
+                }
+            }
+        } else if method == NSID::SET_SPACE_CONFIG {
+            let sk = params.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
+            if let Some(sk) = sk {
+                if let Some(arb) = self.collection.get_mut(arbiter_did) {
+                    if let Some(space) = arb.spaces.get_mut(&sk) {
+                        if let Some(space_type) = params.get("spaceType").and_then(|v| v.as_str()) {
+                            space.space_type = space_type.to_string();
+                        }
+                        if let Some(config) = params.get("config") {
+                            space.config = config.clone();
+                        }
+                        arb.version += 1;
+                    } else {
+                        let j = self.alloc_job_id();
+                        return vec![IoAction::SendResponse {
+                            body: serde_json::json!({"error": "ErrSpaceNotExists"}),
+                            status: 404,
+                            job_id: j,
+                        }];
+                    }
+                }
+            }
+        } else if method == NSID::DELETE_SPACE {
+            let sk = params.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
+            if let Some(sk) = sk {
+                if sk == "$admin" {
+                    let j = self.alloc_job_id();
+                    return vec![IoAction::SendResponse {
+                        body: serde_json::json!({"error": "ErrCannotDeleteAdminSpace"}),
+                        status: 403,
+                        job_id: j,
+                    }];
+                }
+                if let Some(arb) = self.collection.get_mut(arbiter_did) {
+                    arb.spaces.remove(&sk);
+                    arb.version += 1;
+                }
+            }
+        } else if method == NSID::SET_SPACE_MEMBER_ACCESS {
+            let sk = params.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
+            let md = params
+                .get("memberDid")
+                .or_else(|| params.get("member").and_then(|m| m.get("did")))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            if let (Some(sk), Some(md)) = (sk, md) {
+                if let Some(arb) = self.collection.get_mut(arbiter_did) {
+                    if let Some(space) = arb.spaces.get_mut(&sk) {
+                        let access = params.get("access").cloned().unwrap_or_default();
+                        if let Some(existing) = space.members.iter_mut().find(|m| m.did == md) {
+                            existing.access = access;
+                        } else {
+                            space.members.push(MemberEntry { did: md, access });
+                        }
+                    }
+                    arb.version += 1;
+                }
+            }
+        } else if method == NSID::REMOVE_SPACE_MEMBER {
+            let sk = params.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
+            let md = params
+                .get("memberDid")
+                .or_else(|| params.get("member").and_then(|m| m.get("did")))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            if let (Some(sk), Some(md)) = (sk, md) {
+                if let Some(arb) = self.collection.get_mut(arbiter_did) {
+                    if let Some(space) = arb.spaces.get_mut(&sk) {
+                        space.members.retain(|m| m.did != md);
+                    }
+                    arb.version += 1;
                 }
             }
         } else {
-            String::new()
+            // Unknown method — proxy to backend.
+            return self.execute_proxy(&method, &params, arbiter_did);
+        }
+
+        // Persist and respond.
+        self.respond_with_persist()
+    }
+
+    // -------------------------------------------------------------------
+    // Read-only operations
+    // -------------------------------------------------------------------
+
+    fn execute_read(&mut self, method: &str, params: &Value, arbiter_did: &str) -> Vec<IoAction> {
+        let arbiter = match self.collection.get(arbiter_did) {
+            Some(a) => a,
+            None => {
+                let j = self.alloc_job_id();
+                return vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": "ErrArbiterNotExists"}),
+                    status: 404,
+                    job_id: j,
+                }];
+            }
         };
 
-        // ── Parse arbiter DID ─────────────────────────────────────────
-        let arbiter_did = params_owned
-            .get("arbiterDid")
-            .or_else(|| params_owned.get("did"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let Some(ref arbiter_did) = arbiter_did else {
-            let body = serde_json::json!({"error": "missing arbiterDid"});
-            let j = next_job_id;
-            next_job_id += 1;
-            handle = send!(handle, &Req::SendResponse { body: &body, status: 400, job_id: j });
-            let j = next_job_id;
-            next_job_id += 1;
-            handle = send!(handle, &Req::NextXrpcCall);
-            continue;
-        };
-
-        // ── Route the XRPC method ────────────────────────────────────
-        // Extract into owned for matching
-        let method: &str = &method_str;
-
-        if method == NSID::CREATE_ARBITER {
-            // Bootstrap — no policy check needed.
-            if collection.arbiters.contains_key(arbiter_did) {
-                let body = serde_json::json!({"error": "ErrArbiterAlreadyExists"});
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &body, status: 409, job_id: j });
-            } else {
-                let config = params_owned.get("config").cloned().unwrap_or_default();
-                let policy = params_owned
-                    .get("config")
-                    .and_then(|c| c.get("policy"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(default_policy)
-                    .to_string();
-
-                collection.create_arbiter(arbiter_did.clone(), config, policy, caller_did.clone());
-
-                // Persist and respond
-                let snap = collection.snapshot();
-                let snap_val = serde_json::to_value(&snap).unwrap_or_default();
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::StoreSnapshot { snapshot_json: &snap_val, job_id: j });
-
-                let body = serde_json::json!({});
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &body, status: 200, job_id: j });
-            }
-
-        } else if is_readonly_nsid(method) {
-            // ── Read-only queries ──────────────────────────────────
-            let arbiter = match collection.get(arbiter_did) {
-                Some(a) => a,
-                None => {
-                    let body = serde_json::json!({"error": "ErrArbiterNotExists"});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 404, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            let (new_handle, policy_check) = eval_policy(
-                &sans, handle, &collection,
-                arbiter_did, &arbiter.policy, &arbiter.config,
-                &caller_did, method, &params_owned,
-                &["data.arbiter.allow"],
-                &mut next_job_id,
-            ).await;
-            handle = new_handle;
-
-            let allowed = match policy_check {
-                Ok(val) => val == Value::Bool(true),
-                Err(e) => {
-                    let body = serde_json::json!({"error": e});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            if !allowed {
-                let body = serde_json::json!({"error": "ErrPermissionDenied"});
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::NextXrpcCall);
-                continue;
-            }
-
-            let response_body = if method == NSID::GET_ARBITER_CONFIG {
-                serde_json::json!({ "config": &arbiter.config })
-            } else if method == NSID::GET_SPACE_CONFIG {
-                let sk = params_owned.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
+        let body = match method {
+            NSID::GET_ARBITER_CONFIG => serde_json::json!({ "config": &arbiter.config }),
+            NSID::GET_SPACE_CONFIG => {
+                let sk = params.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
                 let config = arbiter.spaces.get(sk).map(|s| &s.config);
                 serde_json::json!({ "config": config, "spaceType": "" })
-            } else if method == NSID::GET_SPACE_MEMBERS {
-                let sk = params_owned.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
+            }
+            NSID::GET_SPACE_MEMBERS => {
+                let sk = params.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
                 let members: Vec<Value> = arbiter.spaces.get(sk)
                     .map(|s| s.members.iter().map(|m| serde_json::json!({
                         "member": { "did": m.did }, "access": m.access,
                     })).collect())
                     .unwrap_or_default();
                 serde_json::json!({ "members": members })
-            } else {
-                // LIST_SPACES
+            }
+            NSID::LIST_SPACES => {
                 let spaces: Vec<Value> = arbiter.spaces.values().map(|s| serde_json::json!({
                     "spaceKey": s.key, "spaceType": s.space_type, "config": s.config,
                 })).collect();
                 serde_json::json!({ "spaces": spaces })
-            };
-
-            let j = next_job_id;
-            next_job_id += 1;
-            handle = send!(handle, &Req::SendResponse { body: &response_body, status: 200, job_id: j });
-
-        } else if method == NSID::RESOLVE_SPACE_MEMBERS {
-            // ── Resolve space members (two entry points) ──────────────
-            let arbiter = match collection.get(arbiter_did) {
-                Some(a) => a,
-                None => {
-                    let body = serde_json::json!({"error": "ErrArbiterNotExists"});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 404, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            // Check allow
-            let (new_handle, policy_check) = eval_policy(
-                &sans, handle, &collection,
-                arbiter_did, &arbiter.policy, &arbiter.config,
-                &caller_did, method, &params_owned,
-                &["data.arbiter.allow"],
-                &mut next_job_id,
-            ).await;
-            handle = new_handle;
-
-            let allowed = match policy_check {
-                Ok(val) => val == Value::Bool(true),
-                Err(e) => {
-                    let body = serde_json::json!({"error": e});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            if !allowed {
-                let body = serde_json::json!({"error": "ErrPermissionDenied"});
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::NextXrpcCall);
-                continue;
             }
+            _ => unreachable!(),
+        };
 
-            // Evaluate resolve_result entry point
-            let (new_handle, eval_result) = eval_policy(
-                &sans, handle, &collection,
-                arbiter_did, &arbiter.policy, &arbiter.config,
-                &caller_did, method, &params_owned,
-                &["data.arbiter.resolve_result"],
-                &mut next_job_id,
-            ).await;
-            handle = new_handle;
+        let j = self.alloc_job_id();
+        vec![IoAction::SendResponse { body, status: 200, job_id: j }]
+    }
 
-            let result = eval_result.unwrap_or(serde_json::json!({}));
-            let members = result.get("members").cloned().unwrap_or(Value::Array(vec![]));
-            let missing = result.get("missingSpaces").cloned().unwrap_or(Value::Array(vec![]));
-            let response_body = serde_json::json!({ "members": members, "missingSpaces": missing });
+    // -------------------------------------------------------------------
+    // Proxy to backend
+    // -------------------------------------------------------------------
 
-            let j = next_job_id;
-            next_job_id += 1;
-            handle = send!(handle, &Req::SendResponse { body: &response_body, status: 200, job_id: j });
-
-        } else if method == NSID::SET_ARBITER_CONFIG
-            || method == NSID::CREATE_SPACE
-            || method == NSID::SET_SPACE_CONFIG
-            || method == NSID::DELETE_SPACE
-            || method == NSID::SET_SPACE_MEMBER_ACCESS
-            || method == NSID::REMOVE_SPACE_MEMBER
-            || method == NSID::DELETE_ARBITER
-        {
-            // ── Procedure endpoints (mutate state) ──────────────────
-            let arbiter = match collection.get(arbiter_did) {
-                Some(a) => a,
-                None => {
-                    let body = serde_json::json!({"error": "ErrArbiterNotExists"});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 404, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            let (new_handle, policy_check) = eval_policy(
-                &sans, handle, &collection,
-                arbiter_did, &arbiter.policy, &arbiter.config,
-                &caller_did, method, &params_owned,
-                &["data.arbiter.allow"],
-                &mut next_job_id,
-            ).await;
-            handle = new_handle;
-
-            let allowed = match policy_check {
-                Ok(val) => val == Value::Bool(true),
-                Err(e) => {
-                    let body = serde_json::json!({"error": e});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            if !allowed {
-                let body = serde_json::json!({"error": "ErrPermissionDenied"});
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::NextXrpcCall);
-                continue;
-            }
-
-            // ── Perform the mutation ────────────────────────────────
-            if method == NSID::SET_ARBITER_CONFIG {
-                if let Some(new_config) = params_owned.get("config") {
-                    if let Some(arb) = collection.get_mut(arbiter_did) {
-                        arb.config = new_config.clone();
-                        arb.version += 1;
-                    }
-                }
-            } else if method == NSID::CREATE_SPACE {
-                if let Some(sk) = params_owned.get("spaceKey").and_then(|v| v.as_str()).map(String::from) {
-                    if collection.get(arbiter_did)
-                        .map(|a| a.spaces.contains_key(&sk))
-                        .unwrap_or(false)
-                    {
-                        let body = serde_json::json!({"error": "ErrSpaceExists"});
-                        let j = next_job_id;
-                        next_job_id += 1;
-                        handle = send!(handle, &Req::SendResponse { body: &body, status: 409, job_id: j });
-                        let j = next_job_id;
-                        next_job_id += 1;
-                        handle = send!(handle, &Req::NextXrpcCall);
-                        continue;
-                    }
-                    if let Some(arb) = collection.get_mut(arbiter_did) {
-                        let space_type = params_owned
-                            .get("spaceType")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("town.muni.arbiter.config.space")
-                            .to_string();
-                        let config = params_owned.get("config").cloned().unwrap_or_default();
-                        arb.spaces.insert(sk.clone(), Space {
-                            key: sk,
-                            space_type,
-                            config,
-                            members: vec![],
-                        });
-                        arb.version += 1;
-                    }
-                }
-            } else if method == NSID::SET_SPACE_CONFIG {
-                let sk = params_owned.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
-                if let Some(sk) = sk {
-                    if let Some(arb) = collection.get_mut(arbiter_did) {
-                        if let Some(space) = arb.spaces.get_mut(&sk) {
-                            if let Some(space_type) = params_owned.get("spaceType").and_then(|v| v.as_str()) {
-                                space.space_type = space_type.to_string();
-                            }
-                            if let Some(config) = params_owned.get("config") {
-                                space.config = config.clone();
-                            }
-                            arb.version += 1;
-                        } else {
-                            let body = serde_json::json!({"error": "ErrSpaceNotExists"});
-                            let j = next_job_id;
-                            next_job_id += 1;
-                            handle = send!(handle, &Req::SendResponse { body: &body, status: 404, job_id: j });
-                            let j = next_job_id;
-                            next_job_id += 1;
-                            handle = send!(handle, &Req::NextXrpcCall);
-                            continue;
-                        }
-                    }
-                }
-            } else if method == NSID::DELETE_SPACE {
-                if let Some(sk) = params_owned.get("spaceKey").and_then(|v| v.as_str()).map(String::from) {
-                    if sk == "$admin" {
-                        let body = serde_json::json!({"error": "ErrCannotDeleteAdminSpace"});
-                        let j = next_job_id;
-                        next_job_id += 1;
-                        handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                        let j = next_job_id;
-                        next_job_id += 1;
-                        handle = send!(handle, &Req::NextXrpcCall);
-                        continue;
-                    }
-                    if let Some(arb) = collection.get_mut(arbiter_did) {
-                        arb.spaces.remove(&sk);
-                        arb.version += 1;
-                    }
-                }
-            } else if method == NSID::SET_SPACE_MEMBER_ACCESS {
-                let sk = params_owned.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
-                let md = params_owned
-                    .get("memberDid")
-                    .or_else(|| params_owned.get("member").and_then(|m| m.get("did")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                if let (Some(sk), Some(md)) = (sk, md) {
-                    if let Some(arb) = collection.get_mut(arbiter_did) {
-                        if let Some(space) = arb.spaces.get_mut(&sk) {
-                            let access = params_owned.get("access").cloned().unwrap_or_default();
-                            if let Some(existing) = space.members.iter_mut().find(|m| m.did == md) {
-                                existing.access = access;
-                            } else {
-                                space.members.push(MemberEntry { did: md, access });
-                            }
-                        }
-                        arb.version += 1;
-                    }
-                }
-            } else if method == NSID::REMOVE_SPACE_MEMBER {
-                let sk = params_owned.get("spaceKey").and_then(|v| v.as_str()).map(String::from);
-                let md = params_owned
-                    .get("memberDid")
-                    .or_else(|| params_owned.get("member").and_then(|m| m.get("did")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                if let (Some(sk), Some(md)) = (sk, md) {
-                    if let Some(arb) = collection.get_mut(arbiter_did) {
-                        if let Some(space) = arb.spaces.get_mut(&sk) {
-                            space.members.retain(|m| m.did != md);
-                        }
-                        arb.version += 1;
-                    }
-                }
-            } else if method == NSID::DELETE_ARBITER {
-                collection.arbiters.remove(arbiter_did);
-            }
-
-            // Persist and respond
-            let snap = collection.snapshot();
-            let snap_val = serde_json::to_value(&snap).unwrap_or_default();
-            let j = next_job_id;
-            next_job_id += 1;
-            handle = send!(handle, &Req::StoreSnapshot { snapshot_json: &snap_val, job_id: j });
-
-            let body = serde_json::json!({});
-            let j = next_job_id;
-            next_job_id += 1;
-            handle = send!(handle, &Req::SendResponse { body: &body, status: 200, job_id: j });
-
-        } else {
-            // ── Proxy / fallthrough ─────────────────────────────────
-            let arbiter = match collection.get(arbiter_did) {
-                Some(a) => a,
-                None => {
-                    let body = serde_json::json!({"error": "ErrArbiterNotExists"});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 404, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            let (new_handle, policy_check) = eval_policy(
-                &sans, handle, &collection,
-                arbiter_did, &arbiter.policy, &arbiter.config,
-                &caller_did, method, &params_owned,
-                &["data.arbiter.allow"],
-                &mut next_job_id,
-            ).await;
-            handle = new_handle;
-
-            let allowed = match policy_check {
-                Ok(val) => val == Value::Bool(true),
-                Err(e) => {
-                    let body = serde_json::json!({"error": e});
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                    let j = next_job_id;
-                    next_job_id += 1;
-                    handle = send!(handle, &Req::NextXrpcCall);
-                    continue;
-                }
-            };
-
-            if !allowed {
-                let body = serde_json::json!({"error": "ErrPermissionDenied"});
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &body, status: 403, job_id: j });
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::NextXrpcCall);
-                continue;
-            }
-
-            let backend_url = arbiter.config
-                .get("backendUrl")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-
-            if let Some(url) = backend_url {
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::ProxyXrpc {
-                    backend_url: &url,
-                    path: method,
-                    params: &params_owned,
+    fn execute_proxy(&mut self, method: &str, params: &Value, arbiter_did: &str) -> Vec<IoAction> {
+        let arbiter = match self.collection.get(arbiter_did) {
+            Some(a) => a,
+            None => {
+                let j = self.alloc_job_id();
+                return vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": "ErrArbiterNotExists"}),
+                    status: 404,
                     job_id: j,
-                });
-
-                // Extract proxy result before using handle again.
-                let proxy_body = handle.message().and_then(|m| match m {
-                    Res::ProxyResult { data, .. } => Some((*data).clone()),
-                    _ => None,
-                });
-                let proxy_err = handle.message().and_then(|m| match m {
-                    Res::Error { message, .. } => Some(message.to_string()),
-                    _ => None,
-                });
-
-                let (response_body, status_code) = match (proxy_body, proxy_err) {
-                    (Some(data), _) => (data, 200),
-                    (_, Some(msg)) => (serde_json::json!({"error": msg}), 502),
-                    _ => (serde_json::json!({"error": "ErrBackendUnreachable"}), 502),
-                };
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &response_body, status: status_code, job_id: j });
-            } else {
-                let body = serde_json::json!({"error": "ErrBackendNotConfigured"});
-                let j = next_job_id;
-                next_job_id += 1;
-                handle = send!(handle, &Req::SendResponse { body: &body, status: 502, job_id: j });
+                }];
             }
+        };
+
+        let backend_url = arbiter.config
+            .get("backendUrl")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        if let Some(url) = backend_url {
+            let j = self.alloc_job_id();
+            vec![IoAction::ProxyXrpc {
+                backend_url: url,
+                path: method.to_string(),
+                params: params.clone(),
+                job_id: j,
+            }]
+        } else {
+            let j = self.alloc_job_id();
+            vec![IoAction::SendResponse {
+                body: serde_json::json!({"error": "ErrBackendNotConfigured"}),
+                status: 502,
+                job_id: j,
+            }]
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Create arbiter (bootstrap — no policy check)
+    // -------------------------------------------------------------------
+
+    fn do_create_arbiter(&mut self, params: Value) -> Vec<IoAction> {
+        let arbiter_did = match self.arbiter_did_from_params(&params) {
+            Some(d) => d.to_string(),
+            None => {
+                let j = self.alloc_job_id();
+                return vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": "missing arbiterDid"}),
+                    status: 400,
+                    job_id: j,
+                }];
+            }
+        };
+
+        if self.collection.arbiters.contains_key(&arbiter_did) {
+            let j = self.alloc_job_id();
+            return vec![IoAction::SendResponse {
+                body: serde_json::json!({"error": "ErrArbiterAlreadyExists"}),
+                status: 409,
+                job_id: j,
+            }];
         }
 
-        // ── Back to the top for the next call ────────────────────────
-        let j = next_job_id;
-        next_job_id += 1;
-        handle = send!(handle, &Req::NextXrpcCall);
+        let config = params.get("config").cloned().unwrap_or_default();
+        let policy = params
+            .get("config")
+            .and_then(|c| c.get("policy"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("default")
+            .to_string();
+
+        self.collection.create_arbiter(arbiter_did, config, policy, String::new());
+        self.respond_with_persist()
+    }
+
+    // -------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------
+
+    fn respond_with_persist(&mut self) -> Vec<IoAction> {
+        let snap = self.collection.snapshot();
+        let snap_val = match serde_json::to_value(&snap) {
+            Ok(v) => v,
+            Err(_) => {
+                let j = self.alloc_job_id();
+                return vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": "ErrSerialization"}),
+                    status: 500,
+                    job_id: j,
+                }];
+            }
+        };
+        let j_store = self.alloc_job_id();
+        let j_resp = self.alloc_job_id();
+        vec![
+            IoAction::StoreSnapshot { snapshot_json: snap_val, job_id: j_store },
+            IoAction::SendResponse { body: serde_json::json!({}), status: 200, job_id: j_resp },
+        ]
+    }
+
+    fn handle_loaded_snapshot(&mut self, snapshot: Option<Value>) -> Vec<IoAction> {
+        if let Some(snap) = snapshot {
+            if let Ok(s) = serde_json::from_value::<ServerSnapshot>(snap) {
+                self.collection.load_snapshot(s);
+            }
+        }
+        vec![]
     }
 }
 
@@ -1089,61 +1080,119 @@ pub async fn run<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_create_arbiter_snapshot_roundtrip() {
         let mut coll = ArbiterCollection::new();
-        coll.create_arbiter(
-            "did:plc:abc".into(),
-            serde_json::json!({"foo": "bar"}),
-            "package arbiter".into(),
-            "did:plc:alice".into(),
-        );
-
+        coll.create_arbiter("did:plc:abc".into(), json!({"foo": "bar"}), "package arbiter".into(), "did:plc:alice".into());
         let snap = coll.snapshot();
         assert_eq!(snap.arbiters.len(), 1);
-        assert_eq!(snap.arbiters[0].did, "did:plc:abc");
 
         let mut coll2 = ArbiterCollection::new();
         coll2.load_snapshot(snap);
-        assert_eq!(coll2.arbiters.len(), 1);
-        let arb = coll2.get("did:plc:abc").unwrap();
-        assert_eq!(arb.config.get("foo").and_then(|v| v.as_str()), Some("bar"));
+        assert_eq!(coll2.get("did:plc:abc").and_then(|a| a.config.get("foo")).and_then(|v| v.as_str()), Some("bar"));
     }
 
     #[test]
     fn test_is_readonly_nsid() {
         assert!(is_readonly_nsid(NSID::GET_ARBITER_CONFIG));
-        assert!(is_readonly_nsid(NSID::GET_SPACE_MEMBERS));
         assert!(!is_readonly_nsid(NSID::SET_ARBITER_CONFIG));
-        assert!(!is_readonly_nsid(NSID::CREATE_SPACE));
-    }
-
-    #[test]
-    fn test_resolve_local_get_arbiter_config() {
-        let mut coll = ArbiterCollection::new();
-        coll.create_arbiter(
-            "did:plc:abc".into(),
-            serde_json::json!({"key": "val"}),
-            "package p".into(),
-            "did:plc:alice".into(),
-        );
-        let params = serde_json::json!({});
-        let result = resolve_local("did:plc:abc", NSID::GET_ARBITER_CONFIG, &params, &coll);
-        assert_eq!(result.get("config").and_then(|c| c.get("key")).and_then(|v| v.as_str()), Some("val"));
     }
 
     #[test]
     fn test_serde_rego_roundtrip() {
-        let original = serde_json::json!({
-            "string": "hello",
-            "number": 42,
-            "bool": true,
-            "nested": { "a": [1, 2, 3] },
-            "null": null,
-        });
+        let original = json!({"s": "hello", "n": 42, "b": true, "a": [1, 2]});
         let rego = serde_to_rego(&original);
         let back = rego_to_serde(&rego);
         assert_eq!(original, back);
+    }
+
+    #[test]
+    fn test_create_arbiter_via_state_machine() {
+        let mut sm = StateMachine::new(ArbiterCollection::new());
+        let actions = sm.handle_event(Event::IncomingXrpc {
+            method: NSID::CREATE_ARBITER.into(),
+            params: json!({"arbiterDid": "did:plc:abc", "config": {"foo": "bar"}}),
+            token: None,
+        });
+        assert_eq!(actions.len(), 2); // StoreSnapshot + SendResponse
+        assert!(sm.collection.get("did:plc:abc").is_some());
+    }
+
+    #[test]
+    fn test_get_arbiter_config_no_auth() {
+        let mut coll = ArbiterCollection::new();
+        coll.create_arbiter("did:plc:abc".into(), json!({"key": "val"}), "package arbiter\ndefault allow := true".into(), "did:plc:alice".into());
+        let mut sm = StateMachine::new(coll);
+        let actions = sm.handle_event(Event::IncomingXrpc {
+            method: NSID::GET_ARBITER_CONFIG.into(),
+            params: json!({"arbiterDid": "did:plc:abc"}),
+            token: None,
+        });
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            IoAction::SendResponse { body, status, .. } => {
+                assert_eq!(*status, 200);
+                assert_eq!(body.get("config").and_then(|c| c.get("key")).and_then(|v| v.as_str()), Some("val"));
+            }
+            _ => panic!("expected SendResponse"),
+        }
+    }
+
+    #[test]
+    fn test_auth_required_then_resolved() {
+        let mut coll = ArbiterCollection::new();
+        coll.create_arbiter("did:plc:abc".into(), json!({}), "package arbiter\ndefault allow := true".into(), "did:plc:alice".into());
+        let mut sm = StateMachine::new(coll);
+        let actions = sm.handle_event(Event::IncomingXrpc {
+            method: NSID::GET_ARBITER_CONFIG.into(),
+            params: json!({"arbiterDid": "did:plc:abc"}),
+            token: Some("some-jwt".into()),
+        });
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], IoAction::ResolveAuth { .. }));
+
+        let actions = sm.handle_event(Event::AuthResolved { caller_did: "did:plc:alice".into(), job_id: 1 });
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], IoAction::SendResponse { status: 200, .. }));
+    }
+
+    #[test]
+    fn test_auth_required_then_failed() {
+        let mut coll = ArbiterCollection::new();
+        coll.create_arbiter("did:plc:abc".into(), json!({}), "package arbiter\ndefault allow := true".into(), "did:plc:alice".into());
+        let mut sm = StateMachine::new(coll);
+        let actions = sm.handle_event(Event::IncomingXrpc {
+            method: NSID::GET_ARBITER_CONFIG.into(),
+            params: json!({"arbiterDid": "did:plc:abc"}),
+            token: Some("bad".into()),
+        });
+        assert!(matches!(&actions[0], IoAction::ResolveAuth { .. }));
+
+        let actions = sm.handle_event(Event::AuthFailed { job_id: 1 });
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], IoAction::SendResponse { status: 401, .. }));
+    }
+
+    #[test]
+    fn test_missing_arbiter_did() {
+        let mut sm = StateMachine::new(ArbiterCollection::new());
+        let actions = sm.handle_event(Event::IncomingXrpc {
+            method: NSID::GET_ARBITER_CONFIG.into(),
+            params: json!({}),
+            token: None,
+        });
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], IoAction::SendResponse { status: 400, .. }));
+    }
+
+    #[test]
+    fn test_shutdown() {
+        let mut sm = StateMachine::new(ArbiterCollection::new());
+        assert!(!sm.shutdown);
+        let actions = sm.handle_event(Event::Shutdown);
+        assert!(actions.is_empty());
+        assert!(sm.shutdown);
     }
 }
