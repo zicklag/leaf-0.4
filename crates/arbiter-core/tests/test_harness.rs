@@ -171,7 +171,7 @@ impl TestDriver {
         let actions = sm.handle_event(Event::IncomingXrpc {
             method: nsid,
             params,
-            token: Some(user_did.to_string()),
+            caller_did: user_did.to_string(),
         });
         self.drive_actions(arbiter_did, actions)
     }
@@ -190,17 +190,6 @@ impl TestDriver {
 
         while let Some((_src, action)) = pending.pop() {
             match action {
-                IoAction::ResolveAuth { token, job_id } => {
-                    // Re-route to the source machine.
-                    if let Some(sm) = self.machines.get_mut(&_src) {
-                        let new = sm.handle_event(Event::AuthResolved {
-                            caller_did: token,
-                            job_id,
-                        });
-                        pending.extend(new.into_iter().map(|a| (_src.clone(), a)));
-                    }
-                }
-
                 IoAction::SendResponse { body, status, .. } => {
                     if status >= 400 {
                         let err = body
@@ -225,7 +214,7 @@ impl TestDriver {
                     let result = self.simulate_remote_resolution(caller, &did, &input);
                     if let Some(sm) = self.machines.get_mut(&_src) {
                         let new = sm.handle_event(Event::XrpcRemoteResult {
-                            data: result,
+                            result: Ok(result),
                             job_id,
                         });
                         pending.extend(new.into_iter().map(|a| (_src.clone(), a)));
@@ -263,7 +252,7 @@ impl TestDriver {
         let event = Event::IncomingXrpc {
             method: NSID::RESOLVE_SPACE_MEMBERS.into(),
             params,
-            token: Some(caller_did.to_string()),
+            caller_did: caller_did.to_string(),
         };
 
         let machine = match self.machines.get_mut(base_did) {
@@ -283,17 +272,6 @@ impl TestDriver {
 
         while let Some((src, action)) = pending.pop() {
             match action {
-                IoAction::ResolveAuth { token, .. } => {
-                    // Auth token IS the caller DID in the test harness.
-                    if let Some(sm) = self.machines.get_mut(&src) {
-                        let new = sm.handle_event(Event::AuthResolved {
-                            caller_did: token,
-                            job_id: 0,
-                        });
-                        pending.extend(new.into_iter().map(|a| (src.clone(), a)));
-                    }
-                }
-
                 IoAction::SendResponse { body, status, .. } => {
                     return if status >= 400 { Value::Null } else { body };
                 }
@@ -302,7 +280,7 @@ impl TestDriver {
                     let result = self.simulate_remote_resolution(&src, &did, &input);
                     if let Some(sm) = self.machines.get_mut(&src) {
                         let new = sm.handle_event(Event::XrpcRemoteResult {
-                            data: result,
+                            result: Ok(result),
                             job_id: 0,
                         });
                         pending.extend(new.into_iter().map(|a| (src.clone(), a)));

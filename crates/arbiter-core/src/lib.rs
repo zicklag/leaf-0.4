@@ -45,18 +45,12 @@ pub type JobId = u64;
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// An incoming XRPC call from the HTTP server.
-    IncomingXrpc { method: String, params: Value, token: Option<String> },
+    /// An incoming XRPC call from the HTTP server, with caller DID already
+    /// resolved by the IO layer.
+    IncomingXrpc { method: String, params: Value, caller_did: Did },
 
-    /// Auth resolution completed successfully.
-    AuthResolved { caller_did: String, job_id: JobId },
-    /// Auth resolution failed.
-    AuthFailed { job_id: JobId },
-
-    /// A remote XRPC query (from policy evaluation) returned data.
-    XrpcRemoteResult { data: Value, job_id: JobId },
-    /// A remote XRPC query failed.
-    XrpcRemoteFailed { message: String, job_id: JobId },
+    /// A remote XRPC query (from policy evaluation) completed.
+    XrpcRemoteResult { result: Result<Value, String>, job_id: JobId },
 
     /// The IO layer is shutting down.
     Shutdown,
@@ -68,9 +62,6 @@ pub enum Event {
 
 #[derive(Debug, Clone)]
 pub enum IoAction {
-    /// Resolve a JWT bearer token to a caller DID.
-    ResolveAuth { token: String, job_id: JobId },
-
     /// Send an XRPC response to the client.
     SendResponse { body: Value, status: u16, job_id: JobId },
 
@@ -237,11 +228,6 @@ struct EvalContext {
     phase: EvalPhase,
 }
 
-struct PendingAuth {
-    method: String,
-    params: Value,
-}
-
 // ---------------------------------------------------------------------------
 // State machine  (one per arbiter)
 // ---------------------------------------------------------------------------
@@ -250,7 +236,6 @@ pub struct StateMachine {
     pub arbiter: ArbiterState,
     next_job_id: JobId,
     pending_eval: Option<PendingEval>,
-    pending_auth: Option<PendingAuth>,
     pub shutdown: bool,
 }
 
@@ -260,7 +245,6 @@ impl StateMachine {
             arbiter,
             next_job_id: 1,
             pending_eval: None,
-            pending_auth: None,
             shutdown: false,
         }
     }
@@ -285,56 +269,24 @@ impl StateMachine {
                 self.shutdown = true;
                 vec![]
             }
-            Event::IncomingXrpc { method, params, token } => {
-                self.handle_incoming(&method, params, token)
+            Event::IncomingXrpc { method, params, caller_did } => {
+                self.start_eval_or_execute(method, params, caller_did)
             }
-            Event::AuthResolved { caller_did, .. } => self.handle_auth_result(caller_did),
-            Event::AuthFailed { .. } => self.handle_auth_failed(),
-            Event::XrpcRemoteResult { data, .. } => self.resume_pending_eval(Some(data), None),
-            Event::XrpcRemoteFailed { message, .. } => self.resume_pending_eval(None, Some(message)),
+            Event::XrpcRemoteResult { result, .. } => self.resume_pending_eval(result),
         }
-    }
-
-    // -------------------------------------------------------------------
-    // Incoming XRPC call
-    // -------------------------------------------------------------------
-
-    fn handle_incoming(&mut self, method: &str, params: Value, token: Option<String>) -> Vec<IoAction> {
-        if method == NSID::CREATE_ARBITER {
-            // Already created — nothing to do (the harness creates us).
-            let j = self.alloc_job_id();
-            return vec![IoAction::SendResponse { body: serde_json::json!({}), status: 200, job_id: j }];
-        }
-
-        if let Some(tok) = token {
-            let j = self.alloc_job_id();
-            self.pending_auth = Some(PendingAuth { method: method.to_string(), params: params.clone() });
-            return vec![IoAction::ResolveAuth { token: tok, job_id: j }];
-        }
-
-        self.start_eval_or_execute(method.to_string(), params, String::new())
-    }
-
-    // -------------------------------------------------------------------
-    // Auth
-    // -------------------------------------------------------------------
-
-    fn handle_auth_result(&mut self, caller_did: String) -> Vec<IoAction> {
-        let Some(pending) = self.pending_auth.take() else { return vec![] };
-        self.start_eval_or_execute(pending.method, pending.params, caller_did)
-    }
-
-    fn handle_auth_failed(&mut self) -> Vec<IoAction> {
-        self.pending_auth = None;
-        let j = self.alloc_job_id();
-        vec![IoAction::SendResponse { body: serde_json::json!({"error": "ErrAuthRequired"}), status: 401, job_id: j }]
     }
 
     // -------------------------------------------------------------------
     // Start or continue policy evaluation
     // -------------------------------------------------------------------
 
-    fn start_eval_or_execute(&mut self, method: String, params: Value, caller_did: String) -> Vec<IoAction> {
+    fn start_eval_or_execute(&mut self, method: String, params: Value, caller_did: Did) -> Vec<IoAction> {
+        if method == NSID::CREATE_ARBITER {
+            // Already created — nothing to do (the harness creates us).
+            let j = self.alloc_job_id();
+            return vec![IoAction::SendResponse { body: serde_json::json!({}), status: 200, job_id: j }];
+        }
+
         let entry_points: Vec<String> = if method == NSID::RESOLVE_SPACE_MEMBERS {
             vec!["data.arbiter.allow".into(), "data.arbiter.resolve_result".into()]
         } else {
@@ -457,18 +409,21 @@ impl StateMachine {
         }
     }
 
-    fn resume_pending_eval(&mut self, result_data: Option<Value>, error_msg: Option<String>) -> Vec<IoAction> {
+    fn resume_pending_eval(&mut self, result: Result<Value, String>) -> Vec<IoAction> {
         let Some(pending) = self.pending_eval.take() else { return vec![] };
-        if let Some(msg) = error_msg {
-            let j = self.alloc_job_id();
-            return vec![IoAction::SendResponse {
-                body: serde_json::json!({"error": format!("ErrRemoteXrpc: {msg}")}),
-                status: 502, job_id: j,
-            }];
+        match result {
+            Err(msg) => {
+                let j = self.alloc_job_id();
+                vec![IoAction::SendResponse {
+                    body: serde_json::json!({"error": format!("ErrRemoteXrpc: {msg}")}),
+                    status: 502, job_id: j,
+                }]
+            }
+            Ok(data) => {
+                let resolved_rego = serde_to_rego(&data);
+                self.continue_eval_resume(pending.session, pending.ctx, &resolved_rego)
+            }
         }
-        let resolved = result_data.unwrap_or(Value::Null);
-        let resolved_rego = serde_to_rego(&resolved);
-        self.continue_eval_resume(pending.session, pending.ctx, &resolved_rego)
     }
 
     // -------------------------------------------------------------------
@@ -730,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_arbiter_config_no_auth() {
+    fn test_get_arbiter_config_with_caller_did() {
         let mut sm = StateMachine::create(
             "did:plc:abc".into(),
             serde_json::json!({"key": "val"}),
@@ -740,7 +695,7 @@ mod tests {
         let actions = sm.handle_event(Event::IncomingXrpc {
             method: NSID::GET_ARBITER_CONFIG.into(),
             params: serde_json::json!({}),
-            token: None,
+            caller_did: "did:plc:alice".into(),
         });
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -753,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn test_auth_then_resolved() {
+    fn test_incoming_xrpc_carries_caller_did() {
         let mut sm = StateMachine::create(
             "did:plc:abc".into(),
             serde_json::json!({}),
@@ -763,32 +718,10 @@ mod tests {
         let actions = sm.handle_event(Event::IncomingXrpc {
             method: NSID::GET_ARBITER_CONFIG.into(),
             params: serde_json::json!({}),
-            token: Some("some-jwt".into()),
+            caller_did: "did:plc:bob".into(),
         });
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], IoAction::ResolveAuth { .. }));
-
-        let actions = sm.handle_event(Event::AuthResolved { caller_did: "alice".into(), job_id: 1 });
         assert_eq!(actions.len(), 1);
         assert!(matches!(&actions[0], IoAction::SendResponse { status: 200, .. }));
-    }
-
-    #[test]
-    fn test_auth_failed() {
-        let mut sm = StateMachine::create(
-            "did:plc:abc".into(),
-            serde_json::json!({}),
-            "package arbiter\ndefault allow := true".into(),
-            "did:plc:alice".into(),
-        );
-        sm.handle_event(Event::IncomingXrpc {
-            method: NSID::GET_ARBITER_CONFIG.into(),
-            params: serde_json::json!({}),
-            token: Some("bad".into()),
-        });
-        let actions = sm.handle_event(Event::AuthFailed { job_id: 1 });
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], IoAction::SendResponse { status: 401, .. }));
     }
 
     #[test]
