@@ -106,7 +106,7 @@
     const memberDid = memberEntry.did;
     const result = await app.processOperation(
       selectedArbiterDid!, currentUser.did, selectedSpace.key,
-      { type: 'RemoveSpaceMember', member: { tag: memberDid.startsWith('space:') ? 'MemberLocalSpace' : memberDid.includes('|') ? 'MemberRemoteSpace' : 'MemberDid', value: memberDid.startsWith('space:') ? memberDid.slice(6) : memberDid.includes('|') ? (() => { const [a, k] = memberDid.split('|', 2); return { arbiterDid: a, spaceKey: k }; })() : memberDid } },
+      { type: 'RemoveSpaceMember', member: { tag: memberDid.startsWith('space:') ? 'MemberLocalSpace' : memberDid.includes('|') ? 'MemberRemoteSpace' : 'MemberDid', value: memberDid.startsWith('space:') ? (() => { const rest = memberDid.slice(6); const i = rest.lastIndexOf('/'); return i >= 0 ? rest.slice(i + 1) : rest; })() : memberDid.includes('|') ? (() => { const parts = memberDid.split('|'); return { arbiterDid: parts[0], spaceKey: parts[2] ?? parts[1] }; })() : memberDid } },
     );
     if (result.status === 'ok') {
       app.notifications.add('success', 'Member removed');

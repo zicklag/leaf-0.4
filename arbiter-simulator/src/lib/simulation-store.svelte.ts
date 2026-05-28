@@ -106,7 +106,7 @@ class AppState {
 
   /** @deprecated Use `resolvedError` instead. */
   get selectedSpaceError() {
-    return this.resolvedError ? `Permission denied: ${this.resolvedError}` : null;
+    return this.resolvedError;
   }
 
   /** @deprecated Use `refreshSnapshot` instead. */
@@ -161,34 +161,47 @@ class AppState {
     const log: PolicyCheckLog = { steps: [], result: undefined, allowed: false };
     let result: OpResult;
 
+    // Infer spaceType from the space key
+    const spaceType = _spaceKey === '$admin'
+      ? 'town.muni.arbiter.config.adminSpace'
+      : 'town.muni.arbiter.config.space';
+
     switch (args.type) {
       case 'CreateSpace':
         result = await this.simulator.createSpace(arbiterDid, userDid, {
           spaceKey: _spaceKey,
-          spaceType: args.spaceType as string,
+          spaceType: args.spaceType as string ?? spaceType,
           config: args.config as Record<string, unknown>,
         }, log);
         break;
       case 'DeleteSpace':
         result = await this.simulator.deleteSpace(arbiterDid, userDid, {
           spaceKey: _spaceKey,
+          spaceType,
         }, log);
         break;
       case 'SetSpaceConfig':
         result = await this.simulator.setSpaceConfig(arbiterDid, userDid, {
           spaceKey: _spaceKey,
+          spaceType,
           config: args.config as Record<string, unknown>,
         }, log);
         break;
       case 'SetSpaceMemberAccess': {
         const member = args.member as { tag: string; value: unknown };
+        const buildRemoteDid = (v: unknown) => {
+          if (typeof v === 'string') return v;
+          const r = v as { arbiterDid: string; spaceKey: string };
+          return `${r.arbiterDid}|town.muni.arbiter.config.space|${r.spaceKey}`;
+        };
         const memberDid = member.tag === 'MemberDid'
           ? String(member.value)
           : member.tag === 'MemberLocalSpace'
-            ? `space:${member.value}`
-            : `${(member.value as { arbiterDid: string }).arbiterDid}|${(member.value as { spaceKey: string }).spaceKey}`;
+            ? `space:town.muni.arbiter.config.space/${member.value}`
+            : buildRemoteDid(member.value);
         result = await this.simulator.setSpaceMemberAccess(arbiterDid, userDid, {
           spaceKey: _spaceKey,
+          spaceType,
           memberDid,
           access: args.access as Record<string, unknown>,
         }, log);
@@ -196,13 +209,19 @@ class AppState {
       }
       case 'RemoveSpaceMember': {
         const member = args.member as { tag: string; value: unknown };
+        const buildRemoteDid = (v: unknown) => {
+          if (typeof v === 'string') return v;
+          const r = v as { arbiterDid: string; spaceKey: string };
+          return `${r.arbiterDid}|town.muni.arbiter.config.space|${r.spaceKey}`;
+        };
         const memberDid = member.tag === 'MemberDid'
           ? String(member.value)
           : member.tag === 'MemberLocalSpace'
-            ? `space:${member.value}`
-            : `${(member.value as { arbiterDid: string }).arbiterDid}|${(member.value as { spaceKey: string }).spaceKey}`;
+            ? `space:town.muni.arbiter.config.space/${member.value}`
+            : buildRemoteDid(member.value);
         result = await this.simulator.removeSpaceMember(arbiterDid, userDid, {
           spaceKey: _spaceKey,
+          spaceType,
           memberDid,
         }, log);
         break;
@@ -210,6 +229,7 @@ class AppState {
       case 'ResolveMembers':
         result = await this.simulator.resolveSpaceMembers(arbiterDid, userDid, {
           spaceKey: _spaceKey,
+          spaceType,
         }, log);
         break;
       case 'DeleteArbiter':
@@ -395,10 +415,13 @@ class AppState {
 
     try {
       const log: PolicyCheckLog = { steps: [], result: undefined, allowed: false };
+      const spaceType = this.selectedSpaceKey === '$admin'
+        ? 'town.muni.arbiter.config.adminSpace'
+        : 'town.muni.arbiter.config.space';
       const result = await this.simulator.resolveSpaceMembers(
         this.selectedArbiterDid,
         this.currentUserId,
-        { spaceKey: this.selectedSpaceKey },
+        { spaceKey: this.selectedSpaceKey, spaceType },
         log,
       );
 

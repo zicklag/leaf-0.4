@@ -7,6 +7,7 @@ mod test_harness;
 
 use test_harness::{ResolvedMember, TestDriver};
 use serde_json::Value;
+use arbiter_core::SpaceId;
 
 const DEFAULT_POLICY: &str = include_str!("../../../policies/arbiter/access-levels.rego");
 
@@ -82,7 +83,10 @@ fn owner_can_delete_space() {
     h.create_default_arbiter("org", "alice");
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "deleteSpace", None);
-    assert!(!h.machines.get("org").unwrap().arbiter.spaces.contains_key("team"));
+    assert!(h.machines.get("org").unwrap().arbiter.spaces.get(&SpaceId {
+        key: "team".into(),
+        space_type: "town.muni.arbiter.config.space".into(),
+    }).is_none());
 }
 
 #[test]
@@ -90,7 +94,10 @@ fn owner_cannot_delete_admin_space() {
     let mut h = TestDriver::new(DEFAULT_POLICY);
     h.create_default_arbiter("org", "alice");
     h.assert_denied("org", "alice", "$admin", "deleteSpace", None);
-    assert!(h.machines.get("org").unwrap().arbiter.spaces.contains_key("$admin"));
+    assert!(h.machines.get("org").unwrap().arbiter.spaces.get(&SpaceId {
+        key: "$admin".into(),
+        space_type: "town.muni.arbiter.config.adminSpace".into(),
+    }).is_some());
 }
 
 // ── Access level hierarchy ───────────────────────────────────────────
@@ -185,7 +192,7 @@ fn access_limited_by_parent_delegation() {
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "bob", "access": access("Owner")})));
     h.assert_ok("org", "alice", "$admin", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "space:team", "access": access("ReadMemberList")})));
+        Some(serde_json::json!({"memberDid": "space:town.muni.arbiter.config.space/team", "access": access("ReadMemberList")})));
     let members = h.resolved_members("org", "alice", "$admin");
     assert_member_exists(&members, "bob", "ReadMemberList");
 }
@@ -198,7 +205,7 @@ fn members_of_child_space_inherit_access() {
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "bob", "access": access("IsMember")})));
     h.assert_ok("org", "alice", "$admin", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "space:team", "access": access("IsMember")})));
+        Some(serde_json::json!({"memberDid": "space:town.muni.arbiter.config.space/team", "access": access("IsMember")})));
     let members = h.resolved_members("org", "alice", "$admin");
     assert_member_exists(&members, "bob", "IsMember");
 }
@@ -210,7 +217,7 @@ fn public_members_allows_non_member_access() {
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "bob", "access": access("IsMember")})));
-    h.set_space_config("org", "team", serde_json::json!({"publicMembers": true, "publicRecords": false}));
+    h.set_space_config("org", "team", "town.muni.arbiter.config.space", serde_json::json!({"publicMembers": true, "publicRecords": false}));
     let members = h.resolved_members("org", "stranger", "team");
     assert!(!members.is_empty());
     assert_member_exists(&members, "bob", "IsMember");
@@ -224,12 +231,12 @@ fn remote_space_resolution_works() {
     h.create_default_arbiter("org", "alice");
     h.create_default_arbiter("partner", "carol");
     h.assert_ok("partner", "carol", "shared", "createSpace", None);
-    h.set_space_config("partner", "shared", serde_json::json!({"publicMembers": true, "publicRecords": false}));
+    h.set_space_config("partner", "shared", "town.muni.arbiter.config.space", serde_json::json!({"publicMembers": true, "publicRecords": false}));
     h.assert_ok("partner", "carol", "shared", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "dave", "access": access("Owner")})));
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "partner|shared", "access": access("IsMember")})));
+        Some(serde_json::json!({"memberDid": "partner|town.muni.arbiter.config.space|shared", "access": access("IsMember")})));
     let members = h.resolved_members("org", "alice", "team");
     assert_member_exists(&members, "dave", "IsMember");
 }
@@ -240,12 +247,12 @@ fn remote_access_limited_by_parent() {
     h.create_default_arbiter("org", "alice");
     h.create_default_arbiter("partner", "carol");
     h.assert_ok("partner", "carol", "shared", "createSpace", None);
-    h.set_space_config("partner", "shared", serde_json::json!({"publicMembers": true, "publicRecords": false}));
+    h.set_space_config("partner", "shared", "town.muni.arbiter.config.space", serde_json::json!({"publicMembers": true, "publicRecords": false}));
     h.assert_ok("partner", "carol", "shared", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "dave", "access": access("Owner")})));
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "partner|shared", "access": access("ReadMemberList")})));
+        Some(serde_json::json!({"memberDid": "partner|town.muni.arbiter.config.space|shared", "access": access("ReadMemberList")})));
     let members = h.resolved_members("org", "alice", "team");
     assert_member_exists(&members, "dave", "ReadMemberList");
 }
@@ -260,7 +267,7 @@ fn remote_arbiter_denies_unauthorised_caller() {
         Some(serde_json::json!({"memberDid": "dave", "access": access("Owner")})));
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "partner|restricted", "access": access("IsMember")})));
+        Some(serde_json::json!({"memberDid": "partner|town.muni.arbiter.config.space|restricted", "access": access("IsMember")})));
     let members = h.resolved_members("org", "alice", "team");
     assert!(!members.iter().any(|m| m.did == "dave"));
 }
@@ -277,7 +284,7 @@ fn remote_arbiter_grants_caller_via_member_access() {
         Some(serde_json::json!({"memberDid": "org", "access": access("ReadMemberList")})));
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "partner|shared", "access": access("IsMember")})));
+        Some(serde_json::json!({"memberDid": "partner|town.muni.arbiter.config.space|shared", "access": access("IsMember")})));
     let members = h.resolved_members("org", "alice", "team");
     assert_member_exists(&members, "dave", "IsMember");
 }
@@ -322,12 +329,12 @@ fn remote_arbiter_offline_excludes_remote_members() {
     h.create_default_arbiter("org", "alice");
     h.create_default_arbiter("partner", "carol");
     h.assert_ok("partner", "carol", "shared", "createSpace", None);
-    h.set_space_config("partner", "shared", serde_json::json!({"publicMembers": true, "publicRecords": false}));
+    h.set_space_config("partner", "shared", "town.muni.arbiter.config.space", serde_json::json!({"publicMembers": true, "publicRecords": false}));
     h.assert_ok("partner", "carol", "shared", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "dave", "access": access("Owner")})));
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "partner|shared", "access": access("ReadMemberList")})));
+        Some(serde_json::json!({"memberDid": "partner|town.muni.arbiter.config.space|shared", "access": access("ReadMemberList")})));
 
     // Online: Dave visible
     let online = h.resolved_members("org", "alice", "team");
@@ -354,11 +361,11 @@ fn public_members_toggle_controls_stranger_access() {
     // Not public: stranger denied
     h.assert_denied("org", "stranger", "team", "resolveSpaceMembers", None);
     // Make public
-    h.set_space_config("org", "team", serde_json::json!({"publicMembers": true, "publicRecords": false}));
+    h.set_space_config("org", "team", "town.muni.arbiter.config.space", serde_json::json!({"publicMembers": true, "publicRecords": false}));
     let members = h.resolved_members("org", "stranger", "team");
     assert_member_exists(&members, "bob", "IsMember");
     // Un-public
-    h.set_space_config("org", "team", serde_json::json!({"publicMembers": false, "publicRecords": false}));
+    h.set_space_config("org", "team", "town.muni.arbiter.config.space", serde_json::json!({"publicMembers": false, "publicRecords": false}));
     h.assert_denied("org", "stranger", "team", "resolveSpaceMembers", None);
 }
 
@@ -389,9 +396,9 @@ fn resolves_deeply_nested_local_delegations() {
     h.assert_ok("arb1", "alice", "#general", "createSpace", None);
 
     h.assert_ok("arb1", "alice", "members", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "space:moderators", "access": access("RemoveMembers")})));
+        Some(serde_json::json!({"memberDid": "space:town.muni.arbiter.config.space/moderators", "access": access("RemoveMembers")})));
     h.assert_ok("arb1", "alice", "#general", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "space:members", "access": access("RemoveMembers")})));
+        Some(serde_json::json!({"memberDid": "space:town.muni.arbiter.config.space/members", "access": access("RemoveMembers")})));
     h.assert_ok("arb1", "alice", "moderators", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "carol", "access": access("RemoveMembers")})));
     h.assert_ok("arb1", "alice", "members", "setSpaceMemberAccess",
@@ -413,11 +420,11 @@ fn resolves_members_across_arbiter_boundaries_with_nested_delegations() {
     h.assert_ok("muni-town", "alice", "members", "createSpace", None);
     h.assert_ok("muni-town", "alice", "moderators", "createSpace", None);
 
-    h.set_space_config("muni-town", "members",
+    h.set_space_config("muni-town", "members", "town.muni.arbiter.config.space",
         serde_json::json!({"publicMembers": true, "publicRecords": false}));
 
     h.assert_ok("muni-town", "alice", "members", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "space:moderators", "access": access("RemoveMembers")})));
+        Some(serde_json::json!({"memberDid": "space:town.muni.arbiter.config.space/moderators", "access": access("RemoveMembers")})));
     h.assert_ok("muni-town", "alice", "members", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "george", "access": access("IsMember")})));
     h.assert_ok("muni-town", "alice", "moderators", "setSpaceMemberAccess",
@@ -430,9 +437,9 @@ fn resolves_members_across_arbiter_boundaries_with_nested_delegations() {
     h.assert_ok("spicy-lobster", "bob", "members", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "mary", "access": access("IsMember")})));
     h.assert_ok("spicy-lobster", "bob", "members", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "muni-town|members", "access": access("IsMember")})));
+        Some(serde_json::json!({"memberDid": "muni-town|town.muni.arbiter.config.space|members", "access": access("IsMember")})));
     h.assert_ok("spicy-lobster", "bob", "#general", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "space:members", "access": access("RemoveMembers")})));
+        Some(serde_json::json!({"memberDid": "space:town.muni.arbiter.config.space/members", "access": access("RemoveMembers")})));
 
     let members = h.resolved_members("spicy-lobster", "bob", "#general");
     assert_member_exists(&members, "bob", "Owner");
@@ -451,13 +458,13 @@ fn deep_remote_chain_resolves() {
     h.create_default_arbiter("partner", "carol");
 
     h.assert_ok("partner", "carol", "users", "createSpace", None);
-    h.set_space_config("partner", "users", serde_json::json!({"publicMembers": true, "publicRecords": false}));
+    h.set_space_config("partner", "users", "town.muni.arbiter.config.space", serde_json::json!({"publicMembers": true, "publicRecords": false}));
     h.assert_ok("partner", "carol", "users", "setSpaceMemberAccess",
         Some(serde_json::json!({"memberDid": "dave", "access": access("Owner")})));
 
     h.assert_ok("org", "alice", "team", "createSpace", None);
     h.assert_ok("org", "alice", "team", "setSpaceMemberAccess",
-        Some(serde_json::json!({"memberDid": "partner|users", "access": access("IsMember")})));
+        Some(serde_json::json!({"memberDid": "partner|town.muni.arbiter.config.space|users", "access": access("IsMember")})));
 
     let members = h.resolved_members("org", "alice", "team");
     assert_member_exists(&members, "dave", "IsMember");
@@ -514,6 +521,9 @@ fn create_space_with_explicit_key_ui_flow() {
             },
         })));
 
-    let space = h.machines.get("org").unwrap().arbiter.spaces.get("test").unwrap();
+    let space = h.machines.get("org").unwrap().arbiter.spaces.get(&SpaceId {
+        key: "test".into(),
+        space_type: "town.muni.arbiter.config.space".into(),
+    }).unwrap();
     assert_eq!(space.key, "test");
 }

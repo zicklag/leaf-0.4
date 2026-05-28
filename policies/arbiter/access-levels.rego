@@ -43,18 +43,16 @@ member_rank(member) := access_rank(access_level(member.access))
 # Space data access via xrpc_local (on-demand queries)
 # ---------------------------------------------------------------------------
 
-# Fetch space members via local XRPC — this suspends the policy VM and the
-# IO layer resolves it by querying the arbiter core directly (bypassing policy).
 # Fetch space members via local XRPC — returns the full response object.
 # The policy extracts the `.members` field.
-space_members(space_key) := members if {
-	resp := xrpc_local("town.muni.arbiter.getSpaceMembers", {"spaceKey": space_key})
+space_members(space_type, space_key) := members if {
+	resp := xrpc_local("town.muni.arbiter.getSpaceMembers", {"spaceKey": space_key, "spaceType": space_type})
 	members := resp.members
 }
 
 # Fetch space config via local XRPC — extracts the `.config` field.
-space_config(space_key) := config if {
-	resp := xrpc_local("town.muni.arbiter.getSpaceConfig", {"spaceKey": space_key})
+space_config(space_type, space_key) := config if {
+	resp := xrpc_local("town.muni.arbiter.getSpaceConfig", {"spaceKey": space_key, "spaceType": space_type})
 	config := resp.config
 }
 
@@ -64,49 +62,51 @@ space_config(space_key) := config if {
 
 # Direct member in the target space
 direct_members contains member if {
-	some entry in space_members(input.operation.params.spaceKey)
-	member := {"did": entry.did, "access": entry.access, "via": input.operation.params.spaceKey}
+	some entry in space_members(input.operation.params.spaceType, input.operation.params.spaceKey)
+	member := {"did": entry.did, "access": entry.access, "via": concat("/", [input.operation.params.spaceType, input.operation.params.spaceKey])}
 }
 
 # Direct member inherited from $admin space
 direct_members contains member if {
 	input.operation.params.spaceKey != "$admin"
-	some entry in space_members("$admin")
-	member := {"did": entry.did, "access": entry.access, "via": "$admin"}
+	some entry in space_members("town.muni.arbiter.config.adminSpace", "$admin")
+	member := {"did": entry.did, "access": entry.access, "via": concat("/", ["town.muni.arbiter.config.adminSpace", "$admin"])}
 }
 
-# Delegated from a remote space: the member DID is "<arbiterDid>|<spaceKey>"
+# Delegated from a remote space: the member DID is "<arbiterDid>|<spaceType>|<spaceKey>"
 remote_delegation contains member if {
-	some entry in space_members(input.operation.params.spaceKey)
+	some entry in space_members(input.operation.params.spaceType, input.operation.params.spaceKey)
 	contains(entry.did, "|")
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
-	space_key := parts[1]
+	remote_space_type := parts[1]
+	remote_space_key := parts[2]
 
 	# This resolves asynchronously via xrpc_remote -> __builtin_host_await
-	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": remote_space_key, "spaceType": remote_space_type})
 	some remote_entry in resp.members
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, entry.access),
-		"via": concat("|", [arbiter_did, space_key]),
+		"via": concat("|", [arbiter_did, remote_space_type, remote_space_key]),
 	}
 }
 
 # Delegated from a remote space in the admin space
 remote_delegation contains member if {
 	input.operation.params.spaceKey != "$admin"
-	some entry in space_members("$admin")
+	some entry in space_members("town.muni.arbiter.config.adminSpace", "$admin")
 	contains(entry.did, "|")
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
-	space_key := parts[1]
-	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	remote_space_type := parts[1]
+	remote_space_key := parts[2]
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": remote_space_key, "spaceType": remote_space_type})
 	some remote_entry in resp.members
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, entry.access),
-		"via": concat("|", [arbiter_did, space_key]),
+		"via": concat("|", [arbiter_did, remote_space_type, remote_space_key]),
 	}
 }
 
@@ -119,46 +119,50 @@ remote_delegation contains member if {
 # -- expand_delegation helpers -------------------------------------------------
 
 # Terminal entries: real DIDs (not space: and not remote |)
-_expand_terminal(child_key, parent_access) := [member |
-	some entry in space_members(child_key)
+_expand_terminal(child_type, child_key, parent_access) := [member |
+	some entry in space_members(child_type, child_key)
 	not startswith(entry.did, "space:")
 	not contains(entry.did, "|")
 	member := {
 		"did": entry.did,
 		"access": min_access(entry.access, parent_access),
-		"via": child_key,
+		"via": concat("/", [child_type, child_key]),
 	}
 ]
 
-# Remote delegation entries: arbiter|space references resolved via xrpc_remote
-_expand_remote(child_key, parent_access) := [member |
-	some entry in space_members(child_key)
+# Remote delegation entries: arbiter|spaceType|spaceKey references resolved via xrpc_remote
+_expand_remote(child_type, child_key, parent_access) := [member |
+	some entry in space_members(child_type, child_key)
 	contains(entry.did, "|")
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
-	space_key := parts[1]
-	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	remote_type := parts[1]
+	remote_key := parts[2]
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": remote_key, "spaceType": remote_type})
 	some remote_entry in resp.members
 	member := {
 		"did": remote_entry.did,
 		"access": min_access(remote_entry.access, min_access(entry.access, parent_access)),
-		"via": concat("|", [arbiter_did, space_key]),
+		"via": concat("|", [arbiter_did, remote_type, remote_key]),
 	}
 ]
 
-# Recursive entries: space:<key> references expanded with depth-1
-_expand_recursive(child_key, parent_access, depth) := [grandchild |
-	some entry in space_members(child_key)
+# Recursive entries: space:<spaceType>/<key> references expanded with depth-1
+_expand_recursive(child_type, child_key, parent_access, depth) := [grandchild |
+	some entry in space_members(child_type, child_key)
 	startswith(entry.did, "space:")
-	child := trim_prefix(entry.did, "space:")
-	some grandchild in expand_delegation(child, min_access(entry.access, parent_access), depth - 1)
+	child_full := trim_prefix(entry.did, "space:")
+	child_parts := split(child_full, "/")
+	grandchild_type := child_parts[0]
+	grandchild_key := child_parts[1]
+	some grandchild in expand_delegation(grandchild_type, grandchild_key, min_access(entry.access, parent_access), depth - 1)
 ]
 
-expand_delegation(child_key, parent_access, depth) := result if {
+expand_delegation(child_type, child_key, parent_access, depth) := result if {
 	depth > 0
-	terminal := _expand_terminal(child_key, parent_access)
-	remote := _expand_remote(child_key, parent_access)
-	recursive := _expand_recursive(child_key, parent_access, depth)
+	terminal := _expand_terminal(child_type, child_key, parent_access)
+	remote := _expand_remote(child_type, child_key, parent_access)
+	recursive := _expand_recursive(child_type, child_key, parent_access, depth)
 	combined := array.concat(terminal, remote)
 	result := array.concat(combined, recursive)
 }
@@ -175,13 +179,17 @@ resolved_members_raw contains member if {
 resolved_members_raw contains member if {
 	some entry in direct_members
 	startswith(entry.did, "space:")
-	some member in expand_delegation(trim_prefix(entry.did, "space:"), entry.access, 9)
+	child_full := trim_prefix(entry.did, "space:")
+	child_parts := split(child_full, "/")
+	some member in expand_delegation(child_parts[0], child_parts[1], entry.access, 9)
 }
 
 resolved_members_raw contains member if {
 	some entry in remote_delegation
 	startswith(entry.did, "space:")
-	some member in expand_delegation(trim_prefix(entry.did, "space:"), entry.access, 9)
+	child_full := trim_prefix(entry.did, "space:")
+	child_parts := split(child_full, "/")
+	some member in expand_delegation(child_parts[0], child_parts[1], entry.access, 9)
 }
 
 # ---------------------------------------------------------------------------
@@ -230,14 +238,15 @@ requester_rank := rank if {
 # ---------------------------------------------------------------------------
 
 missing_spaces contains ms if {
-	some entry in space_members(input.operation.params.spaceKey)
+	some entry in space_members(input.operation.params.spaceType, input.operation.params.spaceKey)
 	contains(entry.did, "|")
 	parts := split(entry.did, "|")
 	arbiter_did := parts[0]
-	space_key := parts[1]
-	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": space_key})
+	remote_space_type := parts[1]
+	remote_space_key := parts[2]
+	resp := xrpc_remote(arbiter_did, "town.muni.arbiter.resolveSpaceMembers", {"spaceKey": remote_space_key, "spaceType": remote_space_type})
 	count(resp.members) == 0
-	ms := {"arbiterDid": arbiter_did, "spaceKey": space_key}
+	ms := {"arbiterDid": arbiter_did, "spaceKey": remote_space_key, "spaceType": remote_space_type}
 }
 
 # ---------------------------------------------------------------------------
@@ -245,12 +254,12 @@ missing_spaces contains ms if {
 # ---------------------------------------------------------------------------
 
 target_exists_in_raw if {
-	some entry in space_members(input.operation.params.spaceKey)
+	some entry in space_members(input.operation.params.spaceType, input.operation.params.spaceKey)
 	entry.did == input.operation.params.memberDid
 }
 
 raw_target_rank := rank if {
-	some entry in space_members(input.operation.params.spaceKey)
+	some entry in space_members(input.operation.params.spaceType, input.operation.params.spaceKey)
 	entry.did == input.operation.params.memberDid
 	rank := member_rank(entry)
 }
@@ -268,7 +277,7 @@ default allow := false
 # Public member list: anyone can read
 allow if {
 	input.operation.nsid in {"town.muni.arbiter.resolveSpaceMembers", "town.muni.arbiter.getSpaceMembers"}
-	space_config(input.operation.params.spaceKey).publicMembers == true
+	space_config(input.operation.params.spaceType, input.operation.params.spaceKey).publicMembers == true
 }
 
 allow if {
@@ -284,7 +293,7 @@ allow if {
 # Public records: anyone can read space config
 allow if {
 	input.operation.nsid == "town.muni.arbiter.getSpaceConfig"
-	space_config(input.operation.params.spaceKey).publicRecords == true
+	space_config(input.operation.params.spaceType, input.operation.params.spaceKey).publicRecords == true
 }
 
 allow if {
@@ -341,7 +350,7 @@ allow if {
 allow if {
 	input.operation.nsid == "town.muni.arbiter.deleteArbiter"
 	requester_rank >= access_rank("Owner")
-	count(space_members("$admin")) == 1
+	count(space_members("town.muni.arbiter.config.adminSpace", "$admin")) == 1
 }
 
 allow if {

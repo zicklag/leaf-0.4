@@ -1,4 +1,13 @@
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Build the composite key used for space lookups: <spaceType>/<spaceKey>. */
+function spaceId(type: string, key: string): string {
+	return `${type}/${key}`;
+}
+
+// ---------------------------------------------------------------------------
 // Simulator — multi-arbiter simulation using policy-core-wasm for auth.
 //
 // Each arbiter stores its own state and policy. Before any mutation or data
@@ -188,22 +197,28 @@ export class Simulator {
 
       case NSID.getSpaceConfig: {
         const sk = params.spaceKey as string | undefined;
-        return { config: sk ? arbiter.spaces.get(sk)?.config ?? null : null };
+        const st = params.spaceType as string | undefined;
+        if (!sk || !st) return { config: null };
+        return { config: arbiter.spaces.get(spaceId(st, sk))?.config ?? null };
       }
 
       case NSID.getSpaceMembers: {
         const sk = params.spaceKey as string | undefined;
-        return { members: sk ? arbiter.spaces.get(sk)?.members ?? [] : [] };
+        const st = params.spaceType as string | undefined;
+        if (!sk || !st) return { members: [] };
+        return { members: arbiter.spaces.get(spaceId(st, sk))?.members ?? [] };
       }
 
       case NSID.resolveSpaceMembers: {
         // Return fully resolved members so the calling policy receives real
         // DIDs — no space:<key> entries that only make sense on this arbiter.
         const sk = params.spaceKey as string | undefined;
-        if (!sk) return { members: [] };
+        const st = params.spaceType as string | undefined;
+        if (!sk || !st) return { members: [] };
         const members = await this.resolveSpaceMembersInner(
           arbiter,
           callerDid ?? arbiterDid,
+          st,
           sk,
         );
         return { members };
@@ -228,13 +243,14 @@ export class Simulator {
   private async resolveSpaceMembersInner(
     arbiter: ArbiterState,
     callerDid: Did,
+    spaceType: string,
     spaceKey: SpaceKey,
   ): Promise<MemberEntry[]> {
     const result = await this.evaluateEntryPoint(
       arbiter,
       callerDid,
       NSID.resolveSpaceMembers,
-      { spaceKey },
+      { spaceKey, spaceType },
       'data.arbiter.resolve_result',
     );
     if (result.error) return [];
@@ -261,7 +277,7 @@ export class Simulator {
     this.arbiters.set(arbiterDid, {
       did: arbiterDid, version: 1, config, policy,
       online: true,
-      spaces: new Map([[adminSpace.key, adminSpace]]),
+      spaces: new Map([[spaceId(adminSpace.spaceType, adminSpace.key), adminSpace]]),
     });
     this.time++;
     return { status: 'ok' };
@@ -293,7 +309,7 @@ export class Simulator {
   async deleteArbiter(arbiterDid: Did, callerDid: Did, log?: PolicyCheckLog): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    const ok = await this.checkPolicy(arbiter, callerDid, NSID.deleteArbiter, { spaceKey: '$admin' }, log);
+    const ok = await this.checkPolicy(arbiter, callerDid, NSID.deleteArbiter, { spaceKey: '$admin', spaceType: 'town.muni.arbiter.config.adminSpace' }, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
     this.arbiters.delete(arbiterDid);
     this.time++;
@@ -307,10 +323,10 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    if (arbiter.spaces.has(params.spaceKey)) return { status: 'error', error: 'ErrSpaceExists' };
+    if (arbiter.spaces.has(spaceId(params.spaceType, params.spaceKey))) return { status: 'error', error: 'ErrSpaceExists' };
     const ok = await this.checkPolicy(arbiter, callerDid, NSID.createSpace, params, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
-    arbiter.spaces.set(params.spaceKey, {
+    arbiter.spaces.set(spaceId(params.spaceType, params.spaceKey), {
       key: params.spaceKey, spaceType: params.spaceType,
       config: { ...params.config }, members: [],
     });
@@ -324,7 +340,10 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    const space = arbiter.spaces.get(params.spaceKey);
+    const sk = params.spaceKey;
+    const st = params.spaceType as string | undefined;
+    if (!st) return { status: 'error', error: 'ErrMissingParam: spaceType' };
+    const space = arbiter.spaces.get(spaceId(st, sk));
     if (!space) return { status: 'error', error: 'ErrSpaceNotExists' };
     const ok = await this.checkPolicy(arbiter, callerDid, NSID.getSpaceConfig, params, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
@@ -338,7 +357,10 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    const space = arbiter.spaces.get(params.spaceKey);
+    const sk = params.spaceKey;
+    const st = params.spaceType as string | undefined;
+    if (!st) return { status: 'error', error: 'ErrMissingParam: spaceType' };
+    const space = arbiter.spaces.get(spaceId(st, sk));
     if (!space) return { status: 'error', error: 'ErrSpaceNotExists' };
     const ok = await this.checkPolicy(arbiter, callerDid, NSID.setSpaceConfig, params, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
@@ -353,10 +375,13 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    if (!arbiter.spaces.has(params.spaceKey)) return { status: 'error', error: 'ErrSpaceNotExists' };
+    const __sk = params.spaceKey;
+    const __st = params.spaceType as string | undefined;
+    if (!__st) return { status: 'error', error: 'ErrMissingParam: spaceType' };
+    if (!arbiter.spaces.has(spaceId(__st, __sk))) return { status: 'error', error: 'ErrSpaceNotExists' };
     const ok = await this.checkPolicy(arbiter, callerDid, NSID.deleteSpace, params, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
-    arbiter.spaces.delete(params.spaceKey);
+    arbiter.spaces.delete(spaceId(__st, __sk));
     arbiter.version++;
     this.time++;
     return { status: 'ok' };
@@ -378,7 +403,10 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    const space = arbiter.spaces.get(params.spaceKey);
+    const sk = params.spaceKey;
+    const st = params.spaceType as string | undefined;
+    if (!st) return { status: 'error', error: 'ErrMissingParam: spaceType' };
+    const space = arbiter.spaces.get(spaceId(st, sk));
     if (!space) return { status: 'error', error: 'ErrSpaceNotExists' };
     const ok = await this.checkPolicy(arbiter, callerDid, NSID.getSpaceMembers, params, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
@@ -394,7 +422,10 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    const space = arbiter.spaces.get(params.spaceKey);
+    const sk = params.spaceKey;
+    const st = params.spaceType as string | undefined;
+    if (!st) return { status: 'error', error: 'ErrMissingParam: spaceType' };
+    const space = arbiter.spaces.get(spaceId(st, sk));
     if (!space) return { status: 'error', error: 'ErrSpaceNotExists' };
 
     // Auth check
@@ -402,7 +433,7 @@ export class Simulator {
     if (!auth.allowed) return { status: 'error', error: auth.error ?? 'ErrPermissionDenied' };
 
     // Get fully resolved members
-    const members = await this.resolveSpaceMembersInner(arbiter, callerDid, params.spaceKey);
+    const members = await this.resolveSpaceMembersInner(arbiter, callerDid, params.spaceType as string, params.spaceKey);
     return {
       status: 'ok',
       members,
@@ -417,7 +448,10 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    const space = arbiter.spaces.get(params.spaceKey);
+    const sk = params.spaceKey;
+    const st = params.spaceType as string | undefined;
+    if (!st) return { status: 'error', error: 'ErrMissingParam: spaceType' };
+    const space = arbiter.spaces.get(spaceId(st, sk));
     if (!space) return { status: 'error', error: 'ErrSpaceNotExists' };
     const ok = await this.checkPolicy(arbiter, callerDid, NSID.setSpaceMemberAccess, params, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
@@ -439,7 +473,10 @@ export class Simulator {
   ): Promise<OpResult> {
     const arbiter = this.arbiters.get(arbiterDid);
     if (!arbiter) return { status: 'error', error: 'ErrArbiterNotExists' };
-    const space = arbiter.spaces.get(params.spaceKey);
+    const sk = params.spaceKey;
+    const st = params.spaceType as string | undefined;
+    if (!st) return { status: 'error', error: 'ErrMissingParam: spaceType' };
+    const space = arbiter.spaces.get(spaceId(st, sk));
     if (!space) return { status: 'error', error: 'ErrSpaceNotExists' };
     const ok = await this.checkPolicy(arbiter, callerDid, NSID.removeSpaceMember, params, log);
     if (!ok.allowed) return { status: 'error', error: ok.error ?? 'ErrPermissionDenied' };
@@ -470,7 +507,7 @@ export class Simulator {
       const spaces: SpaceSnapshot[] = [];
       for (const [key, space] of arb.spaces) {
         spaces.push({
-          key, spaceType: space.spaceType,
+          key: space.key, spaceType: space.spaceType,
           config: { ...space.config },
           members: space.members.map((m) => ({ did: m.did, access: { ...m.access } })),
         });
@@ -485,7 +522,7 @@ export class Simulator {
     for (const a of snapshot.arbiters) {
       const spaces = new Map<SpaceKey, Space>();
       for (const s of a.spaces) {
-        spaces.set(s.key, {
+        spaces.set(spaceId(s.spaceType, s.key), {
           key: s.key, spaceType: s.spaceType,
           config: { ...s.config },
           members: s.members.map((m) => ({ did: m.did, access: { ...m.access } })),

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use arbiter_core::{Event, IoAction, NSID, StateMachine};
+use arbiter_core::{Event, IoAction, NSID, SpaceId, StateMachine};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -159,6 +159,11 @@ impl TestDriver {
         let mut params = serde_json::json!({
             "arbiterDid": arbiter_did,
             "spaceKey": space_key,
+            "spaceType": if space_key == "$admin" {
+                "town.muni.arbiter.config.adminSpace"
+            } else {
+                "town.muni.arbiter.config.space"
+            },
         });
         if let Some(extras) = extra_params {
             if let Some(obj) = extras.as_object() {
@@ -245,9 +250,15 @@ impl TestDriver {
         // The rego policy calls xrpc_remote with method
         // "town.muni.arbiter.resolveSpaceMembers". Route through the target
         // state machine just like the server would.
+        let space_key = input.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
+        let space_type = input.get("spaceType").and_then(|v| v.as_str()).unwrap_or(
+            if space_key == "$admin" { "town.muni.arbiter.config.adminSpace" }
+            else { "town.muni.arbiter.config.space" }
+        );
         let params = serde_json::json!({
             "arbiterDid": base_did,
-            "spaceKey": input.get("spaceKey").and_then(|v| v.as_str()).unwrap_or(""),
+            "spaceKey": space_key,
+            "spaceType": space_type,
         });
         let event = Event::IncomingXrpc {
             method: NSID::RESOLVE_SPACE_MEMBERS.into(),
@@ -325,9 +336,13 @@ impl TestDriver {
         }
     }
 
-    pub fn set_space_config(&mut self, arbiter_did: &str, space_key: &str, config: Value) {
+    pub fn set_space_config(&mut self, arbiter_did: &str, space_key: &str, space_type: &str, config: Value) {
         if let Some(sm) = self.machines.get_mut(arbiter_did) {
-            if let Some(space) = sm.arbiter.spaces.get_mut(space_key) {
+            let id = SpaceId {
+                key: space_key.into(),
+                space_type: space_type.into(),
+            };
+            if let Some(space) = sm.arbiter.get_space_mut(&id) {
                 space.config = config;
             }
         }

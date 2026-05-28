@@ -101,8 +101,11 @@ class TestHarness {
     userDid: Did,
     spaceKey: SpaceKey,
   ): Promise<MemberEntry[]> {
+    const spaceType = spaceKey === '$admin'
+      ? 'town.muni.arbiter.config.adminSpace'
+      : 'town.muni.arbiter.config.space';
     const result = await this.sim.resolveSpaceMembers(arbiterDid, userDid, {
-      spaceKey,
+      spaceKey, spaceType,
     });
     if (result.status !== 'ok' || !result.members) {
       throw new Error(
@@ -120,11 +123,14 @@ class TestHarness {
     operation: string,
     params: Record<string, unknown>,
   ): Promise<OpResult> {
+    const autoSpaceType = spaceKey === '$admin'
+      ? 'town.muni.arbiter.config.adminSpace'
+      : 'town.muni.arbiter.config.space';
     switch (operation) {
       case 'createSpace':
         return this.sim.createSpace(arbiterDid, userDid, {
           spaceKey,
-          spaceType: 'town.muni.arbiter.config.space',
+          spaceType: autoSpaceType,
           config: params.config as Record<string, unknown> ?? {
             $type: 'town.muni.arbiter.config.space',
             publicRecords: false,
@@ -132,7 +138,7 @@ class TestHarness {
           },
         });
       case 'deleteSpace':
-        return this.sim.deleteSpace(arbiterDid, userDid, { spaceKey });
+        return this.sim.deleteSpace(arbiterDid, userDid, { spaceKey, spaceType: 'town.muni.arbiter.config.space' });
       case 'setSpaceMemberAccess': {
         const targetParams = params as {
           memberDid: Did;
@@ -140,6 +146,7 @@ class TestHarness {
         };
         return this.sim.setSpaceMemberAccess(arbiterDid, userDid, {
           spaceKey,
+          spaceType: autoSpaceType,
           memberDid: targetParams.memberDid,
           access: targetParams.access,
         });
@@ -147,12 +154,13 @@ class TestHarness {
       case 'removeSpaceMember':
         return this.sim.removeSpaceMember(arbiterDid, userDid, {
           spaceKey,
+          spaceType: autoSpaceType,
           memberDid: params.memberDid as Did,
         });
       case 'deleteArbiter':
         return this.sim.deleteArbiter(arbiterDid, userDid);
       case 'resolveSpaceMembers':
-        return this.sim.resolveSpaceMembers(arbiterDid, userDid, { spaceKey });
+        return this.sim.resolveSpaceMembers(arbiterDid, userDid, { spaceKey, spaceType: autoSpaceType });
       default:
         throw new Error(`Unknown operation: ${operation}`);
     }
@@ -253,10 +261,10 @@ describe('access-levels policy', () => {
 
     it('owner cannot delete $admin space', async () => {
       h.createDefaultArbiter('org', 'alice');
-      const result = await h.sim.deleteSpace('org', 'alice', { spaceKey: '$admin' });
+      const result = await h.sim.deleteSpace('org', 'alice', { spaceKey: '$admin', spaceType: 'town.muni.arbiter.config.adminSpace' });
       expect(result.status).toBe('error');
       // $admin should still exist
-      expect(h.sim.arbiters.get('org')?.spaces.has('$admin')).toBe(true);
+      expect(h.sim.arbiters.get('org')?.spaces.has('town.muni.arbiter.config.adminSpace/$admin')).toBe(true);
     });
   });
 
@@ -379,7 +387,7 @@ describe('access-levels policy', () => {
         access: access('Owner'),
       });
       await h.assertOk('org', 'alice', '$admin', 'setSpaceMemberAccess', {
-        memberDid: 'space:team',
+        memberDid: 'space:town.muni.arbiter.config.space/team',
         access: access('ReadMemberList'),
       });
       // Bob's effective access in $admin should be ReadMemberList (limited by parent)
@@ -395,7 +403,7 @@ describe('access-levels policy', () => {
         access: access('IsMember'),
       });
       await h.assertOk('org', 'alice', '$admin', 'setSpaceMemberAccess', {
-        memberDid: 'space:team',
+        memberDid: 'space:town.muni.arbiter.config.space/team',
         access: access('IsMember'),
       });
       const members = await h.resolvedMembers('org', 'alice', '$admin');
@@ -410,7 +418,7 @@ describe('access-levels policy', () => {
         access: access('IsMember'),
       });
       // Make the space have public members
-      const space = h.sim.arbiters.get('org')!.spaces.get('team')!;
+      const space = h.sim.arbiters.get('org')!.spaces.get('town.muni.arbiter.config.space/team')!;
       space.config = { ...space.config, publicMembers: true };
 
       const members = await h.resolvedMembers('org', 'stranger', 'team');
@@ -430,7 +438,7 @@ describe('access-levels policy', () => {
 
       // Partner creates "shared" with public members
       await h.assertOk('partner', 'carol', 'shared', 'createSpace');
-      const shared = h.sim.arbiters.get('partner')!.spaces.get('shared')!;
+      const shared = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/shared')!;
       shared.config = { ...shared.config, publicMembers: true };
       await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
         memberDid: 'dave',
@@ -439,7 +447,7 @@ describe('access-levels policy', () => {
 
       await h.assertOk('org', 'alice', 'team', 'createSpace');
       await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
-        memberDid: 'partner|shared',
+        memberDid: 'partner|town.muni.arbiter.config.space|shared',
         access: access('IsMember'),
       });
 
@@ -452,7 +460,7 @@ describe('access-levels policy', () => {
       h.createDefaultArbiter('partner', 'carol');
 
       await h.assertOk('partner', 'carol', 'shared', 'createSpace');
-      const shared = h.sim.arbiters.get('partner')!.spaces.get('shared')!;
+      const shared = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/shared')!;
       shared.config = { ...shared.config, publicMembers: true };
       await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
         memberDid: 'dave',
@@ -461,7 +469,7 @@ describe('access-levels policy', () => {
 
       await h.assertOk('org', 'alice', 'team', 'createSpace');
       await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
-        memberDid: 'partner|shared',
+        memberDid: 'partner|town.muni.arbiter.config.space|shared',
         access: access('ReadMemberList'),
       });
 
@@ -474,7 +482,7 @@ describe('access-levels policy', () => {
       h.createDefaultArbiter('partner', 'carol');
 
       await h.assertOk('partner', 'carol', 'users', 'createSpace');
-      const users = h.sim.arbiters.get('partner')!.spaces.get('users')!;
+      const users = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/users')!;
       users.config = { ...users.config, publicMembers: true };
       await h.assertOk('partner', 'carol', 'users', 'setSpaceMemberAccess', {
         memberDid: 'dave',
@@ -483,7 +491,7 @@ describe('access-levels policy', () => {
 
       await h.assertOk('org', 'alice', 'team', 'createSpace');
       await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
-        memberDid: 'partner|users',
+        memberDid: 'partner|town.muni.arbiter.config.space|users',
         access: access('IsMember'),
       });
 
@@ -505,7 +513,7 @@ describe('access-levels policy', () => {
       // org tries to reference the restricted space
       await h.assertOk('org', 'alice', 'team', 'createSpace');
       await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
-        memberDid: 'partner|restricted',
+        memberDid: 'partner|town.muni.arbiter.config.space|restricted',
         access: access('IsMember'),
       });
 
@@ -533,7 +541,7 @@ describe('access-levels policy', () => {
       // org references the shared space
       await h.assertOk('org', 'alice', 'team', 'createSpace');
       await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
-        memberDid: 'partner|shared',
+        memberDid: 'partner|town.muni.arbiter.config.space|shared',
         access: access('IsMember'),
       });
 
@@ -589,7 +597,7 @@ describe('access-levels policy', () => {
       h.createDefaultArbiter('partner', 'carol');
 
       await h.assertOk('partner', 'carol', 'shared', 'createSpace');
-      const shared = h.sim.arbiters.get('partner')!.spaces.get('shared')!;
+      const shared = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/shared')!;
       shared.config = { ...shared.config, publicMembers: true };
       await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
         memberDid: 'dave',
@@ -598,7 +606,7 @@ describe('access-levels policy', () => {
 
       await h.assertOk('org', 'alice', 'team', 'createSpace');
       await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
-        memberDid: 'partner|shared',
+        memberDid: 'partner|town.muni.arbiter.config.space|shared',
         access: access('ReadMemberList'),
       });
 
@@ -629,7 +637,7 @@ describe('access-levels policy', () => {
       await h.assertDenied('org', 'stranger', 'team', 'resolveSpaceMembers');
 
       // Make public: stranger can see
-      const team = h.sim.arbiters.get('org')!.spaces.get('team')!;
+      const team = h.sim.arbiters.get('org')!.spaces.get('town.muni.arbiter.config.space/team')!;
       team.config = { ...team.config, publicMembers: true };
       const members = await h.resolvedMembers('org', 'stranger', 'team');
       assertMemberExists(members, 'bob', 'IsMember');
@@ -687,7 +695,7 @@ describe('access-levels policy', () => {
       h.createDefaultArbiter('org', 'alice');
       // Match DetailPanel handleAddMember flow
       const result = await h.sim.setSpaceMemberAccess('org', 'alice', {
-        spaceKey: '$admin',
+        spaceKey: '$admin', spaceType: 'town.muni.arbiter.config.adminSpace',
         memberDid: 'bob',
         access: { $type: 'town.muni.arbiter.config.accessLevel', level: 'IsMember' },
       });
@@ -711,7 +719,7 @@ describe('access-levels policy', () => {
       });
       expect(result.status).toBe('ok');
 
-      const space = h.sim.arbiters.get('org')!.spaces.get('test');
+      const space = h.sim.arbiters.get('org')!.spaces.get('town.muni.arbiter.config.space/test');
       expect(space).toBeDefined();
       expect(space!.key).toBe('test');
     });
@@ -732,13 +740,13 @@ describe('access-levels policy', () => {
 
       // Add moderators as a local space member to the members space with RemoveMembers access
       await h.assertOk('arb1', 'alice', 'members', 'setSpaceMemberAccess', {
-        memberDid: 'space:moderators',
+        memberDid: 'space:town.muni.arbiter.config.space/moderators',
         access: access('RemoveMembers'),
       });
 
       // Add members as a local space member to #general with RemoveMembers access
       await h.assertOk('arb1', 'alice', '#general', 'setSpaceMemberAccess', {
-        memberDid: 'space:members',
+        memberDid: 'space:town.muni.arbiter.config.space/members',
         access: access('RemoveMembers'),
       });
 
@@ -776,12 +784,12 @@ describe('access-levels policy', () => {
       await h.assertOk('muni-town', 'alice', 'moderators', 'createSpace');
 
       // muni-town/members is public so remote arbiters can read its members
-      const muniMembers = h.sim.arbiters.get('muni-town')!.spaces.get('members')!;
+      const muniMembers = h.sim.arbiters.get('muni-town')!.spaces.get('town.muni.arbiter.config.space/members')!;
       muniMembers.config = { ...muniMembers.config, publicMembers: true };
 
       // muni-town/members delegates to moderators (local) and has george
       await h.assertOk('muni-town', 'alice', 'members', 'setSpaceMemberAccess', {
-        memberDid: 'space:moderators',
+        memberDid: 'space:town.muni.arbiter.config.space/moderators',
         access: access('RemoveMembers'),
       });
       await h.assertOk('muni-town', 'alice', 'members', 'setSpaceMemberAccess', {
@@ -806,13 +814,13 @@ describe('access-levels policy', () => {
         access: access('IsMember'),
       });
       await h.assertOk('spicy-lobster', 'bob', 'members', 'setSpaceMemberAccess', {
-        memberDid: 'muni-town|members',
+        memberDid: 'muni-town|town.muni.arbiter.config.space|members',
         access: access('IsMember'),
       });
 
       // spicy-lobster/#general delegates to members
       await h.assertOk('spicy-lobster', 'bob', '#general', 'setSpaceMemberAccess', {
-        memberDid: 'space:members',
+        memberDid: 'space:town.muni.arbiter.config.space/members',
         access: access('RemoveMembers'),
       });
 

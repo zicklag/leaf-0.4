@@ -80,9 +80,10 @@ export function buildMemberDid(
     case 'user':
       return value;
     case 'localspace':
-      return `space:${value}`;
+      return `space:town.muni.arbiter.config.space/${value}`;
     case 'remotespace':
-      return `${remoteArbiterDid}|${value}`;
+      // Remote space DIDs use the format `arbiterDid|spaceType|spaceKey`
+      return `${remoteArbiterDid}|town.muni.arbiter.config.space|${value}`;
   }
 }
 
@@ -91,10 +92,15 @@ export function parseMemberDid(
   did: string,
 ): { kind: 'user' | 'localspace' | 'remotespace'; display: string } {
   if (did.startsWith('space:')) {
-    return { kind: 'localspace', display: did.slice(6) };
+    const rest = did.slice(6);
+    const slashIdx = rest.lastIndexOf('/');
+    return { kind: 'localspace', display: slashIdx >= 0 ? rest.slice(slashIdx + 1) : rest };
   }
   if (did.includes('|')) {
-    const [arb, key] = did.split('|', 2);
+    const parts = did.split('|');
+    // Format: arbiterDid|spaceType|spaceKey  (or old: arbiterDid|spaceKey)
+    const arb = parts[0];
+    const key = parts[2] ?? parts[1];
     return { kind: 'remotespace', display: `${arb}/${key}` };
   }
   return { kind: 'user', display: did };

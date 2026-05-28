@@ -96,11 +96,17 @@
 
   async function handleRemoveMember(entry: { did: string }) {
     if (!currentUser || !selectedSpace) return;
+    // Extract the space key from the full DID for local/remote spaces
+    const memberValue = entry.did.startsWith('space:')
+      ? (() => { const rest = entry.did.slice(6); const i = rest.lastIndexOf('/'); return i >= 0 ? rest.slice(i + 1) : rest; })()
+      : entry.did.includes('|')
+        ? (() => { const parts = entry.did.split('|'); return { arbiterDid: parts[0], spaceKey: parts[2] ?? parts[1] }; })()
+        : entry.did;
     const result = await app.processOperation(
       selectedArbiter!.did, currentUser.did, selectedSpace.key,
       {
         type: 'RemoveSpaceMember',
-        member: { tag: entry.did.startsWith('space:') ? 'MemberLocalSpace' : entry.did.includes('|') ? 'MemberRemoteSpace' : 'MemberDid', value: entry.did },
+        member: { tag: entry.did.startsWith('space:') ? 'MemberLocalSpace' : entry.did.includes('|') ? 'MemberRemoteSpace' : 'MemberDid', value: memberValue },
       },
     );
     if (result.status === 'ok') {
