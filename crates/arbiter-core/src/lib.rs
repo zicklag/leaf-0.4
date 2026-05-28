@@ -166,7 +166,7 @@ pub fn is_readonly_nsid(nsid: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Rego ↔ serde_json conversion  (pub(crate) for the test harness)
+// Rego ↔ serde_json conversion  (pub for consumers like integration tests)
 // ---------------------------------------------------------------------------
 
 pub fn serde_to_rego(val: &Value) -> regorus::Value {

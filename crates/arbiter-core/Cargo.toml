@@ -5,7 +5,6 @@ edition = "2024"
 
 [features]
 default = []
-test-harness = []
 
 [dependencies]
 policy-core = { path = "../policy-core" }

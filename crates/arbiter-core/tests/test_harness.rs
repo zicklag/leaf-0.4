@@ -18,9 +18,6 @@ use serde_json::Value;
 pub struct TestDriver {
     pub machines: HashMap<String, StateMachine>,
     default_policy: String,
-    /// The DID of the user who initiated the current operation,
-    /// forwarded to remote servers for access control.
-    current_caller_did: String,
     /// Track which arbiters are online for offline tests.
     online: HashSet<String>,
 }
@@ -30,7 +27,6 @@ impl TestDriver {
         Self {
             machines: HashMap::new(),
             default_policy: default_policy.to_string(),
-            current_caller_did: String::new(),
             online: HashSet::new(),
         }
     }
@@ -153,7 +149,6 @@ impl TestDriver {
         operation: &str,
         extra_params: Option<Value>,
     ) -> Result<Option<Value>, String> {
-        self.current_caller_did = user_did.to_string();
         let nsid = self.operation_to_nsid(operation);
 
         let sm = match self.machines.get_mut(arbiter_did) {

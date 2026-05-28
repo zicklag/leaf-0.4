@@ -1,5 +1,5 @@
 //! Integration tests for the access-levels policy via the sans-IO
-//! [`TestDriver`] (which is behind the `test-harness` feature).
+//! [`TestDriver`] harness.
 //!
 //! Ported from `arbiter-simulator/src/lib/simulator.test.ts`.
 
