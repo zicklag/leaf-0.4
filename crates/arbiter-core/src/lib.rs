@@ -51,9 +51,6 @@ pub enum Event {
 
     /// A remote XRPC query (from policy evaluation) completed.
     XrpcRemoteResult { result: Result<Value, String>, job_id: JobId },
-
-    /// The IO layer is shutting down.
-    Shutdown,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +233,6 @@ pub struct StateMachine {
     pub arbiter: ArbiterState,
     next_job_id: JobId,
     pending_eval: Option<PendingEval>,
-    pub shutdown: bool,
 }
 
 impl StateMachine {
@@ -245,7 +241,6 @@ impl StateMachine {
             arbiter,
             next_job_id: 1,
             pending_eval: None,
-            shutdown: false,
         }
     }
 
@@ -265,10 +260,6 @@ impl StateMachine {
 
     pub fn handle_event(&mut self, event: Event) -> Vec<IoAction> {
         match event {
-            Event::Shutdown => {
-                self.shutdown = true;
-                vec![]
-            }
             Event::IncomingXrpc { method, params, caller_did } => {
                 self.start_eval_or_execute(method, params, caller_did)
             }
@@ -724,13 +715,5 @@ mod tests {
         assert!(matches!(&actions[0], IoAction::SendResponse { status: 200, .. }));
     }
 
-    #[test]
-    fn test_shutdown() {
-        let mut sm = StateMachine::create(
-            "did:plc:abc".into(), serde_json::json!({}), "package a".into(), "alice".into(),
-        );
-        assert!(!sm.shutdown);
-        sm.handle_event(Event::Shutdown);
-        assert!(sm.shutdown);
-    }
+
 }

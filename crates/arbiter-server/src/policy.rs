@@ -10,7 +10,6 @@ use atproto_identity::resolve::IdentityResolver;
 use policy_core::{HostRequest, VmResult, VmSession};
 use regorus::Value as RegoValue;
 use serde_json::Value;
-use tracing;
 
 use crate::state::ArbiterCollection;
 
@@ -18,9 +17,9 @@ use crate::state::ArbiterCollection;
 // NSID constants
 // ---------------------------------------------------------------------------
 
-pub struct NSID;
+pub struct Nsid;
 
-impl NSID {
+impl Nsid {
     pub const GET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.getArbiterConfig";
     pub const SET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.setArbiterConfig";
     pub const DELETE_ARBITER: &'static str = "town.muni.arbiter.deleteArbiter";
@@ -38,11 +37,11 @@ impl NSID {
 
 pub fn is_native_nsid(nsid: &str) -> bool {
     matches!(nsid,
-        NSID::GET_ARBITER_CONFIG
-        | NSID::GET_SPACE_CONFIG
-        | NSID::GET_SPACE_MEMBERS
-        | NSID::RESOLVE_SPACE_MEMBERS
-        | NSID::LIST_SPACES
+        Nsid::GET_ARBITER_CONFIG
+        | Nsid::GET_SPACE_CONFIG
+        | Nsid::GET_SPACE_MEMBERS
+        | Nsid::RESOLVE_SPACE_MEMBERS
+        | Nsid::LIST_SPACES
     )
 }
 
@@ -123,18 +122,18 @@ fn resolve_local(
 ) -> Value {
     let space_key = params.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
     match nsid {
-        NSID::GET_SPACE_MEMBERS => {
+        Nsid::GET_SPACE_MEMBERS => {
             let members = collection.space_members(arbiter_did, space_key);
             serde_json::json!({ "members": members })
         }
-        NSID::GET_SPACE_CONFIG => {
+        Nsid::GET_SPACE_CONFIG => {
             let config = collection.space_config(arbiter_did, space_key);
             serde_json::json!({ "config": config })
         }
-        NSID::GET_ARBITER_CONFIG => {
+        Nsid::GET_ARBITER_CONFIG => {
             serde_json::json!({ "config": collection.get(arbiter_did).map(|a| &a.config) })
         }
-        NSID::LIST_SPACES => {
+        Nsid::LIST_SPACES => {
             let spaces: Vec<Value> = collection.get(arbiter_did)
                 .map(|a| a.spaces.values().map(|s| serde_json::json!({
                     "key": s.key, "spaceType": s.space_type,

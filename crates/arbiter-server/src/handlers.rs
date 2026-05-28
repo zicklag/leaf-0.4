@@ -14,7 +14,7 @@ use salvo::prelude::*;
 use salvo::writing::Json;
 use serde_json::Value;
 
-use crate::policy::{self, NSID};
+use crate::policy::{self, Nsid};
 use crate::state::{ArbiterCollection, MemberEntry, Space};
 use crate::ServerState;
 
@@ -116,7 +116,7 @@ pub async fn get_arbiter_config(req: &mut Request, depot: &mut Depot, res: &mut 
     let did = match arbiter_did(&body) { Some(d) => d, None => { res.render(Json(err("missing arbiterDid"))); return; }};
 
     let coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::GET_ARBITER_CONFIG, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::GET_ARBITER_CONFIG, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -137,7 +137,7 @@ pub async fn set_arbiter_config(req: &mut Request, depot: &mut Depot, res: &mut 
     let did = match arbiter_did(&body) { Some(d) => d, None => { res.render(Json(err("missing arbiterDid"))); return; }};
 
     let mut coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::SET_ARBITER_CONFIG, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::SET_ARBITER_CONFIG, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -162,7 +162,7 @@ pub async fn delete_arbiter(req: &mut Request, depot: &mut Depot, res: &mut Resp
     let did = match arbiter_did(&body) { Some(d) => d, None => { res.render(Json(err("missing arbiterDid"))); return; }};
 
     let mut coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::DELETE_ARBITER, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::DELETE_ARBITER, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -190,7 +190,7 @@ pub async fn create_space(req: &mut Request, depot: &mut Depot, res: &mut Respon
     if coll.arbiters.get(&did).unwrap().spaces.contains_key(&sk) { res.render(Json(err("ErrSpaceExists"))); return; }
 
     let params = serde_json::json!({"spaceKey": sk, "spaceType": body.get("spaceType"), "config": body.get("config")});
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::CREATE_SPACE, &params).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::CREATE_SPACE, &params).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -217,7 +217,7 @@ pub async fn get_space_config(req: &mut Request, depot: &mut Depot, res: &mut Re
     let sk = match space_key(&body) { Some(k) => k, None => { res.render(Json(err("missing spaceKey"))); return; }};
 
     let coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::GET_SPACE_CONFIG, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::GET_SPACE_CONFIG, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -239,11 +239,11 @@ pub async fn set_space_config(req: &mut Request, depot: &mut Depot, res: &mut Re
     let sk = match space_key(&body) { Some(k) => k, None => { res.render(Json(err("missing spaceKey"))); return; }};
 
     let mut coll = state.arbiters.lock().await;
-    if coll.get(&did).map(|a| a.spaces.contains_key(&sk)).unwrap_or(false) == false {
+    if !coll.get(&did).map(|a| a.spaces.contains_key(&sk)).unwrap_or(false) {
         res.render(Json(err("ErrSpaceNotExists"))); return;
     }
 
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::SET_SPACE_CONFIG, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::SET_SPACE_CONFIG, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -275,7 +275,7 @@ pub async fn delete_space(req: &mut Request, depot: &mut Depot, res: &mut Respon
     if sk == "$admin" { res.render(Json(err("ErrCannotDeleteAdminSpace"))); return; }
 
     let mut coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::DELETE_SPACE, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::DELETE_SPACE, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -299,7 +299,7 @@ pub async fn list_spaces(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let did = match arbiter_did(&body) { Some(d) => d, None => { res.render(Json(err("missing arbiterDid"))); return; }};
 
     let coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::LIST_SPACES, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::LIST_SPACES, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -323,7 +323,7 @@ pub async fn get_space_members(req: &mut Request, depot: &mut Depot, res: &mut R
     let sk = match space_key(&body) { Some(k) => k, None => { res.render(Json(err("missing spaceKey"))); return; }};
 
     let coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::GET_SPACE_MEMBERS, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::GET_SPACE_MEMBERS, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -348,7 +348,7 @@ pub async fn resolve_space_members(req: &mut Request, depot: &mut Depot, res: &m
     let sk = match space_key(&body) { Some(k) => k, None => { res.render(Json(err("missing spaceKey"))); return; }};
 
     let coll = state.arbiters.lock().await;
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::RESOLVE_SPACE_MEMBERS, &body).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::RESOLVE_SPACE_MEMBERS, &body).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -377,7 +377,7 @@ pub async fn set_space_member_access(req: &mut Request, depot: &mut Depot, res: 
 
     let mut coll = state.arbiters.lock().await;
     let params = serde_json::json!({"spaceKey": sk, "memberDid": md, "access": body.get("access")});
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::SET_SPACE_MEMBER_ACCESS, &params).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::SET_SPACE_MEMBER_ACCESS, &params).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -411,7 +411,7 @@ pub async fn remove_space_member(req: &mut Request, depot: &mut Depot, res: &mut
 
     let mut coll = state.arbiters.lock().await;
     let params = serde_json::json!({"spaceKey": sk, "memberDid": md});
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::REMOVE_SPACE_MEMBER, &params).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::REMOVE_SPACE_MEMBER, &params).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -486,7 +486,7 @@ pub async fn update_did_doc(req: &mut Request, depot: &mut Depot, res: &mut Resp
 
     let coll = state.arbiters.lock().await;
     let params = serde_json::json!({ "config": config });
-    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, NSID::UPDATE_DID_DOC, &params).await {
+    let allowed = match check_allow(&coll, &state.client, &*state.identity_resolver, &did, &caller, Nsid::UPDATE_DID_DOC, &params).await {
         Ok(a) => a, Err(e) => { res.render(Json(err(&e))); return; }
     };
     if !allowed { deny(res); return; }
@@ -606,7 +606,7 @@ async fn evaluate_resolve_result(
     let params = serde_json::json!({ "spaceKey": space_key });
     policy::evaluate(
         &arbiter.policy, &arbiter.config,
-        caller_did, NSID::RESOLVE_SPACE_MEMBERS, &params,
+        caller_did, Nsid::RESOLVE_SPACE_MEMBERS, &params,
         &["data.arbiter.resolve_result"],
         arbiter_did, coll, client, identity_resolver,
     ).await
