@@ -3,6 +3,10 @@ name = "arbiter-core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+test-harness = []
+
 [dependencies]
 policy-core = { path = "../policy-core" }
 regorus = { version = "0.10.1", default-features = false }
