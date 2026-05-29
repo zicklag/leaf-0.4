@@ -303,7 +303,7 @@
         {:else if newMemberType === 'MemberLocalSpace'}
           <select bind:value={newMemberValue}>
             <option value="">-- Select local space --</option>
-            {#each selectedArbiter?.spaces ?? [] as space}
+            {#each [...(selectedArbiter?.spaces ?? [])].sort((a, b) => a.key === '$admin' ? -1 : b.key === '$admin' ? 1 : 0) as space}
               <option value={space.key}>{space.key}</option>
             {/each}
           </select>

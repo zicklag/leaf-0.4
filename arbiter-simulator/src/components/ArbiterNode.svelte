@@ -49,7 +49,7 @@
   </div>
 
   <div class="spaces-list">
-    {#each arbiter.spaces as space}
+    {#each [...arbiter.spaces].sort((a, b) => a.key === '$admin' ? -1 : b.key === '$admin' ? 1 : 0) as space}
       <SpaceNode
         {space}
         arbiterDid={arbiter.did}

@@ -43,7 +43,7 @@ jobs:
           curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM crate
-        working-directory: crates/policy-core-wasm
+        working-directory: crates/arbiter-core-wasm
         run: wasm-pack build --target web
 
       - name: Install dependencies
