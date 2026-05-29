@@ -28,10 +28,10 @@
     <span class="space-icon">{space.key === '$admin' ? '👑' : '📁'}</span>
     <span class="space-key">{space.key}</span>
     <div class="space-badges">
-      {#if space.config.publicMembers}
+      {#if space.config?.publicMembers}
         <span class="badge public" title="Public members">public</span>
       {/if}
-      {#if space.config.publicRecords}
+      {#if space.config?.publicRecords}
         <span class="badge records" title="Public records">records</span>
       {/if}
     </div>

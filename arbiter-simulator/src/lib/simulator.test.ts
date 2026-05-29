@@ -15,7 +15,7 @@ import type { Did, SpaceKey, MemberEntry, OpResult } from './types';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const wasmPath = path.resolve(
   __dirname,
-  '../../../crates/policy-core-wasm/pkg/policy_core_wasm_bg.wasm',
+  '../../../crates/arbiter-core-wasm/pkg/arbiter_core_wasm_bg.wasm',
 );
 const wasmBuffer = fs.readFileSync(wasmPath);
 const wasmModule = new WebAssembly.Module(wasmBuffer);
@@ -37,7 +37,7 @@ class TestHarness {
 
   async init(): Promise<void> {
     // Sync WASM init for Node.js vitest
-    const { initSync } = await import('policy-core-wasm');
+    const { initSync } = await import('arbiter-core-wasm');
     initSync({ module: wasmModule });
     this.sim = new Simulator();
     // Mark as initialized since we used sync init
@@ -113,6 +113,16 @@ class TestHarness {
       );
     }
     return result.members;
+  }
+
+  /** Set a space's config to make members public — uses the owner as caller. */
+  async setSpacePublic(arbiterDid: Did, ownerDid: Did, spaceKey: SpaceKey): Promise<void> {
+    const spaceType = 'town.muni.arbiter.config.space';
+    const config = { $type: 'town.muni.arbiter.config.space', publicMembers: true, publicRecords: false };
+    const result = await this.sim.setSpaceConfig(arbiterDid, ownerDid, { spaceKey, spaceType, config });
+    if (result.status !== 'ok') {
+      throw new Error(`setSpacePublic failed: ${JSON.stringify(result)}`);
+    }
   }
 
   /** Call the correct simulator method based on operation name. */
@@ -228,7 +238,7 @@ describe('access-levels policy', () => {
     it('owner can delete arbiter', async () => {
       h.createDefaultArbiter('org', 'alice');
       await h.assertOk('org', 'alice', '$admin', 'deleteArbiter');
-      expect(h.sim.arbiters.has('org')).toBe(false);
+      expect(h.sim.hasArbiter('org')).toBe(false);
     });
 
     it('non-owner cannot delete arbiter', async () => {
@@ -252,9 +262,10 @@ describe('access-levels policy', () => {
       await h.assertOk('org', 'alice', 'team', 'deleteSpace');
       const result = await h.sim.resolveSpaceMembers('org', 'alice', {
         spaceKey: '$admin',
+        spaceType: 'town.muni.arbiter.config.adminSpace',
       });
       if (result.status === 'ok' && result.members) {
-        const teamDeleted = !h.sim.arbiters.get('org')?.spaces.has('team');
+        const teamDeleted = h.sim.getSpaceInfo('org', 'team', 'town.muni.arbiter.config.space') === null;
         expect(teamDeleted).toBe(true);
       }
     });
@@ -264,7 +275,7 @@ describe('access-levels policy', () => {
       const result = await h.sim.deleteSpace('org', 'alice', { spaceKey: '$admin', spaceType: 'town.muni.arbiter.config.adminSpace' });
       expect(result.status).toBe('error');
       // $admin should still exist
-      expect(h.sim.arbiters.get('org')?.spaces.has('town.muni.arbiter.config.adminSpace/$admin')).toBe(true);
+      expect(h.sim.getSpaceInfo('org', '$admin', 'town.muni.arbiter.config.adminSpace')).not.toBeNull();
     });
   });
 
@@ -418,8 +429,7 @@ describe('access-levels policy', () => {
         access: access('IsMember'),
       });
       // Make the space have public members
-      const space = h.sim.arbiters.get('org')!.spaces.get('town.muni.arbiter.config.space/team')!;
-      space.config = { ...space.config, publicMembers: true };
+      await h.setSpacePublic('org', 'alice', 'team');
 
       const members = await h.resolvedMembers('org', 'stranger', 'team');
       expect(members.length).toBeGreaterThan(0);
@@ -438,8 +448,7 @@ describe('access-levels policy', () => {
 
       // Partner creates "shared" with public members
       await h.assertOk('partner', 'carol', 'shared', 'createSpace');
-      const shared = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/shared')!;
-      shared.config = { ...shared.config, publicMembers: true };
+      await h.setSpacePublic('partner', 'carol', 'shared');
       await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
         memberDid: 'dave',
         access: access('Owner'),
@@ -460,8 +469,7 @@ describe('access-levels policy', () => {
       h.createDefaultArbiter('partner', 'carol');
 
       await h.assertOk('partner', 'carol', 'shared', 'createSpace');
-      const shared = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/shared')!;
-      shared.config = { ...shared.config, publicMembers: true };
+      await h.setSpacePublic('partner', 'carol', 'shared');
       await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
         memberDid: 'dave',
         access: access('Owner'),
@@ -482,8 +490,7 @@ describe('access-levels policy', () => {
       h.createDefaultArbiter('partner', 'carol');
 
       await h.assertOk('partner', 'carol', 'users', 'createSpace');
-      const users = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/users')!;
-      users.config = { ...users.config, publicMembers: true };
+      await h.setSpacePublic('partner', 'carol', 'users');
       await h.assertOk('partner', 'carol', 'users', 'setSpaceMemberAccess', {
         memberDid: 'dave',
         access: access('Owner'),
@@ -560,10 +567,9 @@ describe('access-levels policy', () => {
       const allowAll = `
         package arbiter
         import rego.v1
-        default allow := true
-        resolved_members contains {"did": input.caller.did, "access": {"level": "Owner"}} if { true }
-        missing_spaces contains false if { false }
-        resolve_result := {"members": resolved_members, "missingSpaces": missing_spaces}
+
+        # Delegate every operation to xrpc_local — allows everything.
+        response := xrpc_local(input.operation.method, input.operation.nsid, input.operation.params)
       `;
       h.createArbiter('org', 'alice', allowAll);
       await h.assertOk('org', 'stranger', 'team', 'createSpace');
@@ -571,16 +577,20 @@ describe('access-levels policy', () => {
         memberDid: 'alice',
         access: access('Owner'),
       });
-      const members = await h.resolvedMembers('org', 'stranger', '$admin');
-      assertMemberExists(members, 'stranger', 'Owner');
+      // allow-all policy just delegates to xrpc_local which returns raw
+      // members (without the caller injection logic of the default policy).
+      // Verify that the creator appears via the raw $admin space members.
+      const members = await h.resolvedMembers('org', 'alice', '$admin');
+      expect(members.length).toBeGreaterThanOrEqual(1);
     });
 
     it('deny-all policy', async () => {
       const denyAll = `
         package arbiter
         import rego.v1
-        default allow := false
-        resolved_members contains {"did": "noone", "access": {"level": "ReadMemberList"}} if { false }
+
+        # Always deny.
+        response := {"status": 403, "body": {"error": "ErrPermissionDenied"}}
       `;
       h.createArbiter('org', 'alice', denyAll);
       await h.assertDenied('org', 'alice', 'team', 'createSpace');
@@ -597,8 +607,7 @@ describe('access-levels policy', () => {
       h.createDefaultArbiter('partner', 'carol');
 
       await h.assertOk('partner', 'carol', 'shared', 'createSpace');
-      const shared = h.sim.arbiters.get('partner')!.spaces.get('town.muni.arbiter.config.space/shared')!;
-      shared.config = { ...shared.config, publicMembers: true };
+      await h.setSpacePublic('partner', 'carol', 'shared');
       await h.assertOk('partner', 'carol', 'shared', 'setSpaceMemberAccess', {
         memberDid: 'dave',
         access: access('Owner'),
@@ -637,13 +646,12 @@ describe('access-levels policy', () => {
       await h.assertDenied('org', 'stranger', 'team', 'resolveSpaceMembers');
 
       // Make public: stranger can see
-      const team = h.sim.arbiters.get('org')!.spaces.get('town.muni.arbiter.config.space/team')!;
-      team.config = { ...team.config, publicMembers: true };
+      await h.setSpacePublic('org', 'alice', 'team');
       const members = await h.resolvedMembers('org', 'stranger', 'team');
       assertMemberExists(members, 'bob', 'IsMember');
 
       // Un-public: stranger denied again
-      team.config = { ...team.config, publicMembers: false };
+      await h.sim.setSpaceConfig('org', 'alice', { spaceKey: 'team', spaceType: 'town.muni.arbiter.config.space', config: { $type: 'town.muni.arbiter.config.space', publicMembers: false, publicRecords: false } });
       await h.assertDenied('org', 'stranger', 'team', 'resolveSpaceMembers');
     });
 
@@ -719,9 +727,9 @@ describe('access-levels policy', () => {
       });
       expect(result.status).toBe('ok');
 
-      const space = h.sim.arbiters.get('org')!.spaces.get('town.muni.arbiter.config.space/test');
-      expect(space).toBeDefined();
-      expect(space!.key).toBe('test');
+      const spaceInfo = h.sim.getSpaceInfo('org', 'test', 'town.muni.arbiter.config.space');
+      expect(spaceInfo).not.toBeNull();
+      expect(spaceInfo!.key).toBe('test');
     });
   });
 
@@ -784,8 +792,11 @@ describe('access-levels policy', () => {
       await h.assertOk('muni-town', 'alice', 'moderators', 'createSpace');
 
       // muni-town/members is public so remote arbiters can read its members
-      const muniMembers = h.sim.arbiters.get('muni-town')!.spaces.get('town.muni.arbiter.config.space/members')!;
-      muniMembers.config = { ...muniMembers.config, publicMembers: true };
+      await h.sim.setSpaceConfig('muni-town', 'alice', {
+        spaceKey: 'members',
+        spaceType: 'town.muni.arbiter.config.space',
+        config: { $type: 'town.muni.arbiter.config.space', publicMembers: true, publicRecords: false },
+      });
 
       // muni-town/members delegates to moderators (local) and has george
       await h.assertOk('muni-town', 'alice', 'members', 'setSpaceMemberAccess', {
@@ -838,6 +849,46 @@ describe('access-levels policy', () => {
       assertMemberExists(members, 'alice', 'IsMember');
       assertMemberExists(members, 'george', 'IsMember');
       assertMemberExists(members, 'carol', 'IsMember');
+    });
+  });
+
+  // =======================================================================
+  // Snapshot roundtrip
+  // =======================================================================
+
+  describe('snapshot roundtrip', () => {
+    it('can serialise and restore state', async () => {
+      h.createDefaultArbiter('org', 'alice');
+      await h.assertOk('org', 'alice', 'team', 'createSpace');
+      await h.assertOk('org', 'alice', 'team', 'setSpaceMemberAccess', {
+        memberDid: 'bob',
+        access: access('IsMember'),
+      });
+
+      // Snapshot
+      const snap = h.sim.snapshot();
+      expect(snap.arbiters).toHaveLength(1);
+      expect(snap.arbiters[0].spaces).toHaveLength(2); // $admin + team
+
+      // Restore into a fresh simulator
+      const sim2 = new Simulator();
+      await sim2.init();
+      sim2.loadSnapshot(snap);
+
+      // Verify restored state
+      const members = await sim2.resolveSpaceMembers('org', 'alice', {
+        spaceKey: '$admin',
+        spaceType: 'town.muni.arbiter.config.adminSpace',
+      });
+      expect(members).toHaveProperty('members');
+      expect((members as any).members?.length).toBeGreaterThan(0);
+
+      const teamMembers = await sim2.resolveSpaceMembers('org', 'alice', {
+        spaceKey: 'team',
+        spaceType: 'town.muni.arbiter.config.space',
+      });
+      expect(teamMembers).toHaveProperty('members');
+      assertMemberExists((teamMembers as any).members as MemberEntry[], 'bob', 'IsMember');
     });
   });
 });

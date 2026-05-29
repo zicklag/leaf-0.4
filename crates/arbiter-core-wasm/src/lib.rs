@@ -99,9 +99,38 @@ impl ArbiterStateMachine {
 
     /// Serialise the current arbiter state into a plain JS object (for
     /// snapshots / persistence).
+    ///
+    /// The spaces HashMap is serialized as an array of [key, value] pairs
+    /// to avoid JSON key restrictions on non-string keys.
     #[wasm_bindgen(js_name = serialiseState)]
     pub fn serialise_state(&self) -> Result<JsValue, JsValue> {
-        to_js_value(&self.inner.arbiter)
+        let arbiter = &self.inner.arbiter;
+        // Convert HashMap<SpaceId, Space> to Vec<(SerialisableSpaceId, &Space)>
+        // to avoid serde_json's "Map key is not a string" error.
+        // Convert HashMap<SpaceId, Space> to Vec<[SpaceId, Space]> pairs
+        // to avoid serde_json's "Map key is not a string" error.
+        // This matches the format that serde expects for HashMap with non-string
+        // keys (sequence of [key, value] tuples).
+        let spaces: Vec<[SerialisableSpaceEntry; 2]> = arbiter
+            .spaces
+            .iter()
+            .map(|(id, space)| {
+                [
+                    SerialisableSpaceEntry::Key(SerialisableSpaceId {
+                        space_type: &id.space_type,
+                        space_key: &id.space_key,
+                    }),
+                    SerialisableSpaceEntry::Value(space),
+                ]
+            })
+            .collect();
+        to_js_value(&StateView {
+            did: &arbiter.did,
+            version: arbiter.version,
+            config: &arbiter.config,
+            policy: &arbiter.policy,
+            spaces: &spaces,
+        })
     }
 
     // -------------------------------------------------------------------
@@ -308,6 +337,37 @@ struct SpaceView<'a> {
     space_type: &'a str,
     config: &'a serde_json::Value,
     members: &'a [arbiter_core::MemberEntry],
+}
+
+// ---------------------------------------------------------------------------
+// State serialisation helpers  (avoids HashMap non-string key issue)
+// ---------------------------------------------------------------------------
+
+/// A view of [`ArbiterState`] with spaces as an array of [key, value] pairs.
+#[derive(Serialize)]
+struct StateView<'a> {
+    did: &'a str,
+    version: u64,
+    config: &'a serde_json::Value,
+    policy: &'a str,
+    spaces: &'a [[SerialisableSpaceEntry<'a>; 2]],
+}
+
+/// Either a space key or a space value in the serialised state.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SerialisableSpaceEntry<'a> {
+    Key(SerialisableSpaceId<'a>),
+    Value(&'a arbiter_core::Space),
+}
+
+/// A serialisable view of [`SpaceId`].
+#[derive(Serialize)]
+struct SerialisableSpaceId<'a> {
+    #[serde(rename = "space_type")]
+    space_type: &'a str,
+    #[serde(rename = "space_key")]
+    space_key: &'a str,
 }
 
 // ---------------------------------------------------------------------------

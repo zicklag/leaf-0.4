@@ -124,7 +124,7 @@
         spaceType: selectedSpace.spaceType,
         config: {
           ...selectedSpace.config,
-          publicMembers: !selectedSpace.config.publicMembers,
+          publicMembers: !selectedSpace.config?.publicMembers,
         },
       },
     );
@@ -142,7 +142,7 @@
         spaceType: selectedSpace.spaceType,
         config: {
           ...selectedSpace.config,
-          publicRecords: !selectedSpace.config.publicRecords,
+          publicRecords: !selectedSpace.config?.publicRecords,
         },
       },
     );
@@ -189,19 +189,19 @@
       <h4>Configuration</h4>
       <button
         class="config-toggle"
-        class:active={selectedSpace.config.publicMembers}
+        class:active={selectedSpace.config?.publicMembers}
         onclick={togglePublicMembers}
       >
         <span class="config-label">Public Members</span>
-        <span class="toggle-indicator">{selectedSpace.config.publicMembers ? 'On' : 'Off'}</span>
+        <span class="toggle-indicator">{selectedSpace.config?.publicMembers ? 'On' : 'Off'}</span>
       </button>
       <button
         class="config-toggle"
-        class:active={selectedSpace.config.publicRecords}
+        class:active={selectedSpace.config?.publicRecords}
         onclick={togglePublicRecords}
       >
         <span class="config-label">Public Records</span>
-        <span class="toggle-indicator">{selectedSpace.config.publicRecords ? 'On' : 'Off'}</span>
+        <span class="toggle-indicator">{selectedSpace.config?.publicRecords ? 'On' : 'Off'}</span>
       </button>
     </section>
 

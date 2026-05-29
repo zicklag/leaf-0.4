@@ -40,7 +40,7 @@ interface ActionRequest {
   method: string;
   nsid: string;
   input: Record<string, unknown>;
-  jobId: bigint;
+  jobId: bigint | number;
 }
 
 type Action = ActionResponse | ActionRequest;
@@ -99,7 +99,7 @@ export class Simulator {
       return { status: 'error', error: `ErrPolicyEval: ${e}` };
     }
 
-    return this.driveActions(actions, new Map());
+    return this.driveActions(arbiterDid, actions, new Map());
   }
 
   /**
@@ -110,35 +110,41 @@ export class Simulator {
    * being resolved, preventing infinite recursion on cyclic delegation.
    */
   private async driveActions(
+    sourceDid: string,
     actions: Action[],
     nestedStates: Map<string, number>,
   ): Promise<OpResult> {
-    const queue: { did: string; action: Action }[] = actions.map((a) => ({
-      did: '',
+    const queue: { sourceDid: string; action: Action }[] = actions.map((a) => ({
+      sourceDid,
       action: a,
     }));
     let response: ActionResponse | null = null;
 
     while (queue.length > 0) {
-      const { action } = queue.shift()!;
+      const { sourceDid: src, action } = queue.shift()!;
 
       if (action.kind === 'response') {
         response = action;
       } else if (action.kind === 'request') {
-        const sourceSm = this.machines.get(action.did);
+        // action.did is the TARGET DID (who to send the request to)
+        // src is the SOURCE DID (the machine that produced this action)
+        const targetDid = action.did;
+
+        // Source machine — where to feed the result back
+        const sourceSm = this.machines.get(src);
         if (!sourceSm) continue;
 
-        // Check for offline target
-        if (this.offline.has(action.did)) {
+        // Check if target is offline
+        if (this.offline.has(targetDid)) {
           const next = this.handleRemoteOnMachine(sourceSm, 500, null, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
           continue;
         }
 
-        const targetSm = this.machines.get(action.did);
+        const targetSm = this.machines.get(targetDid);
         if (!targetSm) {
           const next = this.handleRemoteOnMachine(sourceSm, 404, { error: 'ErrArbiterNotExists' }, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
           continue;
         }
 
@@ -149,19 +155,18 @@ export class Simulator {
             action.nsid,
             action.method as 'query' | 'procedure',
             action.input,
-            action.did, // caller is the SOURCE arbiter's DID
+            src, // caller is the SOURCE arbiter's DID
           );
           targetActions = raw as unknown as Action[];
         } catch {
-          // Target errored
           const next = this.handleRemoteOnMachine(sourceSm, 500, null, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
           continue;
         }
 
         // Drive target actions to a response
         const targetResult = await this.driveActionsToResponse(
-          action.did,
+          targetDid,
           targetActions,
           nestedStates,
         );
@@ -174,10 +179,10 @@ export class Simulator {
             targetResult.body,
             action.jobId,
           );
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
         } else {
           const next = this.handleRemoteOnMachine(sourceSm, 500, null, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
         }
       }
     }
@@ -191,37 +196,40 @@ export class Simulator {
    * remote requests into the target's own drive loop.
    */
   private async driveActionsToResponse(
-    _did: string,
+    currentDid: string,
     actions: Action[],
     nestedStates: Map<string, number>,
   ): Promise<{ status: number; body: Record<string, unknown> } | null> {
-    const queue: { did: string; action: Action }[] = actions.map((a) => ({
-      did: _did,
+    const queue: { sourceDid: string; action: Action }[] = actions.map((a) => ({
+      sourceDid: currentDid,
       action: a,
     }));
 
     while (queue.length > 0) {
-      const { action } = queue.shift()!;
+      const { sourceDid: src, action } = queue.shift()!;
 
       if (action.kind === 'response') {
         return { status: action.status, body: action.body };
       }
 
       if (action.kind === 'request') {
-        const sm = this.machines.get(action.did);
-        if (!sm) continue;
+        const targetDid = action.did;
+
+        // Source machine — feed result back
+        const sourceSm = this.machines.get(src);
+        if (!sourceSm) continue;
 
         // Target offline or missing
-        if (this.offline.has(action.did)) {
-          const next = this.handleRemoteOnMachine(sm, 500, null, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+        if (this.offline.has(targetDid)) {
+          const next = this.handleRemoteOnMachine(sourceSm, 500, null, action.jobId);
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
           continue;
         }
 
-        const targetSm = this.machines.get(action.did);
+        const targetSm = this.machines.get(targetDid);
         if (!targetSm) {
-          const next = this.handleRemoteOnMachine(sm, 404, { error: 'ErrArbiterNotExists' }, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          const next = this.handleRemoteOnMachine(sourceSm, 404, { error: 'ErrArbiterNotExists' }, action.jobId);
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
           continue;
         }
 
@@ -232,22 +240,22 @@ export class Simulator {
             action.nsid,
             action.method as 'query' | 'procedure',
             action.input,
-            _did,
+            src, // caller is the SOURCE arbiter
           );
           targetActions = raw as unknown as Action[];
         } catch {
-          const next = this.handleRemoteOnMachine(sm, 500, null, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          const next = this.handleRemoteOnMachine(sourceSm, 500, null, action.jobId);
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
           continue;
         }
 
-        const resolved = await this.driveActionsToResponse(action.did, targetActions, nestedStates);
+        const resolved = await this.driveActionsToResponse(targetDid, targetActions, nestedStates);
         if (resolved) {
-          const next = this.handleRemoteOnMachine(sm, resolved.status, resolved.body, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          const next = this.handleRemoteOnMachine(sourceSm, resolved.status, resolved.body, action.jobId);
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
         } else {
-          const next = this.handleRemoteOnMachine(sm, 500, null, action.jobId);
-          queue.push(...next.map((a) => ({ did: action.did, action: a as Action })));
+          const next = this.handleRemoteOnMachine(sourceSm, 500, null, action.jobId);
+          queue.push(...next.map((a) => ({ sourceDid: src, action: a as Action })));
         }
       }
     }
@@ -260,10 +268,13 @@ export class Simulator {
     sm: ArbiterStateMachine,
     status: number,
     body: unknown,
-    jobId: bigint,
+    jobId: bigint | number,
   ): unknown[] {
+    // WASM expects bigint for u64 — convert if JS gives us a number
+    const jobIdBig = typeof jobId === 'bigint' ? jobId : BigInt(jobId);
     try {
-      return sm.handleRemoteResult(status, body, jobId) as unknown as unknown[];
+      const result = sm.handleRemoteResult(status, body, jobIdBig);
+      return result as unknown as unknown[];
     } catch {
       return [];
     }
@@ -448,13 +459,7 @@ export class Simulator {
 
   applyPolicyToAll(policy: string): void {
     for (const sm of this.machines.values()) {
-      // The state machine stores policy in its internal state.
-      // We must recreate the machine with the new policy.
-      const state = (sm as any).serialiseState();
-      const did = state.did as string;
-      const config = state.config as Record<string, unknown>;
-      const ownerDid = state.did as string; // Placeholder — we reconstruct from state
-      // Instead, use a more surgical approach: create new machine with updated policy.
+      sm.setPolicy(policy);
     }
   }
 
@@ -464,6 +469,28 @@ export class Simulator {
 
   createDefaultArbiter(did: Did, ownerDid: Did): OpResult {
     return this.createArbiter(did, {}, ownerDid);
+  }
+
+  // -----------------------------------------------------------------------
+  // Test helpers
+  // -----------------------------------------------------------------------
+
+  /** Check whether an arbiter exists. */
+  hasArbiter(did: Did): boolean {
+    return this.machines.has(did);
+  }
+
+  /** Get space info as a plain JS object. Returns `null` if not found. */
+  getSpaceInfo(did: Did, spaceKey: SpaceKey, spaceType: string): Record<string, unknown> | null {
+    const sm = this.machines.get(did);
+    if (!sm) return null;
+    try {
+      const raw = sm.getSpace(spaceKey, spaceType);
+      if (raw === null || raw === undefined) return null;
+      return deepClone(raw as Record<string, unknown>);
+    } catch {
+      return null;
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -485,7 +512,7 @@ export class Simulator {
         ([_key, space]: [SpaceIdRaw, SpaceRaw]) => ({
           key: space.key,
           spaceType: space.space_type,
-          config: deepClone(space.config),
+          config: deepClone(space.config) ?? {},
           members: (space.members ?? []).map((m: { did: string; access: Record<string, unknown> }) => ({
             did: m.did,
             access: deepClone(m.access),
@@ -529,7 +556,7 @@ export class Simulator {
         {
           key: s.key,
           space_type: s.spaceType,
-          config: s.config,
+          config: s.config ?? {},
           members: s.members.map((m) => ({ did: m.did, access: m.access })),
         },
       ]);
