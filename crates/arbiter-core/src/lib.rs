@@ -14,26 +14,14 @@
 //! Feed the machine an [`Event`]; it returns zero or more [`IoAction`]s.
 //! The IO layer fulfills those actions and feeds results back as new
 //! events.
-//!
-//! Policy evaluation via [`policy_core::VmSession`] lives inside the
-//! machine.  `xrpc_local` queries resolve against the local arbiter's
-//! state.  `xrpc_remote` queries produce an [`IoAction::XrpcRemote`];
-//! the IO layer resolves them by consulting the appropriate remote
-//! arbiter (or a local stand-in, in tests).
 
-#![deny(rust_2018_idioms)]
-
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use policy_core::{HostRequest, VmResult, VmSession};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use policy_core;
-
-// ---------------------------------------------------------------------------
-// Core data types
-// ---------------------------------------------------------------------------
 
 pub type Did = String;
 pub type SpaceKey = String;
@@ -43,8 +31,8 @@ pub type JobId = u64;
 /// Both fields are required — `space_type` is part of the space's identity.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SpaceId {
-    pub key: SpaceKey,
     pub space_type: String,
+    pub key: SpaceKey,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +136,6 @@ impl ArbiterState {
 
 pub struct NSID;
 impl NSID {
-    pub const CREATE_ARBITER: &'static str = "town.muni.arbiter.createArbiter";
     pub const GET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.getArbiterConfig";
     pub const SET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.setArbiterConfig";
     pub const DELETE_ARBITER: &'static str = "town.muni.arbiter.deleteArbiter";
@@ -177,57 +164,16 @@ pub fn is_readonly_nsid(nsid: &str) -> bool {
 // Rego ↔ serde_json conversion  (pub for consumers like integration tests)
 // ---------------------------------------------------------------------------
 
-pub fn serde_to_rego(val: &Value) -> regorus::Value {
-    match val {
-        Value::Null => regorus::Value::Null,
-        Value::Bool(b) => regorus::Value::from(*b),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() { regorus::Value::from(i) }
-            else if let Some(f) = n.as_f64() { regorus::Value::from(f) }
-            else { regorus::Value::from(n.to_string()) }
-        }
-        Value::String(s) => regorus::Value::from(s.as_str()),
-        Value::Array(arr) => regorus::Value::from(arr.iter().map(serde_to_rego).collect::<Vec<_>>()),
-        Value::Object(obj) => {
-            let mut map = BTreeMap::new();
-            for (k, v) in obj { map.insert(regorus::Value::from(k.as_str()), serde_to_rego(v)); }
-            regorus::Value::from(map)
-        }
-    }
+fn serde_to_rego(val: Value) -> regorus::Value {
+    serde_json::from_value(val).unwrap()
 }
-
-pub fn rego_to_serde(val: &regorus::Value) -> Value {
-    match val {
-        regorus::Value::Null => Value::Null,
-        regorus::Value::Bool(b) => Value::Bool(*b),
-        regorus::Value::Number(n) => {
-            let s = n.format_decimal();
-            if let Ok(i) = s.parse::<i64>() { Value::Number(i.into()) }
-            else if let Ok(f) = s.parse::<f64>() {
-                serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
-            } else { Value::String(s) }
-        }
-        regorus::Value::String(s) => Value::String(s.to_string()),
-        regorus::Value::Array(arr) => Value::Array(arr.iter().map(rego_to_serde).collect()),
-        regorus::Value::Object(obj) => {
-            let mut map = serde_json::Map::new();
-            for (k, v) in obj.iter() {
-                let key: String = match k.as_string() {
-                    Ok(s) => s.to_string(),
-                    Err(_) => format!("{k:?}"),
-                };
-                map.insert(key, rego_to_serde(v));
-            }
-            Value::Object(map)
-        }
-        regorus::Value::Set(s) => Value::Array(s.iter().map(rego_to_serde).collect()),
-        regorus::Value::Undefined => Value::Null,
-    }
+fn rego_to_serde(val: regorus::Value) -> Value {
+    serde_json::to_value(val).unwrap()
 }
 
 /// Extract the `members` and `missingSpaces` fields from a completed
 /// `resolve_result` policy evaluation and format the response body.
-fn format_resolve_result(val: &regorus::Value) -> Value {
+fn format_resolve_result(val: regorus::Value) -> Value {
     let result = rego_to_serde(val);
     let members = result.get("members").cloned().unwrap_or(Value::Array(vec![]));
     let missing = result.get("missingSpaces").cloned().unwrap_or(Value::Array(vec![]));
@@ -308,12 +254,6 @@ impl StateMachine {
     // -------------------------------------------------------------------
 
     fn start_eval_or_execute(&mut self, method: String, params: Value, caller_did: Did) -> Vec<IoAction> {
-        if method == NSID::CREATE_ARBITER {
-            // Already created — nothing to do (the harness creates us).
-            let j = self.alloc_job_id();
-            return vec![IoAction::SendResponse { body: serde_json::json!({}), status: 200, job_id: j }];
-        }
-
         let entry_points: Vec<String> = if method == NSID::RESOLVE_SPACE_MEMBERS {
             vec!["data.arbiter.allow".into(), "data.arbiter.resolve_result".into()]
         } else {
@@ -328,8 +268,8 @@ impl StateMachine {
             "operation": { "nsid": &method, "params": &params },
         });
 
-        let rego_data = serde_to_rego(&data);
-        let rego_input = serde_to_rego(&input);
+        let rego_data = serde_to_rego(data);
+        let rego_input = serde_to_rego(input);
 
         let session = match VmSession::new(&self.arbiter.policy, &rego_data, &rego_input, &ep_refs) {
             Ok(s) => s,
@@ -375,7 +315,7 @@ impl StateMachine {
     fn on_eval_completed(&mut self, val: regorus::Value, ctx: EvalContext) -> Vec<IoAction> {
         // ResolveResult phase — the value is the result object.
         if ctx.phase == EvalPhase::ResolveResult {
-            let body = format_resolve_result(&val);
+            let body = format_resolve_result(val);
             let j = self.alloc_job_id();
             return vec![IoAction::SendResponse { body, status: 200, job_id: j }];
         }
@@ -410,8 +350,8 @@ impl StateMachine {
     fn handle_vm_suspension(&mut self, req: HostRequest, session: VmSession, ctx: EvalContext) -> Vec<IoAction> {
         match req {
             HostRequest::XrpcLocal { path, input } => {
-                let resolved = self.resolve_local(&path, &rego_to_serde(&input));
-                let resolved_rego = serde_to_rego(&resolved);
+                let resolved = self.resolve_local(&path, &rego_to_serde(input));
+                let resolved_rego = serde_to_rego(resolved);
                 self.continue_eval(session, ctx, EvalStep::Resume(&resolved_rego))
             }
             HostRequest::XrpcRemote { did, path, input } => {
@@ -420,7 +360,7 @@ impl StateMachine {
                 vec![IoAction::XrpcRemote {
                     did: did.to_string(),
                     path: path.to_string(),
-                    input: rego_to_serde(&input),
+                    input: rego_to_serde(input),
                     job_id: j,
                 }]
             }
@@ -438,7 +378,7 @@ impl StateMachine {
                 }]
             }
             Ok(data) => {
-                let resolved_rego = serde_to_rego(&data);
+                let resolved_rego = serde_to_rego(data);
                 self.continue_eval(pending.session, pending.ctx, EvalStep::Resume(&resolved_rego))
             }
         }
@@ -494,8 +434,8 @@ impl StateMachine {
             "operation": {"nsid": &ctx.method, "params": &ctx.params},
         });
 
-        let rego_data = serde_to_rego(&data);
-        let rego_input = serde_to_rego(&input);
+        let rego_data = serde_to_rego(data);
+        let rego_input = serde_to_rego(input);
 
         let session = match VmSession::new(
             &self.arbiter.policy, &rego_data, &rego_input,
@@ -752,8 +692,8 @@ mod tests {
     #[test]
     fn test_serde_rego_roundtrip() {
         let original = serde_json::json!({"s": "hello", "n": 42, "b": true, "a": [1, 2]});
-        let rego = serde_to_rego(&original);
-        let back = rego_to_serde(&rego);
+        let rego = serde_to_rego(original.clone());
+        let back = rego_to_serde(rego);
         assert_eq!(original, back);
     }
 
