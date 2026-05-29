@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["futures"]
+futures = ["dep:async-lock"]
 
 [dependencies]
+async-lock = { version = "3.4.2", optional = true }
 policy-core = { path = "../policy-core" }
 regorus = { version = "0.10.1", default-features = false }
 serde = { version = "1", features = ["derive"] }

@@ -132,6 +132,14 @@ impl ArbiterStateMachine {
         self.inner.arbiter.policy.clone()
     }
 
+    /// Set the arbiter's Rego policy.  The state machine will use it for
+    /// subsequent evaluations.  (Does not validate — call [`validate_policy`]
+    /// first.)
+    #[wasm_bindgen(js_name = setPolicy)]
+    pub fn set_policy(&mut self, policy: &str) {
+        self.inner.arbiter.policy = policy.into();
+    }
+
     // -------------------------------------------------------------------
     // Space access
     // -------------------------------------------------------------------
@@ -303,7 +311,16 @@ struct SpaceView<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Standalone helpers
+// ---------------------------------------------------------------------------
+
+/// Validate a Rego policy string. Throws a JavaScript exception on error.
+#[wasm_bindgen]
+pub fn validate_policy(policy: &str) -> Result<(), JsValue> {
+    arbiter_core::policy_core::validate_policy(policy)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 // ---------------------------------------------------------------------------
 
 fn parse_method(s: &str) -> Result<XrpcMethod, JsValue> {

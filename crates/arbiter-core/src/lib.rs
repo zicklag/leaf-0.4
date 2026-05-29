@@ -15,6 +15,13 @@
 //! The IO layer fulfills those actions and feeds results back as new
 //! events.
 //!
+//! # Async runtime integration (feature `futures`)
+//!
+//! Enable the `futures` feature for the [`futures`] module, which provides
+//! an async [`Io`](futures::Io) trait and a [`process_event`](futures::process_event)
+//! helper that recursively drives an event to completion.  No external
+//! runtime dependency required — the trait uses native `async fn`.
+//!
 //! # Policy entry point
 //!
 //! The state machine evaluates a single Rego entry point:
@@ -738,6 +745,9 @@ impl StateMachine {
         })
     }
 }
+
+#[cfg(feature = "futures")]
+pub mod futures;
 
 // ---------------------------------------------------------------------------
 // Tests
