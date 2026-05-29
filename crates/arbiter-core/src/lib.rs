@@ -207,6 +207,7 @@ fn rego_to_serde(val: regorus::Value) -> Value {
 // Pending state for in-progress operations
 // ---------------------------------------------------------------------------
 
+/// A policy evaluation that is waiting for an XRPC remote result.
 struct PendingEval {
     session: VmSession,
     ctx: EvalContext,
@@ -219,12 +220,17 @@ enum EvalStep<'a> {
     Resume(&'a regorus::Value),
 }
 
+/// Context captured when an incoming XRPC evaluation starts.
+///
+/// Currently carries only the arbiter version for compare-and-swap.
+/// Additional request metadata (caller DID, NSID, etc.) can be added
+/// when needed for tracing or error reporting.
 #[derive(Clone)]
 struct EvalContext {
-    _caller_did: Did,
-    _nsid: String,
-    _method: XrpcMethod,
-    _params: Value,
+    /// The arbiter version at the time this evaluation started.
+    /// Used for compare-and-swap: mutations check that the version
+    /// hasn't changed before applying.
+    start_version: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +240,9 @@ struct EvalContext {
 pub struct StateMachine {
     pub arbiter: ArbiterState,
     next_job_id: JobId,
-    pending_eval: Option<PendingEval>,
+    /// Jobs whose policy evaluation is suspended awaiting an XRPC remote result.
+    /// Keyed by the remote job_id (allocated when the VM suspends on XrpcRemote).
+    pending_jobs: HashMap<JobId, PendingEval>,
 }
 
 impl StateMachine {
@@ -242,7 +250,7 @@ impl StateMachine {
         Self {
             arbiter,
             next_job_id: 1,
-            pending_eval: None,
+            pending_jobs: HashMap::new(),
         }
     }
 
@@ -268,7 +276,11 @@ impl StateMachine {
                 params,
                 caller_did,
             } => self.start_policy_eval(nsid, method, params, caller_did),
-            Event::XrpcRemoteResult { body, status, .. } => self.resume_pending_eval(status, body),
+            Event::XrpcRemoteResult {
+                body,
+                status,
+                job_id,
+            } => self.resume_pending_eval(job_id, status, body),
         }
     }
 
@@ -308,10 +320,7 @@ impl StateMachine {
             };
 
         let ctx = EvalContext {
-            _caller_did: caller_did,
-            _nsid: nsid,
-            _method: method,
-            _params: params,
+            start_version: self.arbiter.version,
         };
         self.eval(session, ctx, EvalStep::Start)
     }
@@ -379,7 +388,12 @@ impl StateMachine {
                 method,
                 input,
             } => {
-                let resolved = self.resolve_local(method, &nsid, &rego_to_serde(input));
+                let resolved = self.resolve_local(
+                    method,
+                    &nsid,
+                    &rego_to_serde(input),
+                    ctx.start_version,
+                );
                 let resolved_rego = serde_to_rego(resolved);
                 self.eval(session, ctx, EvalStep::Resume(&resolved_rego))
             }
@@ -390,7 +404,8 @@ impl StateMachine {
                 input,
             } => {
                 let j = self.alloc_job_id();
-                self.pending_eval = Some(PendingEval { session, ctx });
+                self.pending_jobs
+                    .insert(j, PendingEval { session, ctx });
                 vec![IoAction::SendXrpcRequest {
                     did: did.to_string(),
                     method,
@@ -402,8 +417,14 @@ impl StateMachine {
         }
     }
 
-    fn resume_pending_eval(&mut self, status: u16, body: Value) -> Vec<IoAction> {
-        let Some(pending) = self.pending_eval.take() else {
+    fn resume_pending_eval(
+        &mut self,
+        job_id: JobId,
+        status: u16,
+        body: Value,
+    ) -> Vec<IoAction> {
+        let Some(pending) = self.pending_jobs.remove(&job_id) else {
+            // No job found for this job_id — stale or already handled.
             return vec![];
         };
         let resolved_rego = serde_to_rego(serde_json::json!({"status": status, "body": body}));
@@ -421,7 +442,36 @@ impl StateMachine {
     /// Resolve a built-in XRPC call (query or procedure) against this
     /// arbiter's state.  Returns the **response body** — the policy wraps
     /// it into the final response object.
-    fn resolve_local(&mut self, _method: XrpcMethod, nsid: &str, params: &Value) -> Value {
+    ///
+    /// Validates that the [`XrpcMethod`] matches the NSID (queries must use
+    /// `Query`, procedures must use `Procedure`) before dispatching.
+    ///
+    /// Mutations (procedures) use compare-and-swap: they check that
+    /// `arbiter.version == start_version` before applying.  If the version
+    /// has changed, the mutation is rejected with `ErrVersionMismatch`.
+    fn resolve_local(
+        &mut self,
+        method: XrpcMethod,
+        nsid: &str,
+        params: &Value,
+        start_version: u64,
+    ) -> Value {
+        // Validate that queries use XrpcMethod::Query and procedures use
+        // XrpcMethod::Procedure. The Rego built-in `xrpc_local` already
+        // carries the method from the policy — this is a defence-in-depth
+        // check to catch misconfigurations early.
+        let expected = nsid_method(nsid);
+        if method != expected {
+            return serde_json::json!({
+                "status": 400,
+                "body": {
+                    "error": format!(
+                        "ErrMethodMismatch: expected {expected}, got {method}"
+                    ),
+                },
+            });
+        }
+
         match nsid {
             // ── Queries ──────────────────────────────────────────────
             NSID::GET_ARBITER_CONFIG => {
@@ -497,6 +547,9 @@ impl StateMachine {
 
             // ── Procedures ───────────────────────────────────────────
             NSID::SET_ARBITER_CONFIG => {
+                if self.arbiter.version != start_version {
+                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                }
                 if let Some(new_config) = params.get("config") {
                     self.arbiter.config = new_config.clone();
                     self.arbiter.version += 1;
@@ -510,6 +563,9 @@ impl StateMachine {
             }
 
             NSID::CREATE_SPACE => {
+                if self.arbiter.version != start_version {
+                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
@@ -536,6 +592,9 @@ impl StateMachine {
             }
 
             NSID::SET_SPACE_CONFIG => {
+                if self.arbiter.version != start_version {
+                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
@@ -558,6 +617,9 @@ impl StateMachine {
             }
 
             NSID::DELETE_SPACE => {
+                if self.arbiter.version != start_version {
+                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
@@ -579,6 +641,9 @@ impl StateMachine {
             }
 
             NSID::SET_SPACE_MEMBER_ACCESS => {
+                if self.arbiter.version != start_version {
+                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
@@ -615,6 +680,9 @@ impl StateMachine {
             }
 
             NSID::REMOVE_SPACE_MEMBER => {
+                if self.arbiter.version != start_version {
+                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {

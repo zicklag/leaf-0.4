@@ -317,7 +317,7 @@ impl TestDriver {
                     nsid,
                     method,
                     input,
-                    ..
+                    job_id,
                 } => {
                     let (status, body) =
                         self.simulate_remote_resolution(&src, &did, &nsid, &method, &input);
@@ -325,7 +325,7 @@ impl TestDriver {
                         let new = sm.handle_event(Event::XrpcRemoteResult {
                             status,
                             body,
-                            job_id: 0,
+                            job_id,
                         });
                         pending.extend(new.into_iter().map(|a| (src.clone(), a)));
                     }
