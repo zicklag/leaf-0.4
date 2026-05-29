@@ -53,17 +53,13 @@ pub enum Event {
     },
 }
 
-// ---------------------------------------------------------------------------
-// IO actions  (output of the state machine)
-// ---------------------------------------------------------------------------
-
+/// A request sent by the state machine for the IO layer to perform some action.
 #[derive(Debug, Clone)]
 pub enum IoAction {
-    /// Send an XRPC response to the client.
+    /// Send an XRPC response to.
     SendResponse {
         body: Value,
         status: u16,
-        job_id: JobId,
     },
 
     /// Resolve a remote XRPC query from the policy engine.
@@ -313,11 +309,9 @@ impl StateMachine {
         {
             Ok(s) => s,
             Err(e) => {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
                     status: 500,
-                    job_id: j,
                 }];
             }
         };
@@ -349,11 +343,9 @@ impl StateMachine {
             Ok(VmResult::Completed(val)) => self.on_eval_completed(val, ctx),
             Ok(VmResult::Suspended(req)) => self.handle_vm_suspension(req, session, ctx),
             Err(e) => {
-                let j = self.alloc_job_id();
                 vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("{error_label}: {e}")}),
                     status: 500,
-                    job_id: j,
                 }]
             }
         }
@@ -367,22 +359,18 @@ impl StateMachine {
         // ResolveResult phase — the value is the result object.
         if ctx.phase == EvalPhase::ResolveResult {
             let body = format_resolve_result(val);
-            let j = self.alloc_job_id();
             return vec![IoAction::SendResponse {
                 body,
                 status: 200,
-                job_id: j,
             }];
         }
 
         // Allow phase — check if true.
         let allowed = val == regorus::Value::Bool(true);
         if !allowed {
-            let j = self.alloc_job_id();
             return vec![IoAction::SendResponse {
                 body: serde_json::json!({"error": "ErrPermissionDenied"}),
                 status: 403,
-                job_id: j,
             }];
         }
 
@@ -434,11 +422,9 @@ impl StateMachine {
         };
         match result {
             Err(msg) => {
-                let j = self.alloc_job_id();
                 vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("ErrRemoteXrpc: {msg}")}),
                     status: 502,
-                    job_id: j,
                 }]
             }
             Ok(data) => {
@@ -520,11 +506,9 @@ impl StateMachine {
         ) {
             Ok(s) => s,
             Err(e) => {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
                     status: 500,
-                    job_id: j,
                 }];
             }
         };
@@ -589,22 +573,18 @@ impl StateMachine {
             }
             _ => unreachable!(),
         };
-        let j = self.alloc_job_id();
         vec![IoAction::SendResponse {
             body,
             status: 200,
-            job_id: j,
         }]
     }
 
     fn execute_operation(&mut self, method: String, params: Value) -> Vec<IoAction> {
         if method == NSID::DELETE_ARBITER {
             // The harness should delete us.  Signal completion.
-            let j = self.alloc_job_id();
             return vec![IoAction::SendResponse {
                 body: serde_json::json!({}),
                 status: 200,
-                job_id: j,
             }];
         }
 
@@ -623,11 +603,9 @@ impl StateMachine {
                 space_type: st,
             };
             if self.arbiter.spaces.contains_key(&space_id) {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": "ErrSpaceExists"}),
                     status: 409,
-                    job_id: j,
                 }];
             }
             let config = params.get("config").cloned().unwrap_or_default();
@@ -654,11 +632,9 @@ impl StateMachine {
                 }
                 self.arbiter.version += 1;
             } else {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": "ErrSpaceNotExists"}),
                     status: 404,
-                    job_id: j,
                 }];
             }
         } else if method == NSID::DELETE_SPACE {
@@ -667,11 +643,9 @@ impl StateMachine {
                 None => return self.missing_param("spaceKey/spaceType"),
             };
             if sk == "$admin" && st == "town.muni.arbiter.config.adminSpace" {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": "ErrCannotDeleteAdminSpace"}),
                     status: 403,
-                    job_id: j,
                 }];
             }
             let space_id = SpaceId {
@@ -679,11 +653,9 @@ impl StateMachine {
                 space_type: st,
             };
             if self.arbiter.spaces.remove(&space_id).is_none() {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": "ErrSpaceNotExists"}),
                     status: 404,
-                    job_id: j,
                 }];
             }
             self.arbiter.version += 1;
@@ -713,11 +685,9 @@ impl StateMachine {
                     space.members.push(MemberEntry { did: md, access });
                 }
             } else {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": "ErrSpaceNotExists"}),
                     status: 404,
-                    job_id: j,
                 }];
             }
             self.arbiter.version += 1;
@@ -742,11 +712,9 @@ impl StateMachine {
             if let Some(space) = self.arbiter.spaces.get_mut(&space_id) {
                 space.members.retain(|m| m.did != md);
             } else {
-                let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": "ErrSpaceNotExists"}),
                     status: 404,
-                    job_id: j,
                 }];
             }
             self.arbiter.version += 1;
@@ -755,11 +723,9 @@ impl StateMachine {
             return self.execute_proxy(&method, &params);
         }
 
-        let j = self.alloc_job_id();
         vec![IoAction::SendResponse {
             body: serde_json::json!({}),
             status: 200,
-            job_id: j,
         }]
     }
 
@@ -780,11 +746,9 @@ impl StateMachine {
     }
 
     fn missing_param(&mut self, name: &str) -> Vec<IoAction> {
-        let j = self.alloc_job_id();
         vec![IoAction::SendResponse {
             body: serde_json::json!({"error": format!("ErrMissingParam: {name}")}),
             status: 400,
-            job_id: j,
         }]
     }
 
@@ -804,11 +768,9 @@ impl StateMachine {
                 job_id: j,
             }]
         } else {
-            let j = self.alloc_job_id();
             vec![IoAction::SendResponse {
                 body: serde_json::json!({"error": "ErrBackendNotConfigured"}),
                 status: 502,
-                job_id: j,
             }]
         }
     }
