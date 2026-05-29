@@ -32,21 +32,25 @@ pub type JobId = u64;
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SpaceId {
     pub space_type: String,
-    pub key: SpaceKey,
+    pub space_key: SpaceKey,
 }
 
-// ---------------------------------------------------------------------------
-// Events  (input to the state machine)
-// ---------------------------------------------------------------------------
-
+/// An incoming event to the state machine.
 #[derive(Debug, Clone)]
 pub enum Event {
     /// An incoming XRPC call from the HTTP server, with caller DID already
     /// resolved by the IO layer.
-    IncomingXrpc { method: String, params: Value, caller_did: Did },
+    IncomingXrpc {
+        method: String,
+        params: Value,
+        caller_did: Did,
+    },
 
-    /// A remote XRPC query (from policy evaluation) completed.
-    XrpcRemoteResult { result: Result<Value, String>, job_id: JobId },
+    /// The result of an XRPC request that was triggered by the arbiter.
+    XrpcRemoteResult {
+        result: Result<Value, String>,
+        job_id: JobId,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -56,13 +60,27 @@ pub enum Event {
 #[derive(Debug, Clone)]
 pub enum IoAction {
     /// Send an XRPC response to the client.
-    SendResponse { body: Value, status: u16, job_id: JobId },
+    SendResponse {
+        body: Value,
+        status: u16,
+        job_id: JobId,
+    },
 
     /// Resolve a remote XRPC query from the policy engine.
-    XrpcRemote { did: String, path: String, input: Value, job_id: JobId },
+    XrpcRemote {
+        did: String,
+        path: String,
+        input: Value,
+        job_id: JobId,
+    },
 
     /// Proxy an XRPC call to a backend service.
-    ProxyXrpc { backend_url: String, path: String, params: Value, job_id: JobId },
+    ProxyXrpc {
+        backend_url: String,
+        path: String,
+        params: Value,
+        job_id: JobId,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +114,7 @@ impl ArbiterState {
     /// Create a new arbiter with the given DID and initial owner.
     pub fn create(did: Did, config: Value, policy: String, owner_did: Did) -> Self {
         let admin_id = SpaceId {
-            key: "$admin".into(),
+            space_key: "$admin".into(),
             space_type: "town.muni.arbiter.config.adminSpace".into(),
         };
         let admin_space = Space {
@@ -151,12 +169,13 @@ impl NSID {
 }
 
 pub fn is_readonly_nsid(nsid: &str) -> bool {
-    matches!(nsid,
+    matches!(
+        nsid,
         NSID::GET_ARBITER_CONFIG
-        | NSID::GET_SPACE_CONFIG
-        | NSID::GET_SPACE_MEMBERS
-        | NSID::RESOLVE_SPACE_MEMBERS
-        | NSID::LIST_SPACES
+            | NSID::GET_SPACE_CONFIG
+            | NSID::GET_SPACE_MEMBERS
+            | NSID::RESOLVE_SPACE_MEMBERS
+            | NSID::LIST_SPACES
     )
 }
 
@@ -175,8 +194,14 @@ fn rego_to_serde(val: regorus::Value) -> Value {
 /// `resolve_result` policy evaluation and format the response body.
 fn format_resolve_result(val: regorus::Value) -> Value {
     let result = rego_to_serde(val);
-    let members = result.get("members").cloned().unwrap_or(Value::Array(vec![]));
-    let missing = result.get("missingSpaces").cloned().unwrap_or(Value::Array(vec![]));
+    let members = result
+        .get("members")
+        .cloned()
+        .unwrap_or(Value::Array(vec![]));
+    let missing = result
+        .get("missingSpaces")
+        .cloned()
+        .unwrap_or(Value::Array(vec![]));
     serde_json::json!({"members": members, "missingSpaces": missing})
 }
 
@@ -190,7 +215,10 @@ struct PendingEval {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum EvalPhase { Allow, ResolveResult }
+enum EvalPhase {
+    Allow,
+    ResolveResult,
+}
 
 /// Describes how to step a [`VmSession`] — either starting fresh or
 /// resuming with a value from a previous suspension.
@@ -242,9 +270,11 @@ impl StateMachine {
 
     pub fn handle_event(&mut self, event: Event) -> Vec<IoAction> {
         match event {
-            Event::IncomingXrpc { method, params, caller_did } => {
-                self.start_eval_or_execute(method, params, caller_did)
-            }
+            Event::IncomingXrpc {
+                method,
+                params,
+                caller_did,
+            } => self.start_eval_or_execute(method, params, caller_did),
             Event::XrpcRemoteResult { result, .. } => self.resume_pending_eval(result),
         }
     }
@@ -253,9 +283,17 @@ impl StateMachine {
     // Start or continue policy evaluation
     // -------------------------------------------------------------------
 
-    fn start_eval_or_execute(&mut self, method: String, params: Value, caller_did: Did) -> Vec<IoAction> {
+    fn start_eval_or_execute(
+        &mut self,
+        method: String,
+        params: Value,
+        caller_did: Did,
+    ) -> Vec<IoAction> {
         let entry_points: Vec<String> = if method == NSID::RESOLVE_SPACE_MEMBERS {
-            vec!["data.arbiter.allow".into(), "data.arbiter.resolve_result".into()]
+            vec![
+                "data.arbiter.allow".into(),
+                "data.arbiter.resolve_result".into(),
+            ]
         } else {
             vec!["data.arbiter.allow".into()]
         };
@@ -271,22 +309,34 @@ impl StateMachine {
         let rego_data = serde_to_rego(data);
         let rego_input = serde_to_rego(input);
 
-        let session = match VmSession::new(&self.arbiter.policy, &rego_data, &rego_input, &ep_refs) {
+        let session = match VmSession::new(&self.arbiter.policy, &rego_data, &rego_input, &ep_refs)
+        {
             Ok(s) => s,
             Err(e) => {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
-                    status: 500, job_id: j,
+                    status: 500,
+                    job_id: j,
                 }];
             }
         };
 
-        let ctx = EvalContext { caller_did, method, params, phase: EvalPhase::Allow };
+        let ctx = EvalContext {
+            caller_did,
+            method,
+            params,
+            phase: EvalPhase::Allow,
+        };
         self.continue_eval(session, ctx, EvalStep::Start)
     }
 
-    fn continue_eval(&mut self, mut session: VmSession, ctx: EvalContext, step: EvalStep<'_>) -> Vec<IoAction> {
+    fn continue_eval(
+        &mut self,
+        mut session: VmSession,
+        ctx: EvalContext,
+        step: EvalStep<'_>,
+    ) -> Vec<IoAction> {
         let result = match &step {
             EvalStep::Start => session.start(),
             EvalStep::Resume(val) => session.resume(val),
@@ -302,7 +352,8 @@ impl StateMachine {
                 let j = self.alloc_job_id();
                 vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("{error_label}: {e}")}),
-                    status: 500, job_id: j,
+                    status: 500,
+                    job_id: j,
                 }]
             }
         }
@@ -317,7 +368,11 @@ impl StateMachine {
         if ctx.phase == EvalPhase::ResolveResult {
             let body = format_resolve_result(val);
             let j = self.alloc_job_id();
-            return vec![IoAction::SendResponse { body, status: 200, job_id: j }];
+            return vec![IoAction::SendResponse {
+                body,
+                status: 200,
+                job_id: j,
+            }];
         }
 
         // Allow phase — check if true.
@@ -326,7 +381,8 @@ impl StateMachine {
             let j = self.alloc_job_id();
             return vec![IoAction::SendResponse {
                 body: serde_json::json!({"error": "ErrPermissionDenied"}),
-                status: 403, job_id: j,
+                status: 403,
+                job_id: j,
             }];
         }
 
@@ -347,7 +403,12 @@ impl StateMachine {
     // VmSession suspension handling
     // -------------------------------------------------------------------
 
-    fn handle_vm_suspension(&mut self, req: HostRequest, session: VmSession, ctx: EvalContext) -> Vec<IoAction> {
+    fn handle_vm_suspension(
+        &mut self,
+        req: HostRequest,
+        session: VmSession,
+        ctx: EvalContext,
+    ) -> Vec<IoAction> {
         match req {
             HostRequest::XrpcLocal { path, input } => {
                 let resolved = self.resolve_local(&path, &rego_to_serde(input));
@@ -368,18 +429,25 @@ impl StateMachine {
     }
 
     fn resume_pending_eval(&mut self, result: Result<Value, String>) -> Vec<IoAction> {
-        let Some(pending) = self.pending_eval.take() else { return vec![] };
+        let Some(pending) = self.pending_eval.take() else {
+            return vec![];
+        };
         match result {
             Err(msg) => {
                 let j = self.alloc_job_id();
                 vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("ErrRemoteXrpc: {msg}")}),
-                    status: 502, job_id: j,
+                    status: 502,
+                    job_id: j,
                 }]
             }
             Ok(data) => {
                 let resolved_rego = serde_to_rego(data);
-                self.continue_eval(pending.session, pending.ctx, EvalStep::Resume(&resolved_rego))
+                self.continue_eval(
+                    pending.session,
+                    pending.ctx,
+                    EvalStep::Resume(&resolved_rego),
+                )
             }
         }
     }
@@ -398,13 +466,17 @@ impl StateMachine {
                 match nsid {
                     NSID::GET_SPACE_MEMBERS => {
                         let members: Vec<Value> = space
-                            .map(|s| s.members.iter()
-                                .map(|m| serde_json::json!({"did": m.did, "access": m.access}))
-                                .collect())
+                            .map(|s| {
+                                s.members
+                                    .iter()
+                                    .map(|m| serde_json::json!({"did": m.did, "access": m.access}))
+                                    .collect()
+                            })
                             .unwrap_or_default();
                         serde_json::json!({"members": members})
                     }
-                    _ => { // GET_SPACE_CONFIG
+                    _ => {
+                        // GET_SPACE_CONFIG
                         let config = space.map(|s| &s.config);
                         serde_json::json!({"config": config})
                     }
@@ -414,7 +486,10 @@ impl StateMachine {
                 serde_json::json!({"config": &self.arbiter.config})
             }
             NSID::LIST_SPACES => {
-                let spaces: Vec<Value> = self.arbiter.spaces.values()
+                let spaces: Vec<Value> = self
+                    .arbiter
+                    .spaces
+                    .values()
                     .map(|s| serde_json::json!({"key": s.key, "spaceType": s.space_type}))
                     .collect();
                 serde_json::json!({"spaces": spaces})
@@ -438,7 +513,9 @@ impl StateMachine {
         let rego_input = serde_to_rego(input);
 
         let session = match VmSession::new(
-            &self.arbiter.policy, &rego_data, &rego_input,
+            &self.arbiter.policy,
+            &rego_data,
+            &rego_input,
             &["data.arbiter.resolve_result"],
         ) {
             Ok(s) => s,
@@ -446,12 +523,16 @@ impl StateMachine {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
                     body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
-                    status: 500, job_id: j,
+                    status: 500,
+                    job_id: j,
                 }];
             }
         };
 
-        let resolve_ctx = EvalContext { phase: EvalPhase::ResolveResult, ..ctx };
+        let resolve_ctx = EvalContext {
+            phase: EvalPhase::ResolveResult,
+            ..ctx
+        };
 
         self.continue_eval(session, resolve_ctx, EvalStep::Start)
     }
@@ -468,7 +549,10 @@ impl StateMachine {
                     Some(p) => p,
                     None => return self.missing_param("spaceKey/spaceType"),
                 };
-                let space_id = SpaceId { key: sk, space_type: st };
+                let space_id = SpaceId {
+                    space_key: sk,
+                    space_type: st,
+                };
                 let config = self.arbiter.get_space(&space_id).map(|s| &s.config);
                 serde_json::json!({"config": config, "spaceType": &space_id.space_type})
             }
@@ -477,31 +561,51 @@ impl StateMachine {
                     Some(p) => p,
                     None => return self.missing_param("spaceKey/spaceType"),
                 };
-                let space_id = SpaceId { key: sk, space_type: st };
-                let members: Vec<Value> = self.arbiter.get_space(&space_id)
-                    .map(|s| s.members.iter().map(|m| serde_json::json!({
-                        "member": {"did": m.did}, "access": m.access,
-                    })).collect())
+                let space_id = SpaceId {
+                    space_key: sk,
+                    space_type: st,
+                };
+                let members: Vec<Value> = self
+                    .arbiter
+                    .get_space(&space_id)
+                    .map(|s| {
+                        s.members
+                            .iter()
+                            .map(|m| {
+                                serde_json::json!({
+                                    "member": {"did": m.did}, "access": m.access,
+                                })
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 serde_json::json!({"members": members})
             }
             NSID::LIST_SPACES => {
                 let spaces: Vec<Value> = self.arbiter.spaces.iter().map(|(id, s)| serde_json::json!({
-                    "spaceKey": id.key, "spaceType": id.space_type, "config": s.config,
+                    "spaceKey": id.space_key, "spaceType": id.space_type, "config": s.config,
                 })).collect();
                 serde_json::json!({"spaces": spaces})
             }
             _ => unreachable!(),
         };
         let j = self.alloc_job_id();
-        vec![IoAction::SendResponse { body, status: 200, job_id: j }]
+        vec![IoAction::SendResponse {
+            body,
+            status: 200,
+            job_id: j,
+        }]
     }
 
     fn execute_operation(&mut self, method: String, params: Value) -> Vec<IoAction> {
         if method == NSID::DELETE_ARBITER {
             // The harness should delete us.  Signal completion.
             let j = self.alloc_job_id();
-            return vec![IoAction::SendResponse { body: serde_json::json!({}), status: 200, job_id: j }];
+            return vec![IoAction::SendResponse {
+                body: serde_json::json!({}),
+                status: 200,
+                job_id: j,
+            }];
         }
 
         if method == NSID::SET_ARBITER_CONFIG {
@@ -514,16 +618,21 @@ impl StateMachine {
                 Some(p) => p,
                 None => return self.missing_param("spaceKey/spaceType"),
             };
-            let space_id = SpaceId { key: sk, space_type: st };
+            let space_id = SpaceId {
+                space_key: sk,
+                space_type: st,
+            };
             if self.arbiter.spaces.contains_key(&space_id) {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
-                    body: serde_json::json!({"error": "ErrSpaceExists"}), status: 409, job_id: j,
+                    body: serde_json::json!({"error": "ErrSpaceExists"}),
+                    status: 409,
+                    job_id: j,
                 }];
             }
             let config = params.get("config").cloned().unwrap_or_default();
             let space = Space {
-                key: space_id.key.clone(),
+                key: space_id.space_key.clone(),
                 space_type: space_id.space_type.clone(),
                 config,
                 members: vec![],
@@ -535,14 +644,21 @@ impl StateMachine {
                 Some(p) => p,
                 None => return self.missing_param("spaceKey/spaceType"),
             };
-            let space_id = SpaceId { key: sk, space_type: st };
+            let space_id = SpaceId {
+                space_key: sk,
+                space_type: st,
+            };
             if let Some(space) = self.arbiter.spaces.get_mut(&space_id) {
-                if let Some(c) = params.get("config") { space.config = c.clone(); }
+                if let Some(c) = params.get("config") {
+                    space.config = c.clone();
+                }
                 self.arbiter.version += 1;
             } else {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
-                    body: serde_json::json!({"error": "ErrSpaceNotExists"}), status: 404, job_id: j,
+                    body: serde_json::json!({"error": "ErrSpaceNotExists"}),
+                    status: 404,
+                    job_id: j,
                 }];
             }
         } else if method == NSID::DELETE_SPACE {
@@ -553,14 +669,21 @@ impl StateMachine {
             if sk == "$admin" && st == "town.muni.arbiter.config.adminSpace" {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
-                    body: serde_json::json!({"error": "ErrCannotDeleteAdminSpace"}), status: 403, job_id: j,
+                    body: serde_json::json!({"error": "ErrCannotDeleteAdminSpace"}),
+                    status: 403,
+                    job_id: j,
                 }];
             }
-            let space_id = SpaceId { key: sk, space_type: st };
+            let space_id = SpaceId {
+                space_key: sk,
+                space_type: st,
+            };
             if self.arbiter.spaces.remove(&space_id).is_none() {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
-                    body: serde_json::json!({"error": "ErrSpaceNotExists"}), status: 404, job_id: j,
+                    body: serde_json::json!({"error": "ErrSpaceNotExists"}),
+                    status: 404,
+                    job_id: j,
                 }];
             }
             self.arbiter.version += 1;
@@ -569,8 +692,12 @@ impl StateMachine {
                 Some(p) => p,
                 None => return self.missing_param("spaceKey/spaceType"),
             };
-            let space_id = SpaceId { key: sk, space_type: st };
-            let md = params.get("memberDid")
+            let space_id = SpaceId {
+                space_key: sk,
+                space_type: st,
+            };
+            let md = params
+                .get("memberDid")
                 .or_else(|| params.get("member").and_then(|m| m.get("did")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
@@ -588,7 +715,9 @@ impl StateMachine {
             } else {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
-                    body: serde_json::json!({"error": "ErrSpaceNotExists"}), status: 404, job_id: j,
+                    body: serde_json::json!({"error": "ErrSpaceNotExists"}),
+                    status: 404,
+                    job_id: j,
                 }];
             }
             self.arbiter.version += 1;
@@ -597,8 +726,12 @@ impl StateMachine {
                 Some(p) => p,
                 None => return self.missing_param("spaceKey/spaceType"),
             };
-            let space_id = SpaceId { key: sk, space_type: st };
-            let md = params.get("memberDid")
+            let space_id = SpaceId {
+                space_key: sk,
+                space_type: st,
+            };
+            let md = params
+                .get("memberDid")
                 .or_else(|| params.get("member").and_then(|m| m.get("did")))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
@@ -611,7 +744,9 @@ impl StateMachine {
             } else {
                 let j = self.alloc_job_id();
                 return vec![IoAction::SendResponse {
-                    body: serde_json::json!({"error": "ErrSpaceNotExists"}), status: 404, job_id: j,
+                    body: serde_json::json!({"error": "ErrSpaceNotExists"}),
+                    status: 404,
+                    job_id: j,
                 }];
             }
             self.arbiter.version += 1;
@@ -621,7 +756,11 @@ impl StateMachine {
         }
 
         let j = self.alloc_job_id();
-        vec![IoAction::SendResponse { body: serde_json::json!({}), status: 200, job_id: j }]
+        vec![IoAction::SendResponse {
+            body: serde_json::json!({}),
+            status: 200,
+            job_id: j,
+        }]
     }
 
     /// Extract `(spaceType, spaceKey)` from XRPC params.
@@ -634,26 +773,42 @@ impl StateMachine {
     /// Extract a [`SpaceId`] from XRPC params.
     fn space_id_from_params(&self, params: &Value) -> Option<SpaceId> {
         let (space_type, key) = self.space_params(params)?;
-        Some(SpaceId { key, space_type })
+        Some(SpaceId {
+            space_key: key,
+            space_type,
+        })
     }
 
     fn missing_param(&mut self, name: &str) -> Vec<IoAction> {
         let j = self.alloc_job_id();
         vec![IoAction::SendResponse {
             body: serde_json::json!({"error": format!("ErrMissingParam: {name}")}),
-            status: 400, job_id: j,
+            status: 400,
+            job_id: j,
         }]
     }
 
     fn execute_proxy(&mut self, method: &str, params: &Value) -> Vec<IoAction> {
-        let backend_url = self.arbiter.config.get("backendUrl").and_then(|v| v.as_str()).map(String::from);
+        let backend_url = self
+            .arbiter
+            .config
+            .get("backendUrl")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         if let Some(url) = backend_url {
             let j = self.alloc_job_id();
-            vec![IoAction::ProxyXrpc { backend_url: url, path: method.to_string(), params: params.clone(), job_id: j }]
+            vec![IoAction::ProxyXrpc {
+                backend_url: url,
+                path: method.to_string(),
+                params: params.clone(),
+                job_id: j,
+            }]
         } else {
             let j = self.alloc_job_id();
             vec![IoAction::SendResponse {
-                body: serde_json::json!({"error": "ErrBackendNotConfigured"}), status: 502, job_id: j,
+                body: serde_json::json!({"error": "ErrBackendNotConfigured"}),
+                status: 502,
+                job_id: j,
             }]
         }
     }
@@ -677,7 +832,7 @@ mod tests {
         );
         assert_eq!(arb.did, "did:plc:abc");
         let admin_id = SpaceId {
-            key: "$admin".into(),
+            space_key: "$admin".into(),
             space_type: "town.muni.arbiter.config.adminSpace".into(),
         };
         assert!(arb.spaces.contains_key(&admin_id));
@@ -714,7 +869,12 @@ mod tests {
         match &actions[0] {
             IoAction::SendResponse { body, status, .. } => {
                 assert_eq!(*status, 200);
-                assert_eq!(body.get("config").and_then(|c| c.get("key")).and_then(|v| v.as_str()), Some("val"));
+                assert_eq!(
+                    body.get("config")
+                        .and_then(|c| c.get("key"))
+                        .and_then(|v| v.as_str()),
+                    Some("val")
+                );
             }
             _ => panic!("expected SendResponse"),
         }
@@ -734,8 +894,9 @@ mod tests {
             caller_did: "did:plc:bob".into(),
         });
         assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], IoAction::SendResponse { status: 200, .. }));
+        assert!(matches!(
+            &actions[0],
+            IoAction::SendResponse { status: 200, .. }
+        ));
     }
-
-
 }

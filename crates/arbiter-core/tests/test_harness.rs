@@ -251,10 +251,15 @@ impl TestDriver {
         // "town.muni.arbiter.resolveSpaceMembers". Route through the target
         // state machine just like the server would.
         let space_key = input.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
-        let space_type = input.get("spaceType").and_then(|v| v.as_str()).unwrap_or(
-            if space_key == "$admin" { "town.muni.arbiter.config.adminSpace" }
-            else { "town.muni.arbiter.config.space" }
-        );
+        let space_type =
+            input
+                .get("spaceType")
+                .and_then(|v| v.as_str())
+                .unwrap_or(if space_key == "$admin" {
+                    "town.muni.arbiter.config.adminSpace"
+                } else {
+                    "town.muni.arbiter.config.space"
+                });
         let params = serde_json::json!({
             "arbiterDid": base_did,
             "spaceKey": space_key,
@@ -278,8 +283,10 @@ impl TestDriver {
     /// Drive a machine's IO actions until we get a SendResponse, routing
     /// child XrpcLocal / XrpcRemote through the appropriate machines.
     fn drive_to_response(&mut self, arbiter_did: &str, actions: Vec<IoAction>) -> Value {
-        let mut pending: Vec<(String, IoAction)> =
-            actions.into_iter().map(|a| (arbiter_did.to_string(), a)).collect();
+        let mut pending: Vec<(String, IoAction)> = actions
+            .into_iter()
+            .map(|a| (arbiter_did.to_string(), a))
+            .collect();
 
         while let Some((src, action)) = pending.pop() {
             match action {
@@ -336,10 +343,16 @@ impl TestDriver {
         }
     }
 
-    pub fn set_space_config(&mut self, arbiter_did: &str, space_key: &str, space_type: &str, config: Value) {
+    pub fn set_space_config(
+        &mut self,
+        arbiter_did: &str,
+        space_key: &str,
+        space_type: &str,
+        config: Value,
+    ) {
         if let Some(sm) = self.machines.get_mut(arbiter_did) {
             let id = SpaceId {
-                key: space_key.into(),
+                space_key: space_key.into(),
                 space_type: space_type.into(),
             };
             if let Some(space) = sm.arbiter.get_space_mut(&id) {
