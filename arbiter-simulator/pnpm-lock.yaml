@@ -29,6 +29,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
+      arbiter-core-wasm:
+        specifier: file:../crates/arbiter-core-wasm/pkg
+        version: file:../crates/arbiter-core-wasm/pkg
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
@@ -714,6 +717,9 @@ packages:
     resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
     engines: {node: '>=0.4.0'}
     hasBin: true
+
+  arbiter-core-wasm@file:../crates/arbiter-core-wasm/pkg:
+    resolution: {directory: ../crates/arbiter-core-wasm/pkg, type: directory}
 
   aria-query@5.3.1:
     resolution: {integrity: sha512-Z/ZeOgVl7bcSYZ/u/rh0fOpvEpq//LZmdbkXyc7syVzjPAhfOa9ebsdTSjEBDU4vs5nC98Kfduj1uFo0qyET3g==}
@@ -1650,6 +1656,8 @@ snapshots:
       tinyrainbow: 2.0.0
 
   acorn@8.16.0: {}
+
+  arbiter-core-wasm@file:../crates/arbiter-core-wasm/pkg: {}
 
   aria-query@5.3.1: {}
 

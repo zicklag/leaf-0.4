@@ -1,0 +1,333 @@
+//! WebAssembly bindings for [`arbiter-core`].
+//!
+//! Provides an [`ArbiterStateMachine`] that wraps the sans-IO [`StateMachine`]
+//! for use in the browser.  Complex types are passed as [`JsValue`] and
+//! deserialized by `serde-wasm-bindgen` — JS callers pass objects/arrays
+//! directly without manual stringification.
+//!
+//! # Architecture
+//!
+//! The simulator keeps a collection of [`ArbiterStateMachine`]s (one per DID)
+//! and drives them by feeding events and routing actions:
+//!
+//! ```text
+//! ┌──────────────┐   IncomingXrpc    ┌──────────────────┐
+//! │   Simulator   │ ───────────────→ │ ArbiterStateMachine │
+//! │  (JS / TS)   │                  │   (Rust WASM)     │
+//! │              │ ←─────────────── │                   │
+//! └──────────────┘    Vec<IoAction>  └──────────────────┘
+//! ```
+//!
+//! - `handleIncomingXrpc` → feed an XRPC call from a user/client
+//! - `handleRemoteResult` → feed the response from a remote XRPC request
+//!
+//! Each call returns an array of [`IoActionView`] objects.  The simulator
+//! processes them: sends responses back, or routes `xrpc_remote` requests
+//! to the target machine.
+
+use arbiter_core::{
+    ArbiterState, Event, IoAction, SpaceId, StateMachine,
+    policy_core::XrpcMethod,
+};
+use serde::Serialize;
+use serde_wasm_bindgen::Serializer;
+use wasm_bindgen::prelude::*;
+
+// ---------------------------------------------------------------------------
+// Serialization helpers
+// ---------------------------------------------------------------------------
+
+/// Serialize any serde-able value to a JsValue (maps become plain objects).
+fn to_js_value<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
+    v.serialize(&Serializer::json_compatible())
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Deserialize a JsValue into a Rust type.
+fn from_js_value<T: serde::de::DeserializeOwned>(v: JsValue) -> Result<T, JsValue> {
+    serde_wasm_bindgen::from_value(v).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// ArbiterStateMachine — wraps arbiter_core::StateMachine
+// ---------------------------------------------------------------------------
+
+/// A single arbiter's state machine, exposed to JavaScript/WASM.
+///
+/// Create one with [`new`](Self::new) or [`fromState`](Self::from_state),
+/// then feed events with [`handleIncomingXrpc`](Self::handle_incoming_xrpc)
+/// and [`handleRemoteResult`](Self::handle_remote_result).
+///
+/// Each method returns an array of action objects that the host must process.
+#[wasm_bindgen]
+pub struct ArbiterStateMachine {
+    inner: StateMachine,
+}
+
+#[wasm_bindgen]
+impl ArbiterStateMachine {
+    /// Create a new arbiter with an initial owner.
+    ///
+    /// - `did` — the arbiter's DID (e.g. `"did:plc:abc"`)
+    /// - `config` — a JS object with the arbiter's configuration
+    /// - `policy` — the raw Rego policy source
+    /// - `owner_did` — the initial owner's DID
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        did: &str,
+        config: JsValue,
+        policy: &str,
+        owner_did: &str,
+    ) -> Result<ArbiterStateMachine, JsValue> {
+        let config: serde_json::Value = from_js_value(config)?;
+        Ok(ArbiterStateMachine {
+            inner: StateMachine::create(did.into(), config, policy.into(), owner_did.into()),
+        })
+    }
+
+    /// Restore a state machine from a previously serialised arbiter state.
+    ///
+    /// The argument must be a JS object produced by
+    /// [`serialiseState`](Self::serialise_state).
+    #[wasm_bindgen(js_name = fromState)]
+    pub fn from_state(state: JsValue) -> Result<ArbiterStateMachine, JsValue> {
+        let arbiter: ArbiterState = from_js_value(state)?;
+        Ok(ArbiterStateMachine {
+            inner: StateMachine::new(arbiter),
+        })
+    }
+
+    /// Serialise the current arbiter state into a plain JS object (for
+    /// snapshots / persistence).
+    #[wasm_bindgen(js_name = serialiseState)]
+    pub fn serialise_state(&self) -> Result<JsValue, JsValue> {
+        to_js_value(&self.inner.arbiter)
+    }
+
+    // -------------------------------------------------------------------
+    // State accessors
+    // -------------------------------------------------------------------
+
+    /// The arbiter's DID.
+    #[wasm_bindgen(getter)]
+    pub fn did(&self) -> String {
+        self.inner.arbiter.did.clone()
+    }
+
+    /// The arbiter's version number (incremented on each mutation).
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> u64 {
+        self.inner.arbiter.version
+    }
+
+    /// The arbiter's configuration object.
+    #[wasm_bindgen(getter)]
+    pub fn config(&self) -> Result<JsValue, JsValue> {
+        to_js_value(&self.inner.arbiter.config)
+    }
+
+    /// The arbiter's Rego policy source string.
+    #[wasm_bindgen(getter)]
+    pub fn policy(&self) -> String {
+        self.inner.arbiter.policy.clone()
+    }
+
+    // -------------------------------------------------------------------
+    // Space access
+    // -------------------------------------------------------------------
+
+    /// Get information about a space.  Returns `null` if the space does not
+    /// exist.
+    ///
+    /// - `space_key` — the space's key (e.g. `"$admin"`, `"team"`)
+    /// - `space_type` — the space's type
+    ///   (e.g. `"town.muni.arbiter.config.adminSpace"`)
+    #[wasm_bindgen(js_name = getSpace)]
+    pub fn get_space(&self, space_key: &str, space_type: &str) -> Result<JsValue, JsValue> {
+        let id = SpaceId {
+            space_key: space_key.into(),
+            space_type: space_type.into(),
+        };
+        match self.inner.arbiter.get_space(&id) {
+            Some(space) => to_js_value(&SpaceView {
+                key: &space.key,
+                space_type: &space.space_type,
+                config: &space.config,
+                members: &space.members,
+            }),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// List all spaces on this arbiter as an array of objects.
+    #[wasm_bindgen(js_name = listSpaces)]
+    pub fn list_spaces(&self) -> Result<JsValue, JsValue> {
+        let spaces: Vec<SpaceView<'_>> = self
+            .inner
+            .arbiter
+            .spaces
+            .values()
+            .map(|s| SpaceView {
+                key: &s.key,
+                space_type: &s.space_type,
+                config: &s.config,
+                members: &s.members,
+            })
+            .collect();
+        to_js_value(&spaces)
+    }
+
+    // -------------------------------------------------------------------
+    // Event handling
+    // -------------------------------------------------------------------
+
+    /// Feed an incoming XRPC call to the state machine.
+    ///
+    /// Returns an array of action objects that the host must process.
+    ///
+    /// - `nsid` — the XRPC method NSID
+    ///   (e.g. `"town.muni.arbiter.getArbiterConfig"`)
+    /// - `method` — `"query"` or `"procedure"`
+    /// - `params` — a JS object with the call parameters
+    /// - `caller_did` — the DID of the caller
+    #[wasm_bindgen(js_name = handleIncomingXrpc)]
+    pub fn handle_incoming_xrpc(
+        &mut self,
+        nsid: &str,
+        method: &str,
+        params: JsValue,
+        caller_did: &str,
+    ) -> Result<JsValue, JsValue> {
+        let method = parse_method(method)?;
+        let params: serde_json::Value = from_js_value(params)?;
+        let event = Event::IncomingXrpc {
+            nsid: nsid.into(),
+            method,
+            params,
+            caller_did: caller_did.into(),
+        };
+        let actions = self.inner.handle_event(event);
+        io_actions_to_js(actions)
+    }
+
+    /// Feed the result of a remote XRPC request back to the state machine.
+    ///
+    /// Returns an array of action objects (may include further remote
+    /// requests or a final response).
+    ///
+    /// - `status` — the HTTP status code
+    /// - `body` — the response body (any JS value)
+    /// - `job_id` — the job ID from the original [`IoActionView`] request
+    #[wasm_bindgen(js_name = handleRemoteResult)]
+    pub fn handle_remote_result(
+        &mut self,
+        status: u16,
+        body: JsValue,
+        job_id: u64,
+    ) -> Result<JsValue, JsValue> {
+        let body: serde_json::Value = from_js_value(body)?;
+        let event = Event::XrpcRemoteResult {
+            status,
+            body,
+            job_id,
+        };
+        let actions = self.inner.handle_event(event);
+        io_actions_to_js(actions)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IoAction conversion
+// ---------------------------------------------------------------------------
+
+/// Convert a `Vec<IoAction>` into a JS array of plain objects.
+fn io_actions_to_js(actions: Vec<IoAction>) -> Result<JsValue, JsValue> {
+    let mut result = Vec::with_capacity(actions.len());
+    for action in actions {
+        match action {
+            IoAction::SendXrpcResponse { body, status } => {
+                result.push(IoActionView::Response { body, status });
+            }
+            IoAction::SendXrpcRequest {
+                did,
+                method,
+                nsid,
+                input,
+                job_id,
+            } => {
+                result.push(IoActionView::Request {
+                    did,
+                    method: method.to_string(),
+                    nsid,
+                    input,
+                    job_id,
+                });
+            }
+        }
+    }
+    to_js_value(&result)
+}
+
+// ---------------------------------------------------------------------------
+// Serialisable view types
+// ---------------------------------------------------------------------------
+
+/// A serialisable view of an [`IoAction`] for JS consumption.
+#[derive(Serialize)]
+#[serde(tag = "kind")]
+enum IoActionView {
+    #[serde(rename = "response")]
+    Response {
+        body: serde_json::Value,
+        status: u16,
+    },
+    #[serde(rename = "request")]
+    Request {
+        did: String,
+        method: String,
+        nsid: String,
+        input: serde_json::Value,
+        #[serde(rename = "jobId")]
+        job_id: u64,
+    },
+}
+
+/// A serialisable view of a [`Space`] for JS consumption.
+#[derive(Serialize)]
+struct SpaceView<'a> {
+    key: &'a str,
+    #[serde(rename = "spaceType")]
+    space_type: &'a str,
+    config: &'a serde_json::Value,
+    members: &'a [arbiter_core::MemberEntry],
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn parse_method(s: &str) -> Result<XrpcMethod, JsValue> {
+    match s {
+        "query" => Ok(XrpcMethod::Query),
+        "procedure" => Ok(XrpcMethod::Procedure),
+        _ => Err(JsValue::from_str(&format!(
+            "Invalid XRPC method: expected \"query\" or \"procedure\", got \"{s}\""
+        ))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_method() {
+        assert!(parse_method("query").is_ok());
+        assert!(parse_method("procedure").is_ok());
+        assert!(parse_method("invalid").is_err());
+    }
+}
