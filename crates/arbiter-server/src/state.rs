@@ -1,53 +1,20 @@
-//! Server state — the minimal data store for arbiters, spaces, and members.
+//! Server state — collection of arbiter state machines.
 //!
-//! No state machine, no action dispatch. Just data with helpers for
-//! snapshot/load and field access.
+//! Each arbiter is a full [`arbiter_core::StateMachine`].  The collection is
+//! locked behind a single `tokio::sync::Mutex` in [`ServerState`].
+//!
+//! Persistence is handled via [`ArbiterCollection::snapshot`] /
+//! [`ArbiterCollection::load_snapshot`], which serialize only the
+//! [`ArbiterState`](arbiter_core::ArbiterState) data (not transient VM
+//! sessions).
 
 use std::collections::HashMap;
 
+use arbiter_core::{ArbiterState, StateMachine, SpaceId, Space, MemberEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-// ---------------------------------------------------------------------------
-// Core data types
-// ---------------------------------------------------------------------------
-
 pub type Did = String;
-pub type SpaceKey = String;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MemberEntry {
-    pub did: Did,
-    pub access: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Space {
-    pub key: SpaceKey,
-    pub space_type: String,
-    pub config: Value,
-    pub members: Vec<MemberEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArbiterState {
-    pub did: Did,
-    pub version: u64,
-    pub config: Value,
-    pub policy: String,
-    pub online: bool,
-    pub spaces: HashMap<SpaceKey, Space>,
-}
-
-impl ArbiterState {
-    pub fn space_members(&self, key: &str) -> Vec<MemberEntry> {
-        self.spaces.get(key).map(|s| s.members.clone()).unwrap_or_default()
-    }
-
-    pub fn space_config(&self, key: &str) -> Value {
-        self.spaces.get(key).map(|s| s.config.clone()).unwrap_or(Value::Null)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Snapshot types (JSON-serializable full state)
@@ -55,7 +22,7 @@ impl ArbiterState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpaceSnapshot {
-    pub key: SpaceKey,
+    pub key: String,
     pub space_type: String,
     pub config: Value,
     pub members: Vec<MemberEntry>,
@@ -67,7 +34,6 @@ pub struct ArbiterSnapshot {
     pub version: u64,
     pub config: Value,
     pub policy: String,
-    pub online: bool,
     pub spaces: Vec<SpaceSnapshot>,
 }
 
@@ -77,61 +43,35 @@ pub struct ServerSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// ArbiterCollection — the entire in-memory state
+// ArbiterCollection — all state machines
 // ---------------------------------------------------------------------------
 
-/// All arbiters managed by this server. Locked behind a `tokio::sync::Mutex`
-/// in `ServerState`. No internal state machine — just data.
+/// All arbiter state machines managed by this server.
+///
+/// Locked behind [`tokio::sync::Mutex`] in [`ServerState`](crate::ServerState).
 #[derive(Default)]
 pub struct ArbiterCollection {
-    pub arbiters: HashMap<Did, ArbiterState>,
+    pub arbiters: HashMap<Did, StateMachine>,
 }
 
 impl ArbiterCollection {
     pub fn new() -> Self {
-        Self { arbiters: HashMap::new() }
+        Self {
+            arbiters: HashMap::new(),
+        }
     }
 
-    pub fn get(&self, did: &str) -> Option<&ArbiterState> {
+    pub fn get(&self, did: &str) -> Option<&StateMachine> {
         self.arbiters.get(did)
     }
 
-    pub fn get_mut(&mut self, did: &str) -> Option<&mut ArbiterState> {
+    pub fn get_mut(&mut self, did: &str) -> Option<&mut StateMachine> {
         self.arbiters.get_mut(did)
     }
 
     pub fn create_arbiter(&mut self, did: Did, config: Value, policy: String, owner_did: Did) {
-        let admin_space = Space {
-            key: "$admin".into(),
-            space_type: "town.muni.arbiter.config.adminSpace".into(),
-            config: Value::Null,
-            members: vec![MemberEntry {
-                did: owner_did,
-                access: serde_json::json!({"level": "Owner"}),
-            }],
-        };
-        let mut spaces = HashMap::new();
-        spaces.insert("$admin".into(), admin_space);
-        self.arbiters.insert(did.clone(), ArbiterState {
-            did,
-            version: 1,
-            config,
-            policy,
-            online: true,
-            spaces,
-        });
-    }
-
-    pub fn space_members(&self, arbiter_did: &str, space_key: &str) -> Vec<MemberEntry> {
-        self.arbiters.get(arbiter_did)
-            .map(|a| a.space_members(space_key))
-            .unwrap_or_default()
-    }
-
-    pub fn space_config(&self, arbiter_did: &str, space_key: &str) -> Value {
-        self.arbiters.get(arbiter_did)
-            .map(|a| a.space_config(space_key))
-            .unwrap_or(Value::Null)
+        let sm = StateMachine::create(did.clone(), config, policy, owner_did);
+        self.arbiters.insert(did, sm);
     }
 
     // -------------------------------------------------------------------
@@ -139,44 +79,67 @@ impl ArbiterCollection {
     // -------------------------------------------------------------------
 
     pub fn snapshot(&self) -> ServerSnapshot {
-        let arbiters: Vec<ArbiterSnapshot> = self.arbiters.values().map(|a| {
-            let spaces: Vec<SpaceSnapshot> = a.spaces.values().map(|s| SpaceSnapshot {
-                key: s.key.clone(),
-                space_type: s.space_type.clone(),
-                config: s.config.clone(),
-                members: s.members.clone(),
-            }).collect();
-            ArbiterSnapshot {
-                did: a.did.clone(),
-                version: a.version,
-                config: a.config.clone(),
-                policy: a.policy.clone(),
-                online: a.online,
-                spaces,
-            }
-        }).collect();
+        let arbiters: Vec<ArbiterSnapshot> = self
+            .arbiters
+            .values()
+            .map(|sm| {
+                let arb = &sm.arbiter;
+                let spaces: Vec<SpaceSnapshot> = arb
+                    .spaces
+                    .values()
+                    .map(|s| SpaceSnapshot {
+                        key: s.key.clone(),
+                        space_type: s.space_type.clone(),
+                        config: s.config.clone(),
+                        members: s.members.clone(),
+                    })
+                    .collect();
+                ArbiterSnapshot {
+                    did: arb.did.clone(),
+                    version: arb.version,
+                    config: arb.config.clone(),
+                    policy: arb.policy.clone(),
+                    spaces,
+                }
+            })
+            .collect();
         ServerSnapshot { arbiters }
     }
 
     pub fn load_snapshot(&mut self, snapshot: ServerSnapshot) {
         self.arbiters.clear();
         for a in snapshot.arbiters {
-            let spaces: HashMap<SpaceKey, Space> = a.spaces.into_iter().map(|s| {
-                (s.key.clone(), Space {
-                    key: s.key,
-                    space_type: s.space_type,
-                    config: s.config,
-                    members: s.members,
+            let spaces: HashMap<SpaceId, Space> = a
+                .spaces
+                .into_iter()
+                .map(|s| {
+                    let space = Space {
+                        key: s.key.clone(),
+                        space_type: s.space_type.clone(),
+                        config: s.config,
+                        members: s.members,
+                    };
+                    let id = SpaceId {
+                        space_key: space.key.clone(),
+                        space_type: space.space_type.clone(),
+                    };
+                    (id, space)
                 })
-            }).collect();
-            self.arbiters.insert(a.did.clone(), ArbiterState {
-                did: a.did,
+                .collect();
+            let arb_state = ArbiterState {
+                did: a.did.clone(),
                 version: a.version,
                 config: a.config,
                 policy: a.policy,
-                online: a.online,
                 spaces,
-            });
+            };
+            self.arbiters
+                .insert(a.did, StateMachine::new(arb_state));
         }
+    }
+
+    /// Remove an arbiter by DID.  Returns `true` if it existed.
+    pub fn remove(&mut self, did: &str) -> bool {
+        self.arbiters.remove(did).is_some()
     }
 }

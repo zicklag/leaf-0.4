@@ -1,11 +1,14 @@
 //! Muni Town Arbiter Server v2 — AT Protocol XRPC HTTP server.
 //!
-//! Implements `town.muni.arbiter.*` XRPC lexicons via Salvo.  No state machine;
-//! the server directly evaluates policies and manipulates state.
+//! All XRPC requests are handled by a single catch-all handler that uses
+//! the `atproto-proxy` header to identify the target arbiter DID and
+//! routes through its [`StateMachine`](arbiter_core::StateMachine).
 
 use std::sync::Arc;
 
-use atproto_identity::resolve::{HickoryDnsResolver, IdentityResolver, InnerIdentityResolver, SharedIdentityResolver};
+use atproto_identity::resolve::{
+    HickoryDnsResolver, IdentityResolver, InnerIdentityResolver, SharedIdentityResolver,
+};
 use clap::Parser;
 use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
@@ -14,8 +17,6 @@ use salvo::writing::Json;
 mod auth;
 mod handlers;
 mod persistence;
-mod plc;
-mod policy;
 mod state;
 
 use auth::AuthConfig;
@@ -56,7 +57,6 @@ pub struct ServerState {
     pub auth: Arc<AuthConfig>,
     pub identity_resolver: Arc<dyn IdentityResolver>,
     pub plc_directory_url: String,
-    pub did_keys: plc::DidKeyStore,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,11 +64,19 @@ pub struct ServerState {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
-struct ServerDataMiddleware { state: Arc<ServerState> }
+struct ServerDataMiddleware {
+    state: Arc<ServerState>,
+}
 
 #[async_trait]
 impl salvo::Handler for ServerDataMiddleware {
-    async fn handle(&self, req: &mut Request, depot: &mut Depot, res: &mut Response, ctrl: &mut FlowCtrl) {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
         depot.insert("state", self.state.clone());
         ctrl.call_next(req, depot, res).await;
     }
@@ -81,14 +89,21 @@ impl salvo::Handler for ServerDataMiddleware {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info".into()),
+        )
         .init();
 
     let config = AppConfig::parse();
     let default_policy = include_str!("../../../policies/arbiter/access-levels.rego");
     let server_did = format!("did:web:{}", config.hostname.replace(':', "%3A"));
 
-    tracing::info!("Starting arbiter server v2 on {} (DID: {})", config.listen, server_did);
+    tracing::info!(
+        "Starting arbiter server v2 on {} (DID: {})",
+        config.listen,
+        server_did
+    );
 
     // Identity resolver
     let resolver_client = reqwest::Client::new();
@@ -99,8 +114,10 @@ async fn main() -> anyhow::Result<()> {
         plc_hostname: config.plc_directory_url.clone(),
     }));
     let identity_resolver = Arc::new(identity_resolver) as Arc<dyn IdentityResolver>;
-    let auth = Arc::new(AuthConfig::new(identity_resolver.clone())
-        .with_unsafe_token_if(config.unsafe_auth_token.clone()));
+    let auth = Arc::new(
+        AuthConfig::new(identity_resolver.clone())
+            .with_unsafe_token_if(config.unsafe_auth_token.clone()),
+    );
 
     // Load persisted state
     let persister = Persister::new(config.data_dir.clone());
@@ -120,7 +137,6 @@ async fn main() -> anyhow::Result<()> {
         auth: auth.clone(),
         identity_resolver: identity_resolver.clone(),
         plc_directory_url: config.plc_directory_url.clone(),
-        did_keys: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     });
 
     // Persistence loop
@@ -152,27 +168,22 @@ fn build_router(state: Arc<ServerState>, auth_config: Arc<AuthConfig>) -> Router
     let auth_middleware = auth::AuthMiddleware::new(auth_config);
 
     Router::new()
-        .hoop(ServerDataMiddleware { state: state.clone() })
-        .push(Router::with_path("/xrpc/town.muni.arbiter.createArbiter").hoop(auth_middleware.clone()).post(handlers::create_arbiter))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.getArbiterConfig").hoop(auth_middleware.clone()).get(handlers::get_arbiter_config))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.setArbiterConfig").hoop(auth_middleware.clone()).post(handlers::set_arbiter_config))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.deleteArbiter").hoop(auth_middleware.clone()).post(handlers::delete_arbiter))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.createSpace").hoop(auth_middleware.clone()).post(handlers::create_space))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.getSpaceConfig").hoop(auth_middleware.clone()).get(handlers::get_space_config))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.setSpaceConfig").hoop(auth_middleware.clone()).post(handlers::set_space_config))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.deleteSpace").hoop(auth_middleware.clone()).post(handlers::delete_space))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.listSpaces").hoop(auth_middleware.clone()).get(handlers::list_spaces))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.getSpaceMembers").hoop(auth_middleware.clone()).get(handlers::get_space_members))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.resolveSpaceMembers").hoop(auth_middleware.clone()).get(handlers::resolve_space_members))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.setSpaceMemberAccess").hoop(auth_middleware.clone()).post(handlers::set_space_member_access))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.removeSpaceMember").hoop(auth_middleware.clone()).post(handlers::remove_space_member))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.createDid").hoop(auth_middleware.clone()).post(handlers::create_did))
-        .push(Router::with_path("/xrpc/town.muni.arbiter.updateDidDoc").hoop(auth_middleware.clone()).post(handlers::update_did_doc))
-        .push(Router::with_path("/xrpc/{**rest}").hoop(auth_middleware).post(handlers::proxy_xrpc).get(handlers::proxy_xrpc))
+        .hoop(ServerDataMiddleware {
+            state: state.clone(),
+        })
+        .push(
+            Router::with_path("/xrpc/{**rest}")
+                .hoop(auth_middleware)
+                .post(handlers::handle_xrpc)
+                .get(handlers::handle_xrpc),
+        )
         .get(index)
 }
 
 #[handler]
 async fn index(res: &mut Response) {
-    res.render(Json(serde_json::json!({"service": "muni-town-arbiter", "version": "2"})));
+    res.render(Json(serde_json::json!({
+        "service": "muni-town-arbiter",
+        "version": "2"
+    })));
 }
