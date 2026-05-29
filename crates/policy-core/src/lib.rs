@@ -20,7 +20,7 @@
 //! Because `RegoVM` is `Send + Sync` (with regorus's `arc` feature), each
 //! caller owns its own `VmSession` — no pool needed.
 
-use std::collections::BTreeMap;
+use std::fmt::Display;
 
 use regorus::{
     PolicyModule, Value,
@@ -31,9 +31,40 @@ use regorus::{
     },
 };
 
-// ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
+/// The method of an XRPC request: either query or procedure.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum XrpcMethod {
+    Query,
+    Procedure,
+}
+
+impl std::fmt::Display for XrpcMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                XrpcMethod::Query => "query",
+                XrpcMethod::Procedure => "procedure",
+            }
+        )
+    }
+}
+impl std::str::FromStr for XrpcMethod {
+    type Err = XrpcMethodFromStrError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "query" => Ok(XrpcMethod::Query),
+            "procedure" => Ok(XrpcMethod::Procedure),
+            _ => Err(XrpcMethodFromStrError),
+        }
+    }
+}
+/// Error returned when parsing a string into an [`XrpcMethod`] fails.
+#[derive(Debug, thiserror::Error)]
+#[error("Invalid XRPC method")]
+pub struct XrpcMethodFromStrError;
 
 /// Errors that can occur during policy compilation or VM execution.
 #[derive(Debug, thiserror::Error)]
@@ -59,6 +90,12 @@ pub enum Error {
     /// suspended state.
     #[error("VM is not in a suspended state")]
     VmNotSuspended,
+
+    #[error("Error parsing function call: {0}")]
+    FunctionCallError(String),
+
+    #[error("Could not parse XRPC method: expected either `query` or `procedure`")]
+    MethodParseError(#[from] XrpcMethodFromStrError),
 }
 
 impl From<CompilerError> for Error {
@@ -86,8 +123,10 @@ impl From<regorus::languages::rego::compiler::SpannedCompilerError> for Error {
 pub enum HostRequest {
     /// Resolve an XRPC query on the local host.
     XrpcLocal {
-        /// The XRPC method NSID (e.g. `"town.muni.arbiter.resolveSpaceMembers"`).
-        path: String,
+        /// The XRPC call NSID (e.g. `"town.muni.arbiter.resolveSpaceMembers"`).
+        nsid: String,
+        /// The XRPC method.
+        method: XrpcMethod,
         /// The input parameters.
         input: Value,
     },
@@ -95,8 +134,10 @@ pub enum HostRequest {
     XrpcRemote {
         /// The DID of the remote host.
         did: String,
+        /// The XRPC method.
+        method: XrpcMethod,
         /// The XRPC method NSID.
-        path: String,
+        nsid: String,
         /// The input parameters.
         input: Value,
     },
@@ -136,9 +177,6 @@ pub enum VmResult {
 #[derive(Debug)]
 pub struct VmSession {
     vm: RegoVM,
-    /// Cache of resolved XRPC responses keyed by the request argument.
-    /// When a duplicate call is made, the cached response auto-resumes.
-    response_cache: BTreeMap<Value, Value>,
 }
 
 impl VmSession {
@@ -158,10 +196,7 @@ impl VmSession {
         entry_points: &[&str],
     ) -> Result<Self, Error> {
         let vm = build_vm(policy, data, input, entry_points)?;
-        Ok(Self {
-            vm,
-            response_cache: BTreeMap::new(),
-        })
+        Ok(Self { vm })
     }
 
     /// Start (or restart) evaluation from the first entry point.
@@ -178,46 +213,20 @@ impl VmSession {
 
     /// Resume a suspended evaluation with the host's response.
     ///
-    /// If the VM suspends again for the same request (duplicate call from
-    /// a different rule body) and we have a cached response, we
-    /// auto-resume without returning to the caller.
-    ///
     /// Errors from the VM are returned via the `Err` branch so callers can
     /// use the `?` operator.
     pub fn resume(&mut self, resume_value: &Value) -> Result<VmResult, Error> {
-        // Cache the response under the current suspension's cache key
-        if let Some(key) = self.extract_cache_key() {
-            self.response_cache.insert(key, resume_value.clone());
-        }
-
-        // First resume with the caller-provided value
-        let first = self.resume_one_step(resume_value)?;
-        match first {
-            VmResult::Completed(_) => return Ok(first),
-            VmResult::Suspended(_) => {}
-        }
-
-        // Auto-resolve cached duplicates
-        loop {
-            let key = match self.vm.suspend_reason().and_then(cache_key_from_reason) {
-                Some(k) => k,
-                None => return Err(Error::VmNotSuspended),
-            };
-
-            if let Some(cached) = self.response_cache.get(&key).cloned() {
-                let result = self.resume_one_step(&cached)?;
-                match result {
-                    VmResult::Completed(_) => return Ok(result),
-                    VmResult::Suspended(_) => continue,
+        let this = &mut *self;
+        match this.vm.resume(Some(resume_value.clone())) {
+            Ok(_) => match this.vm.execution_state() {
+                ExecutionState::Completed { result } => Ok(VmResult::Completed(result.clone())),
+                ExecutionState::Suspended { reason, .. } => {
+                    Ok(VmResult::Suspended(host_request_from_reason(reason)?))
                 }
-            } else {
-                // Not cached — ask the caller
-                let request = match self.vm.suspend_reason().and_then(host_request_from_reason) {
-                    Some(r) => r,
-                    None => return Err(Error::UnexpectedSuspension),
-                };
-                return Ok(VmResult::Suspended(request));
-            }
+                ExecutionState::Error { error } => Err(Error::Vm(error.clone())),
+                _ => panic!("Unexpected Rego VM state."),
+            },
+            Err(e) => Err(Error::Vm(e)),
         }
     }
 
@@ -231,37 +240,11 @@ impl VmSession {
             Ok(_) => match self.vm.execution_state() {
                 ExecutionState::Completed { result } => Ok(VmResult::Completed(result.clone())),
                 ExecutionState::Suspended { reason, .. } => {
-                    match host_request_from_reason(reason) {
-                        Some(request) => Ok(VmResult::Suspended(request)),
-                        None => Err(Error::UnexpectedSuspension),
-                    }
+                    Ok(VmResult::Suspended(host_request_from_reason(reason)?))
                 }
                 state => Err(Error::UnexpectedState(format!(
                     "Unexpected VM state after execute: {state:?}"
                 ))),
-            },
-            Err(e) => Err(Error::Vm(e)),
-        }
-    }
-
-    /// Extract the cache key (the argument Value) from the current suspension.
-    fn extract_cache_key(&self) -> Option<Value> {
-        self.vm.suspend_reason().and_then(cache_key_from_reason)
-    }
-
-    /// Resume one step: inject the resolved value and process one continuation.
-    fn resume_one_step(&mut self, value: &Value) -> Result<VmResult, Error> {
-        match self.vm.resume(Some(value.clone())) {
-            Ok(_) => match self.vm.execution_state() {
-                ExecutionState::Completed { result } => Ok(VmResult::Completed(result.clone())),
-                ExecutionState::Suspended { reason, .. } => {
-                    match host_request_from_reason(reason) {
-                        Some(request) => Ok(VmResult::Suspended(request)),
-                        None => Err(Error::UnexpectedSuspension),
-                    }
-                }
-                ExecutionState::Error { error } => Err(Error::Vm(error.clone())),
-                _ => panic!("Unexpected Rego VM state."),
             },
             Err(e) => Err(Error::Vm(e)),
         }
@@ -276,40 +259,63 @@ impl VmSession {
 ///
 /// The argument is expected to be a Rego object produced by the policy
 /// extension functions (see [`POLICY_EXTENSIONS`]).
-fn host_request_from_reason(reason: &SuspendReason) -> Option<HostRequest> {
+fn host_request_from_reason(reason: &SuspendReason) -> Result<HostRequest, Error> {
     match reason {
         SuspendReason::HostAwait {
             argument,
             identifier,
             ..
         } => {
-            let ident = identifier.as_string().ok()?;
-            let map = argument.as_object().ok()?;
+            let ident = identifier.as_string().map_err(func_call_err)?;
+            let map = argument.as_object().map_err(func_call_err)?;
 
             match ident.as_ref() {
-                "xrpc_local" => Some(HostRequest::XrpcLocal {
-                    path: map.get(&Value::from("path"))?.as_string().ok()?.to_string(),
-                    input: map.get(&Value::from("input"))?.clone(),
+                "xrpc_local" => Ok(HostRequest::XrpcLocal {
+                    nsid: map
+                        .get(&Value::from("path"))
+                        .ok_or(func_call_err("Missing field `path`"))?
+                        .as_string()
+                        .map_err(func_call_err)?
+                        .to_string(),
+                    method: map
+                        .get(&Value::from("method"))
+                        .ok_or(func_call_err("Missing field `method`"))?
+                        .as_string()
+                        .map_err(func_call_err)?
+                        .parse()?,
+                    input: map
+                        .get(&Value::from("input"))
+                        .ok_or(func_call_err("Missing field `input`"))?
+                        .clone(),
                 }),
-                "xrpc_remote" => Some(HostRequest::XrpcRemote {
-                    did: map.get(&Value::from("did"))?.as_string().ok()?.to_string(),
-                    path: map.get(&Value::from("path"))?.as_string().ok()?.to_string(),
-                    input: map.get(&Value::from("input"))?.clone(),
+                "xrpc_remote" => Ok(HostRequest::XrpcRemote {
+                    did: map
+                        .get(&Value::from("did"))
+                        .ok_or(func_call_err("Missing field `did`"))?
+                        .as_string()
+                        .map_err(func_call_err)?
+                        .to_string(),
+                    method: map
+                        .get(&Value::from("method"))
+                        .ok_or(func_call_err("Missing field `method`"))?
+                        .as_string()
+                        .map_err(func_call_err)?
+                        .parse()?,
+                    nsid: map
+                        .get(&Value::from("path"))
+                        .ok_or(func_call_err("Missing field `path`"))?
+                        .as_string()
+                        .map_err(func_call_err)?
+                        .to_string(),
+                    input: map
+                        .get(&Value::from("input"))
+                        .ok_or(func_call_err("Missing field `input`"))?
+                        .clone(),
                 }),
-                _ => None,
+                name => Err(func_call_err(format!("Unrecognized function `{name}`"))),
             }
         }
-        _ => None,
-    }
-}
-
-/// Derive a cache key from a suspend reason — the argument `Value` itself.
-///
-/// Duplicate calls with the same argument produce the same key (via `Ord`).
-fn cache_key_from_reason(reason: &SuspendReason) -> Option<Value> {
-    match reason {
-        SuspendReason::HostAwait { argument, .. } => Some(argument.clone()),
-        _ => None,
+        _ => Err(Error::UnexpectedSuspension),
     }
 }
 
@@ -368,14 +374,14 @@ fn build_vm(
 pub const POLICY_EXTENSIONS: &str = r#"
 # Request data from the local host via XRPC.
 # The VM suspends until the host resolves this and provides the response.
-xrpc_local(path, inp) := result if {
-    result := __builtin_host_await({"path": path, "input": inp}, "xrpc_local")
+xrpc_local(method, path, inp) := result if {
+    result := __builtin_host_await({"path": path, "method": method, "input": inp}, "xrpc_local")
 }
 
 # Request data from a remote host via XRPC.
 # The VM suspends until the host resolves this and provides the response.
-xrpc_remote(did, path, inp) := result if {
-    result := __builtin_host_await({"did": did, "path": path, "input": inp}, "xrpc_remote")
+xrpc_remote(did, method, path, inp) := result if {
+    result := __builtin_host_await({"did": did, "method": method, "path": path, "input": inp}, "xrpc_remote")
 }
 "#;
 
@@ -395,9 +401,9 @@ pub fn validate_policy(policy: &str) -> Result<(), Error> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+fn func_call_err<E: Display>(e: E) -> Error {
+    Error::FunctionCallError(e.to_string())
+}
 
 #[cfg(test)]
 mod tests {
@@ -521,7 +527,7 @@ mod tests {
             default allow := false
 
             allow if {
-                result := xrpc_local("some.query", {"key": "value"})
+                result := xrpc_local("query", "some.query", {"key": "value"})
                 result == "resolved"
             }
         "#;
@@ -536,7 +542,7 @@ mod tests {
         };
 
         match &request {
-            HostRequest::XrpcLocal { path, .. } => assert_eq!(path, "some.query"),
+            HostRequest::XrpcLocal { nsid: path, .. } => assert_eq!(path, "some.query"),
             _ => panic!("Expected XrpcLocal"),
         }
 
@@ -556,7 +562,7 @@ mod tests {
             default allow := false
 
             allow if {
-                result := xrpc_remote("did:plc:remote", "remote.query", {"foo": "bar"})
+                result := xrpc_remote("did:plc:remote", "query", "remote.query", {"foo": "bar"})
                 result == "remote_data"
             }
         "#;
@@ -571,7 +577,7 @@ mod tests {
         };
 
         match &request {
-            HostRequest::XrpcRemote { did, path, .. } => {
+            HostRequest::XrpcRemote { did, nsid: path, .. } => {
                 assert_eq!(did, "did:plc:remote");
                 assert_eq!(path, "remote.query");
             }
@@ -582,41 +588,6 @@ mod tests {
         match result {
             VmResult::Completed(value) => assert_eq!(value, Value::from(true)),
             VmResult::Suspended(r) => panic!("Unexpected suspension: {r:?}"),
-        }
-    }
-
-    #[test]
-    fn test_auto_resolve_cached_duplicate() {
-        // Policy that calls xrpc_local twice with the same arguments from
-        // different rule bodies — the second call should auto-resolve from cache.
-        let policy = r#"
-            package example
-            import rego.v1
-
-            default allow := false
-
-            allow if {
-                a := xrpc_local("my.query", {"x": 1})
-                b := xrpc_local("my.query", {"x": 1})
-                a == "ok"
-                b == "ok"
-            }
-        "#;
-        let data = empty_obj();
-        let input = empty_obj();
-
-        let mut session = VmSession::new(policy, &data, &input, &["data.example.allow"]).unwrap();
-        let result = session.start().unwrap();
-        let _request = match result {
-            VmResult::Suspended(r) => r,
-            VmResult::Completed(v) => panic!("Expected suspension, got completed: {v:?}"),
-        };
-
-        // Resume once — this should also auto-resolve the duplicate and complete
-        let result = session.resume(&Value::from("ok")).unwrap();
-        match result {
-            VmResult::Completed(value) => assert_eq!(value, Value::from(true)),
-            VmResult::Suspended(_) => panic!("Expected completion after cache auto-resolve"),
         }
     }
 }

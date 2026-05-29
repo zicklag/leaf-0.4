@@ -164,10 +164,10 @@ impl HostRequestView {
 
     /// The XRPC method NSID.
     #[wasm_bindgen(getter)]
-    pub fn path(&self) -> String {
+    pub fn nsid(&self) -> String {
         match &self.inner {
-            HostRequest::XrpcLocal { path, .. } | HostRequest::XrpcRemote { path, .. } => {
-                path.clone()
+            HostRequest::XrpcLocal { nsid, .. } | HostRequest::XrpcRemote { nsid, .. } => {
+                nsid.clone()
             }
         }
     }

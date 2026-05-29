@@ -36,12 +36,13 @@ impl Nsid {
 }
 
 pub fn is_native_nsid(nsid: &str) -> bool {
-    matches!(nsid,
+    matches!(
+        nsid,
         Nsid::GET_ARBITER_CONFIG
-        | Nsid::GET_SPACE_CONFIG
-        | Nsid::GET_SPACE_MEMBERS
-        | Nsid::RESOLVE_SPACE_MEMBERS
-        | Nsid::LIST_SPACES
+            | Nsid::GET_SPACE_CONFIG
+            | Nsid::GET_SPACE_MEMBERS
+            | Nsid::RESOLVE_SPACE_MEMBERS
+            | Nsid::LIST_SPACES
     )
 }
 
@@ -54,15 +55,21 @@ fn json_to_rego(val: &Value) -> RegoValue {
         Value::Null => RegoValue::Null,
         Value::Bool(b) => RegoValue::from(*b),
         Value::Number(n) => {
-            if let Some(i) = n.as_i64() { RegoValue::from(i) }
-            else if let Some(f) = n.as_f64() { RegoValue::from(f) }
-            else { RegoValue::from(n.to_string()) }
+            if let Some(i) = n.as_i64() {
+                RegoValue::from(i)
+            } else if let Some(f) = n.as_f64() {
+                RegoValue::from(f)
+            } else {
+                RegoValue::from(n.to_string())
+            }
         }
         Value::String(s) => RegoValue::from(s.as_str()),
         Value::Array(arr) => RegoValue::from(arr.iter().map(json_to_rego).collect::<Vec<_>>()),
         Value::Object(obj) => {
             let mut map = BTreeMap::new();
-            for (k, v) in obj { map.insert(RegoValue::from(k.as_str()), json_to_rego(v)); }
+            for (k, v) in obj {
+                map.insert(RegoValue::from(k.as_str()), json_to_rego(v));
+            }
             RegoValue::from(map)
         }
     }
@@ -74,18 +81,25 @@ fn rego_to_json(val: &RegoValue) -> Value {
         RegoValue::Bool(b) => Value::Bool(*b),
         RegoValue::Number(n) => {
             let s = n.format_decimal();
-            if let Ok(i) = s.parse::<i64>() { Value::Number(i.into()) }
-            else if let Ok(f) = s.parse::<f64>() {
-                serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+            if let Ok(i) = s.parse::<i64>() {
+                Value::Number(i.into())
+            } else if let Ok(f) = s.parse::<f64>() {
+                serde_json::Number::from_f64(f)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::String(s)
             }
-            else { Value::String(s) }
         }
         RegoValue::String(s) => Value::String(s.to_string()),
         RegoValue::Array(arr) => Value::Array(arr.iter().map(rego_to_json).collect()),
         RegoValue::Object(obj) => {
             let mut map = serde_json::Map::new();
             for (k, v) in obj.iter() {
-                let key = k.as_string().map(|s| s.to_string()).unwrap_or_else(|_| format!("{k:?}"));
+                let key = k
+                    .as_string()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|_| format!("{k:?}"));
                 map.insert(key, rego_to_json(v));
             }
             Value::Object(map)
@@ -120,7 +134,10 @@ fn resolve_local(
     params: &Value,
     collection: &ArbiterCollection,
 ) -> Value {
-    let space_key = params.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
+    let space_key = params
+        .get("spaceKey")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     match nsid {
         Nsid::GET_SPACE_MEMBERS => {
             let members = collection.space_members(arbiter_did, space_key);
@@ -134,10 +151,18 @@ fn resolve_local(
             serde_json::json!({ "config": collection.get(arbiter_did).map(|a| &a.config) })
         }
         Nsid::LIST_SPACES => {
-            let spaces: Vec<Value> = collection.get(arbiter_did)
-                .map(|a| a.spaces.values().map(|s| serde_json::json!({
-                    "key": s.key, "spaceType": s.space_type,
-                })).collect())
+            let spaces: Vec<Value> = collection
+                .get(arbiter_did)
+                .map(|a| {
+                    a.spaces
+                        .values()
+                        .map(|s| {
+                            serde_json::json!({
+                                "key": s.key, "spaceType": s.space_type,
+                            })
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
             serde_json::json!({ "spaces": spaces })
         }
@@ -174,28 +199,45 @@ pub async fn evaluate(
     let mut session = VmSession::new(policy_source, &data, &input, entry_points)
         .map_err(|e| format!("ErrPolicyCompile: {e}"))?;
 
-    let mut result = session.start()
-        .map_err(|e| format!("ErrPolicyEval: {e}"))?;
+    let mut result = session.start().map_err(|e| format!("ErrPolicyEval: {e}"))?;
 
     loop {
         match result {
             VmResult::Completed(val) => return Ok(rego_to_json(&val)),
             VmResult::Suspended(req) => {
+                #[allow(unused)] // This will all go away soon and don't want to be distracted by this.
                 let resolved = match &req {
-                    HostRequest::XrpcLocal { path, input } => {
+                    HostRequest::XrpcLocal {
+                        nsid,
+                        method,
+                        input,
+                    } => {
                         let params = rego_to_json(input);
-                        if is_native_nsid(path) {
-                            resolve_local(arbiter_did, path, &params, collection)
+                        if is_native_nsid(nsid) {
+                            resolve_local(arbiter_did, nsid, &params, collection)
                         } else {
-                            tracing::warn!(%path, "Foreign xrpc_local in policy eval");
+                            tracing::warn!(%nsid, "Foreign xrpc_local in policy eval");
                             serde_json::json!({})
                         }
                     }
-                    HostRequest::XrpcRemote { did, path, input } => {
-                        resolve_remote(http_client, identity_resolver, did, path, rego_to_json(input)).await
+                    HostRequest::XrpcRemote {
+                        did,
+                        method,
+                        nsid,
+                        input,
+                    } => {
+                        resolve_remote(
+                            http_client,
+                            identity_resolver,
+                            did,
+                            nsid,
+                            rego_to_json(input),
+                        )
+                        .await
                     }
                 };
-                result = session.resume(&json_to_rego(&resolved))
+                result = session
+                    .resume(&json_to_rego(&resolved))
                     .map_err(|e| format!("ErrPolicyResume: {e}"))?;
             }
         }
@@ -234,7 +276,10 @@ async fn resolve_remote(
     };
 
     // Find the matching service endpoint
-    let endpoint = doc.service.iter().find(|s| s.id == fragment || s.id.ends_with(&fragment))
+    let endpoint = doc
+        .service
+        .iter()
+        .find(|s| s.id == fragment || s.id.ends_with(&fragment))
         .map(|s| s.service_endpoint.clone());
 
     let Some(endpoint) = endpoint else {

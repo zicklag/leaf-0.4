@@ -7,7 +7,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use arbiter_core::{Event, IoAction, NSID, SpaceId, StateMachine};
+use arbiter_core::{
+    Event, IoAction, NSID, SpaceId, StateMachine, nsid_method, policy_core::XrpcMethod,
+};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,29 @@ impl TestDriver {
     // Internal
     // -------------------------------------------------------------------
 
+    /// Perform an XRPC operation with a raw NSID (for testing proxy etc.).
+    pub fn call_nsid(
+        &mut self,
+        arbiter_did: &str,
+        user_did: &str,
+        nsid: &str,
+        method: XrpcMethod,
+        params: Value,
+    ) -> Result<Option<Value>, String> {
+        let sm = match self.machines.get_mut(arbiter_did) {
+            Some(s) => s,
+            None => return Err("Arbiter not found".into()),
+        };
+
+        let actions = sm.handle_event(Event::IncomingXrpc {
+            nsid: nsid.to_string(),
+            method,
+            params,
+            caller_did: user_did.to_string(),
+        });
+        self.drive_actions(arbiter_did, actions)
+    }
+
     fn call_method(
         &mut self,
         arbiter_did: &str,
@@ -174,7 +199,8 @@ impl TestDriver {
         }
 
         let actions = sm.handle_event(Event::IncomingXrpc {
-            method: nsid,
+            nsid: nsid.clone(),
+            method: nsid_method(&nsid),
             params,
             caller_did: user_did.to_string(),
         });
@@ -195,7 +221,7 @@ impl TestDriver {
 
         while let Some((_src, action)) = pending.pop() {
             match action {
-                IoAction::SendResponse { body, status, .. } => {
+                IoAction::SendXrpcResponse { body, status } => {
                     if status >= 400 {
                         let err = body
                             .get("error")
@@ -207,73 +233,65 @@ impl TestDriver {
                     response = Some(body);
                 }
 
-                IoAction::XrpcRemote {
+                IoAction::SendXrpcRequest {
                     did,
-                    path: _,
+                    nsid,
+                    method,
                     input,
                     job_id,
                 } => {
                     // Route to the target arbiter's state machine.
                     // The caller for the remote is the SOURCE arbiter's DID.
                     let caller = &_src;
-                    let result = self.simulate_remote_resolution(caller, &did, &input);
+
+                    let (status, body) =
+                        if nsid == "com.atproto.repo.getRecord" && method == XrpcMethod::Query {
+                            (200, serde_json::json!({ "demo": "record "}))
+                        } else {
+                            self.simulate_remote_resolution(caller, &did, &nsid, &method, &input)
+                        };
+
                     if let Some(sm) = self.machines.get_mut(&_src) {
                         let new = sm.handle_event(Event::XrpcRemoteResult {
-                            result: Ok(result),
+                            status,
+                            body,
                             job_id,
                         });
                         pending.extend(new.into_iter().map(|a| (_src.clone(), a)));
                     }
                 }
-
-                IoAction::ProxyXrpc { .. } => {}
             }
         }
 
         Ok(response)
     }
 
-    /// Resolve members from a remote arbiter by routing through the target
-    /// state machine — the same path the real HTTP server would take.
+    /// Resolve a remote XRPC request by routing through the target
+    /// state machine's policy, using the NSID from the request.
     fn simulate_remote_resolution(
         &mut self,
         caller_did: &str,
         target_did: &str,
+        nsid: &str,
+        method: &policy_core::XrpcMethod,
         input: &Value,
-    ) -> Value {
+    ) -> (u16, Value) {
         let base_did = target_did.split('#').next().unwrap_or(target_did);
 
         if !self.online.contains(base_did) {
-            return Value::Null;
+            return (500, Value::Null);
         }
 
-        // The rego policy calls xrpc_remote with method
-        // "town.muni.arbiter.resolveSpaceMembers". Route through the target
-        // state machine just like the server would.
-        let space_key = input.get("spaceKey").and_then(|v| v.as_str()).unwrap_or("");
-        let space_type =
-            input
-                .get("spaceType")
-                .and_then(|v| v.as_str())
-                .unwrap_or(if space_key == "$admin" {
-                    "town.muni.arbiter.config.adminSpace"
-                } else {
-                    "town.muni.arbiter.config.space"
-                });
-        let params = serde_json::json!({
-            "arbiterDid": base_did,
-            "spaceKey": space_key,
-            "spaceType": space_type,
-        });
         let event = Event::IncomingXrpc {
-            method: NSID::RESOLVE_SPACE_MEMBERS.into(),
-            params,
+            nsid: nsid.to_string(),
+            method: method.clone(),
+            params: input.clone(),
             caller_did: caller_did.to_string(),
         };
 
         let machine = match self.machines.get_mut(base_did) {
             Some(m) => m,
-            None => return Value::Null,
+            None => return (404, Value::Null),
         };
 
         let actions = machine.handle_event(event);
@@ -282,7 +300,7 @@ impl TestDriver {
 
     /// Drive a machine's IO actions until we get a SendResponse, routing
     /// child XrpcLocal / XrpcRemote through the appropriate machines.
-    fn drive_to_response(&mut self, arbiter_did: &str, actions: Vec<IoAction>) -> Value {
+    fn drive_to_response(&mut self, arbiter_did: &str, actions: Vec<IoAction>) -> (u16, Value) {
         let mut pending: Vec<(String, IoAction)> = actions
             .into_iter()
             .map(|a| (arbiter_did.to_string(), a))
@@ -290,26 +308,32 @@ impl TestDriver {
 
         while let Some((src, action)) = pending.pop() {
             match action {
-                IoAction::SendResponse { body, status, .. } => {
-                    return if status >= 400 { Value::Null } else { body };
+                IoAction::SendXrpcResponse { body, status } => {
+                    return (status, body);
                 }
 
-                IoAction::XrpcRemote { did, input, .. } => {
-                    let result = self.simulate_remote_resolution(&src, &did, &input);
+                IoAction::SendXrpcRequest {
+                    did,
+                    nsid,
+                    method,
+                    input,
+                    ..
+                } => {
+                    let (status, body) =
+                        self.simulate_remote_resolution(&src, &did, &nsid, &method, &input);
                     if let Some(sm) = self.machines.get_mut(&src) {
                         let new = sm.handle_event(Event::XrpcRemoteResult {
-                            result: Ok(result),
+                            status,
+                            body,
                             job_id: 0,
                         });
                         pending.extend(new.into_iter().map(|a| (src.clone(), a)));
                     }
                 }
-
-                IoAction::ProxyXrpc { .. } => {}
             }
         }
 
-        Value::Null
+        (400, Value::Null)
     }
 
     // -------------------------------------------------------------------

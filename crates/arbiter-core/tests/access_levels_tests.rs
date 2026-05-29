@@ -5,7 +5,7 @@
 
 mod test_harness;
 
-use arbiter_core::SpaceId;
+use arbiter_core::{SpaceId, policy_core::XrpcMethod};
 use serde_json::Value;
 use test_harness::{ResolvedMember, TestDriver};
 
@@ -15,6 +15,7 @@ fn access(level: &str) -> Value {
     serde_json::json!({"level": level})
 }
 
+#[track_caller]
 fn assert_member_exists(members: &[ResolvedMember], expected_did: &str, expected_level: &str) {
     let found = members.iter().find(|m| m.did == expected_did);
     assert!(
@@ -442,9 +443,18 @@ fn allow_all_policy() {
     let allow_all = r#"
         package arbiter
         import rego.v1
+
         default allow := true
+
         resolved_members contains {"did": input.caller.did, "access": {"level": "Owner"}} if { true }
-        resolve_result := {"members": resolved_members, "missingSpaces": []}
+
+        response := {"status": 200, "body": {"members": resolved_members, "missingSpaces": []}} if {
+            input.operation.nsid == "town.muni.arbiter.resolveSpaceMembers"
+        }
+
+        response := {"status": 200, "body": xrpc_local(input.operation.method, input.operation.nsid, input.operation.params)} if {
+            input.operation.nsid != "town.muni.arbiter.resolveSpaceMembers"
+        }
     "#;
     let mut h = TestDriver::new(DEFAULT_POLICY);
     h.create_arbiter("org", "alice", allow_all);
@@ -465,7 +475,7 @@ fn deny_all_policy() {
     let deny_all = r#"
         package arbiter
         import rego.v1
-        default allow := false
+        default response := {"status": 403, "body": {"error": "ErrPermissionDenied"}}
     "#;
     let mut h = TestDriver::new(DEFAULT_POLICY);
     h.create_arbiter("org", "alice", deny_all);
@@ -764,4 +774,81 @@ fn create_space_with_explicit_key_ui_flow() {
         })
         .unwrap();
     assert_eq!(space.key, "test");
+}
+
+// ── Proxy to backend ─────────────────────────────────────────────
+
+#[test]
+fn unknown_nsid_proxies_to_backend() {
+    let mut h = TestDriver::new(DEFAULT_POLICY);
+
+    // Frontend arbiter with backend_did configured.
+    h.create_arbiter(
+        "org",
+        "alice",
+        r#"
+package arbiter
+import rego.v1
+
+arbiter_xrpc_nsids := {
+    "town.muni.arbiter.getArbiterConfig",
+    "town.muni.arbiter.setArbiterConfig",
+    "town.muni.arbiter.deleteArbiter",
+    "town.muni.arbiter.createSpace",
+    "town.muni.arbiter.getSpaceConfig",
+    "town.muni.arbiter.setSpaceConfig",
+    "town.muni.arbiter.deleteSpace",
+    "town.muni.arbiter.listSpaces",
+    "town.muni.arbiter.getSpaceMembers",
+    "town.muni.arbiter.setSpaceMemberAccess",
+    "town.muni.arbiter.removeSpaceMember",
+}
+
+response := {"status": 403, "body": {"error": "ErrPermissionDenied"}} if not allow
+
+default allow := false
+
+allow if {
+    input.operation.nsid in arbiter_xrpc_nsids
+}
+
+allow if {
+    input.operation.nsid == "com.atproto.repo.getRecord"
+}
+
+response := {
+    "status": 200,
+    "body": xrpc_local(input.operation.method, input.operation.nsid, input.operation.params),
+} if {
+    allow
+    input.operation.nsid in arbiter_xrpc_nsids
+}
+
+response := xrpc_remote(
+    data.arbiter.config.backend_did,
+    input.operation.method,
+    input.operation.nsid,
+    input.operation.params,
+) if {
+    allow
+    not input.operation.nsid in arbiter_xrpc_nsids
+    data.arbiter.config.backend_did
+}
+"#,
+    );
+
+    // Set backend_did on the org arbiter's config.
+    if let Some(sm) = h.machines.get_mut("org") {
+        sm.arbiter.config = serde_json::json!({"backend_did": "backend"});
+    }
+
+    let result = h.call_nsid(
+        "org",
+        "alice",
+        "com.atproto.repo.getRecord",
+        XrpcMethod::Query,
+        serde_json::json!({"repo": "did:plc:example", "collection": "app.bsky.feed.post", "rkey": "123"}),
+    );
+
+    result.expect("Expected proxy to succeed");
 }

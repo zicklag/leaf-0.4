@@ -3,8 +3,6 @@
 //! Implements `town.muni.arbiter.*` XRPC lexicons via Salvo.  No state machine;
 //! the server directly evaluates policies and manipulates state.
 
-#![deny(rust_2018_idioms)]
-
 use std::sync::Arc;
 
 use atproto_identity::resolve::{HickoryDnsResolver, IdentityResolver, InnerIdentityResolver, SharedIdentityResolver};

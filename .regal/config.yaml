@@ -1,0 +1,4 @@
+rules:
+  style:
+    rule-name-repeats-package:
+      level: ignore
