@@ -94,6 +94,45 @@ pub enum IoAction {
 }
 
 // ---------------------------------------------------------------------------
+// XrpcResponse  —  status + body helper
+// ---------------------------------------------------------------------------
+
+/// The status-code and body of an XRPC response.
+///
+/// Used as a return type from [`resolve_local`](StateMachine::resolve_local)
+/// and the async [`Io`](crate::futures::Io) trait — anywhere we need to
+/// pass around an XRPC-style response without embedding it in JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XrpcResponse {
+    pub status: u16,
+    pub body: Value,
+}
+
+impl XrpcResponse {
+    /// Build an error response with the given status and message.
+    pub fn error(status: u16, msg: impl Into<String>) -> Self {
+        XrpcResponse {
+            status,
+            body: serde_json::json!({"error": msg.into()}),
+        }
+    }
+
+    /// Convert to the canonical JSON map that the Rego VM expects:
+    /// `{"status": …, "body": …}`.
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({"status": self.status, "body": self.body})
+    }
+
+    /// Try to parse an [`XrpcResponse`] from a JSON value that has
+    /// `"status"` and `"body"` keys.
+    pub fn from_json(val: &Value) -> Option<Self> {
+        let status = val.get("status")?.as_u64()? as u16;
+        let body = val.get("body")?.clone();
+        Some(XrpcResponse { status, body })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // JSON-serialisable types
 // ---------------------------------------------------------------------------
 
@@ -401,7 +440,7 @@ impl StateMachine {
                     &rego_to_serde(input),
                     ctx.start_version,
                 );
-                let resolved_rego = serde_to_rego(resolved);
+                let resolved_rego = serde_to_rego(resolved.to_json());
                 self.eval(session, ctx, EvalStep::Resume(&resolved_rego))
             }
             HostRequest::XrpcRemote {
@@ -462,40 +501,49 @@ impl StateMachine {
         nsid: &str,
         params: &Value,
         start_version: u64,
-    ) -> Value {
+    ) -> XrpcResponse {
         // Validate that queries use XrpcMethod::Query and procedures use
         // XrpcMethod::Procedure. The Rego built-in `xrpc_local` already
         // carries the method from the policy — this is a defence-in-depth
         // check to catch misconfigurations early.
         let expected = nsid_method(nsid);
         if method != expected {
-            return serde_json::json!({
-                "status": 400,
-                "body": {
-                    "error": format!(
-                        "ErrMethodMismatch: expected {expected}, got {method}"
-                    ),
-                },
-            });
+            return XrpcResponse::error(
+                400,
+                format!("ErrMethodMismatch: expected {expected}, got {method}"),
+            );
         }
 
         match nsid {
             // ── Queries ──────────────────────────────────────────────
-            NSID::GET_ARBITER_CONFIG => {
-                serde_json::json!({ "status": 200, "body": {"config": &self.arbiter.config}})
-            }
+            NSID::GET_ARBITER_CONFIG => XrpcResponse {
+                status: 200,
+                body: serde_json::json!({"config": &self.arbiter.config}),
+            },
 
             NSID::GET_SPACE_CONFIG => {
                 let Some(space_id) = self.space_id_from_params(params) else {
-                    return serde_json::json!({ "status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                    return XrpcResponse::error(
+                        400,
+                        "ErrMissingParam: spaceKey/spaceType",
+                    );
                 };
                 let config = self.arbiter.get_space(&space_id).map(|s| &s.config);
-                serde_json::json!({"status": 200, "body": {"config": config, "spaceType": &space_id.space_type}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({
+                        "config": config,
+                        "spaceType": &space_id.space_type,
+                    }),
+                }
             }
 
             NSID::GET_SPACE_MEMBERS => {
                 let Some(space_id) = self.space_id_from_params(params) else {
-                    return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                    return XrpcResponse::error(
+                        400,
+                        "ErrMissingParam: spaceKey/spaceType",
+                    );
                 };
                 let members: Vec<Value> = self
                     .arbiter
@@ -507,7 +555,10 @@ impl StateMachine {
                             .collect()
                     })
                     .unwrap_or_default();
-                serde_json::json!({"status": 200, "body": {"members": members}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({"members": members}),
+                }
             }
 
             NSID::LIST_SPACES => {
@@ -523,7 +574,10 @@ impl StateMachine {
                         })
                     })
                     .collect();
-                serde_json::json!({"status": 200, "body": {"spaces": spaces}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({"spaces": spaces}),
+                }
             }
 
             NSID::RESOLVE_SPACE_MEMBERS => {
@@ -537,7 +591,10 @@ impl StateMachine {
                 // default — the policy can override by not calling this
                 // and doing the resolution in Rego directly.
                 let Some(space_id) = self.space_id_from_params(params) else {
-                    return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                    return XrpcResponse::error(
+                        400,
+                        "ErrMissingParam: spaceKey/spaceType",
+                    );
                 };
                 let members: Vec<Value> = self
                     .arbiter
@@ -549,34 +606,49 @@ impl StateMachine {
                             .collect()
                     })
                     .unwrap_or_default();
-                serde_json::json!({"status": 200, "body": {"members": members, "missingSpaces": []}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({
+                        "members": members,
+                        "missingSpaces": [],
+                    }),
+                }
             }
 
             // ── Procedures ───────────────────────────────────────────
             NSID::SET_ARBITER_CONFIG => {
                 if self.arbiter.version != start_version {
-                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                    return XrpcResponse::error(409, "ErrVersionMismatch");
                 }
                 if let Some(new_config) = params.get("config") {
                     self.arbiter.config = new_config.clone();
                     self.arbiter.version += 1;
                 }
-                serde_json::json!({"status": 200, "body": {}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({}),
+                }
             }
 
             NSID::DELETE_ARBITER => {
                 // The host IO layer should handle deletion.  Signal success.
-                serde_json::json!({"status": 200, "body": {}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({}),
+                }
             }
 
             NSID::CREATE_SPACE => {
                 if self.arbiter.version != start_version {
-                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                    return XrpcResponse::error(409, "ErrVersionMismatch");
                 }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                        return XrpcResponse::error(
+                            400,
+                            "ErrMissingParam: spaceKey/spaceType",
+                        );
                     }
                 };
                 let space_id = SpaceId {
@@ -584,7 +656,7 @@ impl StateMachine {
                     space_type: st.clone(),
                 };
                 if self.arbiter.spaces.contains_key(&space_id) {
-                    return serde_json::json!({"status": 409, "body": {"error": "ErrSpaceExists"}});
+                    return XrpcResponse::error(409, "ErrSpaceExists");
                 }
                 let config = params.get("config").cloned().unwrap_or_default();
                 let space = Space {
@@ -595,17 +667,23 @@ impl StateMachine {
                 };
                 self.arbiter.spaces.insert(space_id, space);
                 self.arbiter.version += 1;
-                serde_json::json!({"status": 200, "body": {}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({}),
+                }
             }
 
             NSID::SET_SPACE_CONFIG => {
                 if self.arbiter.version != start_version {
-                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                    return XrpcResponse::error(409, "ErrVersionMismatch");
                 }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                        return XrpcResponse::error(
+                            400,
+                            "ErrMissingParam: spaceKey/spaceType",
+                        );
                     }
                 };
                 let space_id = SpaceId {
@@ -617,44 +695,56 @@ impl StateMachine {
                         space.config = c.clone();
                     }
                     self.arbiter.version += 1;
-                    serde_json::json!({"status": 200, "body": {}})
+                    XrpcResponse {
+                        status: 200,
+                        body: serde_json::json!({}),
+                    }
                 } else {
-                    serde_json::json!({"status": 404, "body": {"error": "ErrSpaceNotExists"}})
+                    XrpcResponse::error(404, "ErrSpaceNotExists")
                 }
             }
 
             NSID::DELETE_SPACE => {
                 if self.arbiter.version != start_version {
-                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                    return XrpcResponse::error(409, "ErrVersionMismatch");
                 }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                        return XrpcResponse::error(
+                            400,
+                            "ErrMissingParam: spaceKey/spaceType",
+                        );
                     }
                 };
                 if sk == "$admin" && st == "town.muni.arbiter.config.adminSpace" {
-                    return serde_json::json!({"status": 403, "body": {"error": "ErrCannotDeleteAdminSpace"}});
+                    return XrpcResponse::error(403, "ErrCannotDeleteAdminSpace");
                 }
                 let space_id = SpaceId {
                     space_key: sk,
                     space_type: st,
                 };
                 if self.arbiter.spaces.remove(&space_id).is_none() {
-                    return serde_json::json!({"status": 404, "body": {"error": "ErrSpaceNotExists"}});
+                    return XrpcResponse::error(404, "ErrSpaceNotExists");
                 }
                 self.arbiter.version += 1;
-                serde_json::json!({"status": 200, "body": {}})
+                XrpcResponse {
+                    status: 200,
+                    body: serde_json::json!({}),
+                }
             }
 
             NSID::SET_SPACE_MEMBER_ACCESS => {
                 if self.arbiter.version != start_version {
-                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                    return XrpcResponse::error(409, "ErrVersionMismatch");
                 }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                        return XrpcResponse::error(
+                            400,
+                            "ErrMissingParam: spaceKey/spaceType",
+                        );
                     }
                 };
                 let space_id = SpaceId {
@@ -669,7 +759,7 @@ impl StateMachine {
                 let md = match md {
                     Some(d) => d,
                     None => {
-                        return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: memberDid"}});
+                        return XrpcResponse::error(400, "ErrMissingParam: memberDid");
                     }
                 };
                 if let Some(space) = self.arbiter.spaces.get_mut(&space_id) {
@@ -680,20 +770,26 @@ impl StateMachine {
                         space.members.push(MemberEntry { did: md, access });
                     }
                     self.arbiter.version += 1;
-                    serde_json::json!({"status": 200, "body": {}})
+                    XrpcResponse {
+                        status: 200,
+                        body: serde_json::json!({}),
+                    }
                 } else {
-                    serde_json::json!({"status": 404, "body": {"error": "ErrSpaceNotExists"}})
+                    XrpcResponse::error(404, "ErrSpaceNotExists")
                 }
             }
 
             NSID::REMOVE_SPACE_MEMBER => {
                 if self.arbiter.version != start_version {
-                    return serde_json::json!({"status": 409, "body": {"error": "ErrVersionMismatch"}});
+                    return XrpcResponse::error(409, "ErrVersionMismatch");
                 }
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: spaceKey/spaceType"}});
+                        return XrpcResponse::error(
+                            400,
+                            "ErrMissingParam: spaceKey/spaceType",
+                        );
                     }
                 };
                 let space_id = SpaceId {
@@ -708,20 +804,23 @@ impl StateMachine {
                 let md = match md {
                     Some(d) => d,
                     None => {
-                        return serde_json::json!({"status": 400, "body": {"error": "ErrMissingParam: memberDid"}});
+                        return XrpcResponse::error(400, "ErrMissingParam: memberDid");
                     }
                 };
                 if let Some(space) = self.arbiter.spaces.get_mut(&space_id) {
                     space.members.retain(|m| m.did != md);
                     self.arbiter.version += 1;
-                    serde_json::json!({"status": 200, "body": {}})
+                    XrpcResponse {
+                        status: 200,
+                        body: serde_json::json!({}),
+                    }
                 } else {
-                    serde_json::json!({"status": 404, "body": {"error": "ErrSpaceNotExists"}})
+                    XrpcResponse::error(404, "ErrSpaceNotExists")
                 }
             }
 
             // Unknown NSID — not a built-in operation.
-            _ => serde_json::json!({"status": 400, "body": {"error": "ErrUnknownMethod"}}),
+            _ => XrpcResponse::error(400, "ErrUnknownMethod"),
         }
     }
 

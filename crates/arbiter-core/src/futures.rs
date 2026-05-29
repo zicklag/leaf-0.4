@@ -28,7 +28,7 @@
 //!         nsid: &str,
 //!         input: Value,
 //!     ) -> (u16, Value) {
-//!         // … make HTTP request, return (status, body) …
+//!         // … make HTTP request, return XrpcResponse …
 //!     }
 //! }
 //!
@@ -49,7 +49,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::{Event, IoAction, StateMachine, policy_core::XrpcMethod};
+use crate::{Event, IoAction, StateMachine, XrpcResponse, policy_core::XrpcMethod};
 
 // ---------------------------------------------------------------------------
 // IO trait
@@ -69,8 +69,7 @@ pub trait Io {
         status: u16,
     ) -> impl std::future::Future<Output = ()> + Send;
 
-    /// Perform a remote XRPC request and return the result as
-    /// `(status, body)`.
+    /// Perform a remote XRPC request and return the [`XrpcResponse`].
     ///
     /// This is called when the policy engine invokes `xrpc_remote`.
     /// The implementation should make the network call and return the
@@ -82,7 +81,7 @@ pub trait Io {
         method: &XrpcMethod,
         nsid: &str,
         input: Value,
-    ) -> impl std::future::Future<Output = (u16, Value)> + Send;
+    ) -> impl std::future::Future<Output = XrpcResponse> + Send;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,10 +129,10 @@ pub async fn process_event(
                     input,
                     job_id,
                 } => {
-                    let (status, body) = io.remote_request(&did, &method, &nsid, input).await;
+                    let resp = io.remote_request(&did, &method, &nsid, input).await;
                     stack.push(Event::XrpcRemoteResult {
-                        status,
-                        body,
+                        status: resp.status,
+                        body: resp.body,
                         job_id,
                     });
                 }

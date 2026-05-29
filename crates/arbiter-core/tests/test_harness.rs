@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 
 use arbiter_core::{
-    Event, IoAction, NSID, SpaceId, StateMachine, nsid_method, policy_core::XrpcMethod,
+    Event, IoAction, NSID, SpaceId, StateMachine, XrpcResponse, nsid_method,
+    policy_core::XrpcMethod,
 };
 use serde_json::Value;
 
@@ -244,17 +245,27 @@ impl TestDriver {
                     // The caller for the remote is the SOURCE arbiter's DID.
                     let caller = &_src;
 
-                    let (status, body) =
-                        if nsid == "com.atproto.repo.getRecord" && method == XrpcMethod::Query {
-                            (200, serde_json::json!({ "demo": "record "}))
-                        } else {
-                            self.simulate_remote_resolution(caller, &did, &nsid, &method, &input)
-                        };
+                    let resp = if nsid == "com.atproto.repo.getRecord"
+                        && method == XrpcMethod::Query
+                    {
+                        XrpcResponse {
+                            status: 200,
+                            body: serde_json::json!({ "demo": "record "}),
+                        }
+                    } else {
+                        self.simulate_remote_resolution(
+                            caller,
+                            &did,
+                            &nsid,
+                            &method,
+                            &input,
+                        )
+                    };
 
                     if let Some(sm) = self.machines.get_mut(&_src) {
                         let new = sm.handle_event(Event::XrpcRemoteResult {
-                            status,
-                            body,
+                            status: resp.status,
+                            body: resp.body,
                             job_id,
                         });
                         pending.extend(new.into_iter().map(|a| (_src.clone(), a)));
@@ -275,11 +286,14 @@ impl TestDriver {
         nsid: &str,
         method: &policy_core::XrpcMethod,
         input: &Value,
-    ) -> (u16, Value) {
+    ) -> XrpcResponse {
         let base_did = target_did.split('#').next().unwrap_or(target_did);
 
         if !self.online.contains(base_did) {
-            return (500, Value::Null);
+            return XrpcResponse {
+                status: 500,
+                body: Value::Null,
+            };
         }
 
         let event = Event::IncomingXrpc {
@@ -291,7 +305,12 @@ impl TestDriver {
 
         let machine = match self.machines.get_mut(base_did) {
             Some(m) => m,
-            None => return (404, Value::Null),
+            None => {
+                return XrpcResponse {
+                    status: 404,
+                    body: Value::Null,
+                };
+            }
         };
 
         let actions = machine.handle_event(event);
@@ -300,7 +319,11 @@ impl TestDriver {
 
     /// Drive a machine's IO actions until we get a SendResponse, routing
     /// child XrpcLocal / XrpcRemote through the appropriate machines.
-    fn drive_to_response(&mut self, arbiter_did: &str, actions: Vec<IoAction>) -> (u16, Value) {
+    fn drive_to_response(
+        &mut self,
+        arbiter_did: &str,
+        actions: Vec<IoAction>,
+    ) -> XrpcResponse {
         let mut pending: Vec<(String, IoAction)> = actions
             .into_iter()
             .map(|a| (arbiter_did.to_string(), a))
@@ -309,7 +332,7 @@ impl TestDriver {
         while let Some((src, action)) = pending.pop() {
             match action {
                 IoAction::SendXrpcResponse { body, status } => {
-                    return (status, body);
+                    return XrpcResponse { status, body };
                 }
 
                 IoAction::SendXrpcRequest {
@@ -319,12 +342,12 @@ impl TestDriver {
                     input,
                     job_id,
                 } => {
-                    let (status, body) =
+                    let resp =
                         self.simulate_remote_resolution(&src, &did, &nsid, &method, &input);
                     if let Some(sm) = self.machines.get_mut(&src) {
                         let new = sm.handle_event(Event::XrpcRemoteResult {
-                            status,
-                            body,
+                            status: resp.status,
+                            body: resp.body,
                             job_id,
                         });
                         pending.extend(new.into_iter().map(|a| (src.clone(), a)));
@@ -333,7 +356,10 @@ impl TestDriver {
             }
         }
 
-        (400, Value::Null)
+        XrpcResponse {
+            status: 400,
+            body: Value::Null,
+        }
     }
 
     // -------------------------------------------------------------------
