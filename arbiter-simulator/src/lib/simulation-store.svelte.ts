@@ -53,6 +53,16 @@ class AppState {
     document.documentElement.classList.toggle('dark', this.darkTheme);
   }
 
+  /** When enabled, access-level-specific UI is replaced with raw JSON editors. */
+  advancedMode = $state(
+    localStorage.getItem('arbiter-advanced-mode') === 'true'
+  );
+
+  toggleAdvancedMode() {
+    this.advancedMode = !this.advancedMode;
+    localStorage.setItem('arbiter-advanced-mode', String(this.advancedMode));
+  }
+
   simulator = new Simulator();
   notifications = new NotificationStore();
 
@@ -112,9 +122,9 @@ class AppState {
   /** @deprecated Use `refreshSnapshot` instead. */
   refreshState() { this.refreshSnapshot(); }
 
-  /** Get current policy text from the simulator. */
+  /** Get current policy text — either from the selected arbiter, or the default. */
   get policy(): string {
-    return this.simulator.defaultPolicy;
+    return this.selectedArbiter?.policy ?? this.simulator.defaultPolicy;
   }
 
   /** Validate Rego policy text, returning an error string or null on success. */

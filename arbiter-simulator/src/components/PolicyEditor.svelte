@@ -1,39 +1,39 @@
 <script lang="ts">
   import { app } from '../lib/simulation-store.svelte';
-  import { EditorView, basicSetup } from 'codemirror';
-  import { EditorState } from '@codemirror/state';
-  import { oneDark } from '@codemirror/theme-one-dark';
-  import { javascriptLanguage } from '@codemirror/lang-javascript';
-  // import { regoLanguage } from '../lib/rego-lang';
+  import MonacoEditor from './MonacoEditor.svelte';
 
-  let editorView: EditorView | undefined;
+  // ── Policy source ──────────────────────────────────────────────────────
+  // app.policy returns the selected arbiter's policy (if any) or the default.
+  // We track an override for when the user is editing, and reset it whenever
+  // the underlying source changes (arbiter selection, applied policy, etc.).
+  let override = $state<string | null>(null);
+  let isDirty = $state(false);
+
+  let displayValue = $derived.by(() => {
+    if (override !== null) return override;
+    return app.policy;
+  });
+
+  // Reset edits when the source changes
   let validationMsg = $state<string | null>(null);
   let validationOk = $state(false);
-  let isDirty = $state(false);
   let validateTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // Build the CodeMirror extensions
-  function makeExtensions() {
-    const theme = app.darkTheme ? [oneDark] : [];
+  $effect(() => {
+    // Track the policy source — triggers reset whenever the source arbiter
+    // changes or a policy is applied externally.
+    app.policy;
+    override = null;
+    isDirty = false;
+    validationMsg = null;
+    validationOk = false;
+  });
 
-    return [
-      basicSetup,
-      javascriptLanguage,
-      ...theme,
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
-          isDirty = true;
-          validationMsg = null;
-          debounceValidate(update.state.doc.toString());
-        }
-      }),
-      EditorView.theme({
-        '&': { height: '100%' },
-        '.cm-scroller': { overflow: 'auto' },
-        '.cm-content': { fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace', fontSize: '13px', lineHeight: '1.5' },
-        '.cm-gutters': { fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, monospace', fontSize: '11px' },
-      }),
-    ];
+  function handleChange(value: string) {
+    override = value;
+    isDirty = true;
+    validationMsg = null;
+    debounceValidate(value);
   }
 
   function debounceValidate(code: string) {
@@ -51,45 +51,25 @@
   }
 
   function handleApply() {
-    if (!editorView) return;
-    const code = editorView.state.doc.toString();
-    app.setPolicy(code);
+    app.setPolicy(override ?? displayValue);
+    override = null;
     isDirty = false;
     app.notifications.add('success', 'Policy applied to all arbiters');
   }
 
   function handleReset() {
-    if (!editorView) return;
-    const defaultPolicy = app.getDefaultPolicy();
-    editorView.dispatch({
-      changes: { from: 0, to: editorView.state.doc.length, insert: defaultPolicy },
-    });
+    override = app.getDefaultPolicy();
+    isDirty = true;
     validationMsg = null;
     validationOk = false;
-    isDirty = true;
   }
 
-  // Svelte action to mount CodeMirror editor (avoids $effect reactive re-run issues)
-  function mountEditor(node: HTMLDivElement) {
-    const state = EditorState.create({
-      doc: app.policy,
-      extensions: makeExtensions(),
-    });
-
-    const view = new EditorView({
-      state,
-      parent: node,
-    });
-
-    editorView = view;
-
-    return {
-      destroy() {
-        view.destroy();
-        editorView = undefined;
-      },
-    };
-  }
+  // ── Source label ───────────────────────────────────────────────────────
+  let sourceLabel = $derived(
+    app.selectedArbiter
+      ? `Showing policy of ${app.selectedArbiter.did}`
+      : 'Showing default policy (no arbiter selected)'
+  );
 </script>
 
 <div class="policy-editor">
@@ -97,9 +77,9 @@
     <div class="toolbar-left">
       <h3>Policy Editor</h3>
       <span class="editor-hint">
-        Edit the Rego policy applied to all arbiters.
+        {sourceLabel}
         {#if isDirty}
-          <span class="dirty-indicator">● unsaved</span>
+          <span class="dirty-indicator"> ● unsaved</span>
         {/if}
       </span>
     </div>
@@ -120,7 +100,13 @@
     </div>
   </div>
 
-  <div class="editor-body" use:mountEditor></div>
+  <div class="editor-body">
+    <MonacoEditor
+      value={displayValue}
+      language="rego"
+      onchange={handleChange}
+    />
+  </div>
 </div>
 
 <style>

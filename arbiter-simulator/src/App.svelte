@@ -5,6 +5,7 @@
   import Sidebar from './components/Sidebar.svelte';
   import Canvas from './components/Canvas.svelte';
   import DetailPanel from './components/DetailPanel.svelte';
+  import AdvancedConfigPanel from './components/AdvancedConfigPanel.svelte';
   import Notifications from './components/Notifications.svelte';
   import EmptyState from './components/EmptyState.svelte';
   import PolicyEditor from './components/PolicyEditor.svelte';
@@ -51,6 +52,9 @@
           <span class="tab-icon">📝</span>
           <span>Policy</span>
         </button>
+        {#if app.advancedMode}
+          <span class="advanced-badge">Advanced</span>
+        {/if}
       </div>
 
       {#if activeTab === 'visual'}
@@ -67,7 +71,11 @@
       {/if}
     </div>
     {#if activeTab === 'visual' && app.selectedSpace}
-      <DetailPanel />
+      {#if app.advancedMode}
+        <AdvancedConfigPanel />
+      {:else}
+        <DetailPanel />
+      {/if}
     {/if}
   </div>
   <Notifications />
@@ -141,6 +149,7 @@
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     padding: 0 16px;
+    align-items: stretch;
   }
 
   .tab {
@@ -171,5 +180,20 @@
 
   .tab-icon {
     font-size: 1rem;
+  }
+
+  .advanced-badge {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    padding: 2px 8px;
+    font-size: 0.643rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: oklch(0.6 0.15 280);
+    background: oklch(0.55 0.15 280 / 0.1);
+    border: 1px solid oklch(0.55 0.15 280 / 0.2);
+    border-radius: var(--radius-xs);
   }
 </style>
