@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Button } from '@foxui/core';
   import { login } from '$lib/store.svelte';
+  import { goto } from '$app/navigation';
 </script>
 
 <section class="flex-1 flex items-center justify-center px-6 py-16">
@@ -19,7 +20,21 @@
     <div class="mt-10 flex flex-col items-center gap-4">
       <Button size="lg" onclick={login}>Sign in with ATProto</Button>
       <p class="text-sm text-base-500 dark:text-base-500">
-        Sign in with your Atmosphere account to create or manage your own organization or community accounts.
+        Sign in with your Atmosphere account to create or manage your own organization or community
+        accounts.
+      </p>
+    </div>
+
+    <div class="my-6">
+      <span class="text-xl text-base-400 dark:text-base-500">or</span>
+    </div>
+
+    <div class="flex flex-col items-center gap-4">
+      <Button variant="secondary" size="lg" onclick={() => goto('/setup')}>
+        Setup Existing Org Account
+      </Button>
+      <p class="text-sm text-base-500 dark:text-base-500">
+        Configure an existing community / organization account so that it can be managed by the arbiter.
       </p>
     </div>
 

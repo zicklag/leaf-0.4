@@ -27,6 +27,28 @@ const SESSION_KEY = 'arbiter-manager-auth-session';
 let _client: BrowserOAuthClient | null = null;
 let _currentSession: AuthSession | null = null;
 
+/**
+ * Expose the raw OAuth client for setup flows that need direct
+ * access to the OAuth session object (for PLC operations etc.)
+ */
+export function getOAuthClient(): BrowserOAuthClient {
+  return getClient();
+}
+
+/**
+ * Get the underlying OAuth session for a given DID.
+ * Returns null if the session is not available.
+ */
+export async function getOAuthSession(did: string): Promise<import('@atproto/oauth-client-browser').OAuthSession | null> {
+  try {
+    const client = getClient();
+    const session = await client.restore(did);
+    return session;
+  } catch {
+    return null;
+  }
+}
+
 function isLoopbackOrigin(): boolean {
   if (!browser) return false;
   return (
@@ -117,6 +139,16 @@ export async function login(): Promise<void> {
 
   await client.signIn(handle.trim(), {});
   // The above redirects the browser — code below won't run
+}
+
+/**
+ * Start the OAuth login flow for setup.
+ * Accepts a handle directly (no prompt) and stores setup state before redirect.
+ */
+export async function loginForSetup(handle: string): Promise<void> {
+  const client = getClient();
+  // The OAuth signIn will redirect the browser
+  await client.signIn(handle.trim(), {});
 }
 
 /**
