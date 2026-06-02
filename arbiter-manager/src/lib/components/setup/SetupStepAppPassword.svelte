@@ -1,15 +1,11 @@
 <script lang="ts">
   import { Button, Input } from '@foxui/core';
-  import { setupState, setupLoading, setupError } from '$lib/setup-store.svelte';
-  import { getOAuthSession } from '$lib/auth';
+  import { setupState } from '$lib/setup-store.svelte';
   import { PdsSetupClient } from '$lib/pds-client';
 
   let appPassword = $state('');
-  let loading = $state(false);
-  let error = $state<string | null>(null);
-
-  setupLoading.subscribe((v) => (loading = v));
-  setupError.subscribe((v) => (error = v));
+  let loading = $derived(setupState.loading);
+  let error = $derived(setupState.error);
 
   function goBack() {
     setupState.goTo('oauth');

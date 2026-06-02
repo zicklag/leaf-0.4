@@ -1,18 +1,15 @@
 <script lang="ts">
   import { Button, Input } from '@foxui/core';
-  import { setupState, setupLoading, setupError } from '$lib/setup-store.svelte';
+  import { setupState } from '$lib/setup-store.svelte';
   import { resolveToDid, resolveDidDocument, getArbiterServiceUrl } from '$lib/pds-client';
   import { addManagedCommunity } from '$lib/store.svelte';
 
   let adminInput = $state('');
-  let loading = $state(false);
-  let error = $state<string | null>(null);
+  let loading = $derived(setupState.loading);
+  let error = $derived(setupState.error);
   let adminResolved = $state<string | null>(null);
   let adminResolving = $state(false);
   let setupComplete = $state(false);
-
-  setupLoading.subscribe((v) => (loading = v));
-  setupError.subscribe((v) => (error = v));
 
   function goBack() {
     setupState.goTo('email-code');

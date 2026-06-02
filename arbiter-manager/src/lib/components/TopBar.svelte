@@ -1,12 +1,10 @@
 <script lang="ts">
+  import { auth } from '$lib/auth.svelte';
   import { Button, ThemeToggle } from '@foxui/core';
-  import { session, login, logout, isAuthenticated } from '$lib/store.svelte';
 
-  let authenticated = $state(false);
-  let currentSession = $state(session);
-
-  isAuthenticated.subscribe((v) => (authenticated = v));
-  session.subscribe((s) => (currentSession = s));
+  function logout() {
+    auth.logout()
+  }
 </script>
 
 <header
@@ -19,16 +17,16 @@
   </div>
 
   <div class="flex items-center gap-2">
-    {#if authenticated && currentSession}
+    {#if auth.session}
       <div class="flex items-center gap-2 text-sm text-base-600 dark:text-base-400 mr-2">
-        <span class="hidden sm:inline truncate max-w-40">{currentSession.handle}</span>
+        <span class="hidden sm:inline truncate max-w-40">{auth.name}</span>
       </div>
 
       <ThemeToggle />
       <Button variant="ghost" size="sm" onclick={logout}>Sign Out</Button>
     {:else}
       <ThemeToggle />
-      <Button onclick={login}>Sign in with ATProto</Button>
+      <Button onclick={() => auth.login()}>Sign in with ATProto</Button>
     {/if}
   </div>
 </header>

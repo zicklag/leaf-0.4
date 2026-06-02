@@ -1,7 +1,5 @@
 <script lang="ts">
   import { Button, Badge, Box, Select } from '@foxui/core';
-  import { getSession } from '$lib/store.svelte';
-  import { ArbiterClient, XrpcRequestError } from '$lib/api';
   import type { Did, SpaceKey, SpaceSummary, ResolvedMemberEntry, MemberUnion } from '$lib/types';
   import { ACCESS_LABELS, ALL_ACCESSES } from '$lib/types';
   import AddMemberSheet from './AddMemberSheet.svelte';
@@ -22,20 +20,20 @@
     loading = true;
     error = null;
     try {
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      const result = await client.listSpaces(arbiterDid);
-      spaces = result.spaces;
-      if (result.spaces.length > 0 && !selectedSpace) {
-        selectedSpace = result.spaces[0].key;
-      }
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // const result = await client.listSpaces(arbiterDid);
+      // spaces = result.spaces;
+      // if (result.spaces.length > 0 && !selectedSpace) {
+      //   selectedSpace = result.spaces[0].key;
+      // }
     } catch (e) {
-      if (e instanceof XrpcRequestError && e.isPermissionDenied) {
-        error = "You don't have permission to view spaces on this arbiter.";
-      } else {
-        error = String(e);
-      }
+      // if (e instanceof XrpcRequestError && e.isPermissionDenied) {
+      //   error = "You don't have permission to view spaces on this arbiter.";
+      // } else {
+      //   error = String(e);
+      // }
     } finally {
       loading = false;
     }
@@ -45,18 +43,18 @@
     if (!selectedSpace) return;
     loadingMembers = true;
     try {
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      const result = await client.resolveSpaceMembers(arbiterDid, selectedSpace);
-      members = result.members;
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // const result = await client.resolveSpaceMembers(arbiterDid, selectedSpace);
+      // members = result.members;
     } catch (e) {
-      if (e instanceof XrpcRequestError && e.isPermissionDenied) {
-        members = [];
-        error = "You don't have permission to view members of this space.";
-      } else {
-        error = String(e);
-      }
+      // if (e instanceof XrpcRequestError && e.isPermissionDenied) {
+      //   members = [];
+      //   error = "You don't have permission to view members of this space.";
+      // } else {
+      //   error = String(e);
+      // }
     } finally {
       loadingMembers = false;
     }
@@ -65,13 +63,13 @@
   async function removeMember(did: string) {
     if (!selectedSpace) return;
     try {
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      const member: MemberUnion = { $type: 'town.muni.arbiter.defs#memberDid', did };
-      await client.removeSpaceMember(arbiterDid, selectedSpace, member);
-      members = members.filter((m) => m.did !== did);
-      removeMemberDid = null;
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // const member: MemberUnion = { $type: 'town.muni.arbiter.defs#memberDid', did };
+      // await client.removeSpaceMember(arbiterDid, selectedSpace, member);
+      // members = members.filter((m) => m.did !== did);
+      // removeMemberDid = null;
     } catch (e) {
       error = String(e);
     }
@@ -93,9 +91,9 @@
   function getAccessLabel(access: Record<string, unknown>): string {
     // Try to match access object against known access level keys
     for (const level of ALL_ACCESSES) {
-      if (access[level] !== undefined || access.$type?.endsWith(level)) {
-        return ACCESS_LABELS[level];
-      }
+      // if (access[level] !== undefined || access.$type?.endsWith(level)) {
+      //   return ACCESS_LABELS[level];
+      // }
     }
     // Fallback: show the access type
     return (access.$type as string)?.split('#').pop() || 'Custom';
@@ -110,7 +108,6 @@
     <div class="flex items-center gap-2">
       {#if spaces.length > 0}
         <Select
-          bind:value={selectedSpace}
           type="single"
           items={spaces.map((s) => ({ value: s.key, label: s.key }))}
           placeholder="Select space"
@@ -169,7 +166,7 @@
 
 {#if showAddMember}
   <AddMemberSheet
-    bind:open={showAddMember}
+    open={false}
     {arbiterDid}
     spaceKey={selectedSpace ?? ''}
     onadded={handleMemberAdded}
@@ -178,7 +175,7 @@
 
 {#if removeMemberDid}
   <ConfirmModal
-    bind:open={removeMemberDid}
+    open={false}
     title="Remove Member"
     description="Are you sure you want to remove this member from the space?"
     confirmLabel="Remove"

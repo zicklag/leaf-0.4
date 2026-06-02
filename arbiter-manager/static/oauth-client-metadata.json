@@ -1,10 +1,10 @@
 {
-  "client_id": "http://127.0.0.1:5173/oauth-client-metadata.json",
-  "redirect_uris": ["http://127.0.0.1:5173/oauth/callback"],
-  "grant_types": ["authorization_code", "refresh_token"],
-  "response_types": ["code"],
-  "application_type": "web",
-  "token_endpoint_auth_method": "none",
-  "scope": "atproto",
-  "dpop_bound_access_tokens": true
+	"client_id": "http://localhost?redirect_uri=http%3A%2F%2F127.0.0.1%3A5173%2F&scope=atproto identity:*",
+	"scope": "atproto rpc:app.bsky.actor.getProfile?aud=did:web:api.bsky.app%23bsky_appview rpc:town.muni.leaf.authenticate?aud=*",
+	"redirect_uris": ["http://127.0.0.1:5173/"],
+	"response_types": ["code"],
+	"grant_types": ["authorization_code", "refresh_token"],
+	"token_endpoint_auth_method": "none",
+	"application_type": "native",
+	"dpop_bound_access_tokens": true
 }

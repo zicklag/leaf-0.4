@@ -1,15 +1,11 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
-  import { isAuthenticated } from '$lib/store.svelte';
+  import { auth } from '$lib/auth.svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
 
-  let authenticated = $state(false);
-
-  isAuthenticated.subscribe((v) => (authenticated = v));
-
   $effect(() => {
-    if (!authenticated && browser) {
+    if (!auth.session) {
       goto('/', { replaceState: true });
     }
   });
@@ -17,7 +13,7 @@
   let { children } = $props();
 </script>
 
-{#if authenticated}
+{#if auth.session}
   <Sidebar />
   <main class="flex-1 overflow-auto">
     {@render children()}

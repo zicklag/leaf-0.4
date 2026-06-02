@@ -1,13 +1,11 @@
 <script lang="ts">
   import { Button, Input } from '@foxui/core';
-  import { setupState, setupLoading, setupError } from '$lib/setup-store.svelte';
+  import { setupState } from '$lib/setup-store.svelte';
+  import { auth } from '$lib/auth.svelte';
 
   let handleValue = $state('');
-  let loading = $state(false);
-  let error = $state<string | null>(null);
-
-  setupLoading.subscribe((v) => (loading = v));
-  setupError.subscribe((v) => (error = v));
+  let loading = $derived(setupState.loading);
+  let error = $derived(setupState.error);
 
   async function proceedWithLogin() {
     const handle = handleValue.trim();
@@ -27,9 +25,7 @@
         loading: true,
       });
 
-      // Trigger OAuth login — this will redirect the browser
-      const { loginForSetup } = await import('$lib/auth');
-      await loginForSetup(handle);
+      await auth.loginWithHandle(handle);
       // After the above returns, the browser has redirected
       // (or will redirect). If we get here, something went wrong.
       setupState.setError('OAuth login failed to initiate. Please try again.');
@@ -47,8 +43,8 @@
   <div class="space-y-2">
     <h2 class="text-xl font-semibold text-base-900 dark:text-base-50">Sign In with AT Protocol</h2>
     <p class="text-sm text-base-600 dark:text-base-400">
-      Sign in with the account that owns the community DID. You'll be redirected to
-      your PDS to authorize this app via OAuth.
+      Sign in with the account that owns the community DID. You'll be redirected to your PDS to
+      authorize this app via OAuth.
     </p>
   </div>
 
@@ -74,9 +70,7 @@
   </div>
 
   <div class="flex justify-between pt-2">
-    <Button variant="ghost" onclick={goBack} disabled={loading}>
-      Back
-    </Button>
+    <Button variant="ghost" onclick={goBack} disabled={loading}>Back</Button>
     <Button onclick={proceedWithLogin} disabled={loading || !handleValue.trim()}>
       {loading ? 'Redirecting to PDS…' : 'Sign In with OAuth'}
     </Button>

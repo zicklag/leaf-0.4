@@ -1,17 +1,13 @@
 <script lang="ts">
   import { Button, Input } from '@foxui/core';
-  import { setupState, setupLoading, setupError } from '$lib/setup-store.svelte';
-  import { getOAuthSession } from '$lib/auth';
+  import { setupState } from '$lib/setup-store.svelte';
   import { PdsSetupClient } from '$lib/pds-client';
 
   let emailCode = $state('');
-  let loading = $state(false);
-  let error = $state<string | null>(null);
+  let loading = $derived(setupState.loading);
+  let error = $derived(setupState.error);
   let codeSent = $state(false);
   let stepLabel = $state('Request confirmation code');
-
-  setupLoading.subscribe((v) => (loading = v));
-  setupError.subscribe((v) => (error = v));
 
   function goBack() {
     setupState.goTo('app-password');

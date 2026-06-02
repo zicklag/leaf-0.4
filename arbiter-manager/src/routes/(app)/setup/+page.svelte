@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
-  import { setupState, setupStep, clearSetupState } from '$lib/setup-store.svelte';
+  import { setupState, clearSetupState } from '$lib/setup-store.svelte';
   import SetupStepIntro from '$lib/components/setup/SetupStepIntro.svelte';
   import SetupStepOAuth from '$lib/components/setup/SetupStepOAuth.svelte';
   import SetupStepAppPassword from '$lib/components/setup/SetupStepAppPassword.svelte';
@@ -10,10 +10,8 @@
   import SetupStepSelectAdmin from '$lib/components/setup/SetupStepSelectAdmin.svelte';
   import SetupStepComplete from '$lib/components/setup/SetupStepComplete.svelte';
 
-  let step = $state<string>('intro');
+  let step = $derived(setupState.step);
   let showFullReset = $state(false);
-
-  setupStep.subscribe((v) => (step = v));
 
   // After OAuth callback lands us here, proceed to app-password step
   // The oauth callback handler should have set the step to 'app-password'
@@ -29,31 +27,9 @@
 </script>
 
 <div class="min-h-full flex flex-col">
-  <!-- Top bar -->
-  <header class="flex items-center justify-between px-6 py-3 border-b border-base-200 dark:border-base-800">
-    <div class="flex items-center gap-3">
-      <a href="/" class="text-sm text-accent-500 hover:text-accent-600 font-medium">
-        &larr; Home
-      </a>
-      <h1 class="text-lg font-semibold text-base-900 dark:text-base-50">
-        Setup Community Account
-      </h1>
-    </div>
-    <div class="flex items-center gap-2">
-      {#if step !== 'intro' && step !== 'complete'}
-        <button
-          onclick={() => { showFullReset = true; }}
-          class="text-xs text-base-500 hover:text-red-500 transition-colors"
-        >
-          Cancel &amp; Reset
-        </button>
-      {/if}
-    </div>
-  </header>
-
   <!-- Steps indicator -->
-  <div class="px-6 py-4 border-b border-base-100 dark:border-base-800">
-    <div class="max-w-3xl mx-auto flex items-center gap-2 text-xs font-medium">
+  <div class="px-6 py-4 border-b border-base-100 dark:border-base-800 flex items-center justify-center gap-4">
+    <div class="flex items-center gap-2 text-xs font-medium">
       {#each ['intro', 'oauth', 'app-password', 'email-code', 'select-admin', 'complete'] as s, i}
         {@const active = step === s}
         {@const done = ['intro', 'oauth', 'app-password', 'email-code', 'select-admin', 'complete'].indexOf(step) > i}
@@ -79,23 +55,36 @@
         </div>
       {/each}
     </div>
+
+    {#if step !== 'intro' && step !== 'complete'}
+      <button
+        onclick={() => { showFullReset = true; }}
+        class="text-xs text-base-500 hover:text-red-500 transition-colors shrink-0"
+      >
+        Cancel &amp; Reset
+      </button>
+    {:else}
+      <span class="w-8"></span>
+    {/if}
   </div>
 
   <!-- Step content -->
-  <div class="flex-1 overflow-auto flex">
-    {#if step === 'intro'}
-      <SetupStepIntro />
-    {:else if step === 'oauth'}
-      <SetupStepOAuth />
-    {:else if step === 'app-password'}
-      <SetupStepAppPassword />
-    {:else if step === 'email-code'}
-      <SetupStepEmailCode />
-    {:else if step === 'select-admin'}
-      <SetupStepSelectAdmin />
-    {:else if step === 'complete'}
-      <SetupStepComplete />
-    {/if}
+  <div class="flex-1 overflow-auto flex items-start justify-center px-6">
+    <div class="w-full max-w-3xl py-8">
+      {#if step === 'intro'}
+        <SetupStepIntro />
+      {:else if step === 'oauth'}
+        <SetupStepOAuth />
+      {:else if step === 'app-password'}
+        <SetupStepAppPassword />
+      {:else if step === 'email-code'}
+        <SetupStepEmailCode />
+      {:else if step === 'select-admin'}
+        <SetupStepSelectAdmin />
+      {:else if step === 'complete'}
+        <SetupStepComplete />
+      {/if}
+    </div>
   </div>
 </div>
 

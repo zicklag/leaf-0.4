@@ -1,7 +1,5 @@
 <script lang="ts">
   import { Sheet, Input, Button, Select } from '@foxui/core';
-  import { getSession } from '$lib/store.svelte';
-  import { ArbiterClient } from '$lib/api';
   import type { Did, SpaceKey, MemberUnion, Access } from '$lib/types';
   import { ALL_ACCESSES, ACCESS_LABELS } from '$lib/types';
 
@@ -69,10 +67,10 @@
 
       const access: Record<string, unknown> = { $type: `town.muni.arbiter.access#${accessLevel}` };
 
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      await client.setSpaceMemberAccess(arbiterDid, spaceKey, member, access);
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // await client.setSpaceMemberAccess(arbiterDid, spaceKey, member, access);
 
       // Reset form
       memberDid = '';

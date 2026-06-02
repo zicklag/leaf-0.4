@@ -1,7 +1,5 @@
 <script lang="ts">
   import { Sheet, Input, Button } from '@foxui/core';
-  import { getSession } from '$lib/store.svelte';
-  import { ArbiterClient } from '$lib/api';
   import type { Did, SpaceKey } from '$lib/types';
 
   let {
@@ -39,10 +37,10 @@
         return;
       }
 
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      await client.createSpace(arbiterDid, spaceKey.trim(), spaceType.trim(), config);
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // await client.createSpace(arbiterDid, spaceKey.trim(), spaceType.trim(), config);
 
       // Reset form
       spaceKey = '';

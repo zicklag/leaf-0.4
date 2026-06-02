@@ -1,41 +1,10 @@
-import { writable, derived } from 'svelte/store';
+import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { queryClient } from './query-client';
-import { ArbiterClient } from './api';
-import { restoreSession, getSession, clearSession, login as authLogin } from './auth';
 
 // Re-export auth helpers so components can import from a single module
-export { restoreSession, getSession };
-import type { AuthSession, Did, ManagedCommunity } from './types';
+import type { Did, ManagedCommunity } from './types';
 
 const MANAGED_DIDS_KEY = 'arbiter-manager-communities';
-
-// ---------------------------------------------------------------------------
-// Auth state
-// ---------------------------------------------------------------------------
-
-export const session = writable<AuthSession | null>(null);
-export const isAuthenticated = derived(session, ($s) => $s !== null);
-
-// Restore session on init (only runs in browser)
-if (browser) {
-  const s = restoreSession();
-  if (s) session.set(s);
-}
-
-export function login() {
-  authLogin();
-}
-
-export function logout() {
-  clearSession();
-  session.set(null);
-  queryClient.clear();
-}
-
-export function setSession(s: AuthSession) {
-  session.set(s);
-}
 
 // ---------------------------------------------------------------------------
 // Managed communities (localStorage persisted list of DIDs)
@@ -73,16 +42,6 @@ export function removeManagedCommunity(did: Did) {
     saveManagedCommunities(updated);
     return updated;
   });
-}
-
-// ---------------------------------------------------------------------------
-// TanStack Query helpers
-// ---------------------------------------------------------------------------
-
-export function getClientForDid(did: Did): ArbiterClient {
-  const s = getSession();
-  if (!s) throw new Error('Not authenticated');
-  return new ArbiterClient(s.pdsUrl, s.accessJwt);
 }
 
 // For better ergonomics we'll expose query/mutation functions directly

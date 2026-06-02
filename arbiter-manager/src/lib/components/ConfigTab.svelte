@@ -1,7 +1,5 @@
 <script lang="ts">
   import { Button, Box, Input } from '@foxui/core';
-  import { getSession } from '$lib/store.svelte';
-  import { ArbiterClient, XrpcRequestError } from '$lib/api';
   import type { Did } from '$lib/types';
 
   let { arbiterDid }: { arbiterDid: Did } = $props();
@@ -17,17 +15,17 @@
     loading = true;
     error = null;
     try {
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      const config = await client.getArbiterConfig(arbiterDid);
-      configJson = JSON.stringify(config, null, 2);
+    //   const session = getSession();
+    //   if (!session) throw new Error('Not authenticated');
+    //   const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+    //   const config = await client.getArbiterConfig(arbiterDid);
+    //   configJson = JSON.stringify(config, null, 2);
     } catch (e) {
-      if (e instanceof XrpcRequestError && e.isPermissionDenied) {
-        error = "You don't have permission to view this arbiter's configuration.";
-      } else {
-        error = String(e);
-      }
+      // if (e instanceof XrpcRequestError && e.isPermissionDenied) {
+      //   error = "You don't have permission to view this arbiter's configuration.";
+      // } else {
+      //   error = String(e);
+      // }
     } finally {
       loading = false;
     }
@@ -39,19 +37,19 @@
     saveSuccess = false;
     try {
       const config = JSON.parse(configJson);
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      await client.setArbiterConfig(arbiterDid, config);
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // await client.setArbiterConfig(arbiterDid, config);
       saveSuccess = true;
     } catch (e) {
-      if (e instanceof SyntaxError) {
-        saveError = 'Invalid JSON. Please check your syntax.';
-      } else if (e instanceof XrpcRequestError && e.isPermissionDenied) {
-        saveError = "You don't have permission to update this arbiter's configuration.";
-      } else {
-        saveError = String(e);
-      }
+      // if (e instanceof SyntaxError) {
+      //   saveError = 'Invalid JSON. Please check your syntax.';
+      // } else if (e instanceof XrpcRequestError && e.isPermissionDenied) {
+      //   saveError = "You don't have permission to update this arbiter's configuration.";
+      // } else {
+      //   saveError = String(e);
+      // }
     } finally {
       saving = false;
     }

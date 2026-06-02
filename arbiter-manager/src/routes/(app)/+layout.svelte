@@ -1,13 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import TopBar from '$lib/components/TopBar.svelte';
-  import { processOAuthCallback } from '$lib/oauth-callback';
-  import '../app.css';
+  import './app.css';
+  import { auth } from '$lib/auth.svelte';
 
   let ready = $state(false);
 
   onMount(async () => {
-    await processOAuthCallback();
+    await auth.init();
     ready = true;
   });
 

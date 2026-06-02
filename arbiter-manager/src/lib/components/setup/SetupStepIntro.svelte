@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button } from '@foxui/core';
+  import { Alert, Button } from '@foxui/core';
   import { setupState } from '$lib/setup-store.svelte';
 
   function startSetup() {
@@ -17,6 +17,13 @@
       A community account is an AT Protocol account that's managed by your organization. This wizard
       will guide you through setting up your PDS, authorizing an arbiter, and granting admin access.
     </p>
+
+    <Alert type="warning">
+      <span>
+        This is alpha software. We do not recommend using the community setup with non-test accounts
+        for the time being.
+      </span>
+    </Alert>
   </div>
 
   <!-- Step descriptions -->
