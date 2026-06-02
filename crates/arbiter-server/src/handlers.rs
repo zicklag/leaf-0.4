@@ -6,11 +6,11 @@
 //! the response.
 //!
 //! For `createArbiter`, the handler bootstraps a new arbiter state machine
-//! if one doesn't exist yet for the given DID.
+//! backed by a PDS account (app password). Any XRPC requests triggered
+//! during policy evaluation are proxied through that PDS.
 
 use std::sync::Arc;
 
-use atproto_identity::resolve::IdentityResolver;
 use arbiter_core::{
     Event, IoAction, NSID, XrpcResponse,
     nsid_method,
@@ -20,8 +20,9 @@ use salvo::prelude::*;
 use salvo::writing::Json;
 use serde_json::Value;
 
-use crate::state::ArbiterCollection;
+use crate::state::{ArbiterCollection, PdsAccount};
 use crate::ServerState;
+use crate::state::Did;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,10 +87,13 @@ async fn parse_body_or_query(req: &mut Request) -> Value {
 
 /// Feed an [`Event`] to an arbiter's [`StateMachine`] and drive any remote
 /// requests to completion, returning the final response.
+///
+/// If the arbiter has an associated PDS account (app-password arbiter),
+/// remote XRPC requests are proxied through that PDS instead of being
+/// resolved directly.
 async fn process_request(
     coll: &mut ArbiterCollection,
     client: &reqwest::Client,
-    identity_resolver: &dyn IdentityResolver,
     did: &str,
     event: Event,
 ) -> (u16, Value) {
@@ -118,9 +122,14 @@ async fn process_request(
                     input,
                     job_id,
                 } => {
+                    // Check if this arbiter has a PDS account — if so,
+                    // proxy the request through the PDS.
+                    let pds_account = coll.get_pds_account(did)
+                        .cloned()
+                        .expect("every arbiter must have a PDS account");
                     let resp = resolve_remote_request(
                         client,
-                        identity_resolver,
+                        &pds_account,
                         &target_did,
                         &method,
                         &nsid,
@@ -143,50 +152,28 @@ async fn process_request(
     )
 }
 
-/// Resolve a remote XRPC request by resolving the target DID's service
-/// endpoint and making an HTTP request.
+/// Proxy a remote XRPC request through the arbiter's PDS account.
+///
+/// The PDS URL is used as the base endpoint, the app password is
+/// included in the `Authorization` header, and the target DID+service
+/// fragment is passed in the `atproto-proxy` header.
 async fn resolve_remote_request(
     client: &reqwest::Client,
-    identity_resolver: &dyn IdentityResolver,
+    pds: &PdsAccount,
     remote_did: &str,
     method: &XrpcMethod,
     path: &str,
     input: Value,
 ) -> XrpcResponse {
-    let (base_did, fragment) = match remote_did.split_once('#') {
-        Some((base, frag)) => (base, format!("#{frag}")),
-        None => {
-            tracing::warn!(%remote_did, "xrpc_remote DID missing required fragment (e.g. #arbiter)");
-            return XrpcResponse::error(400, "ErrRemoteDidMissingFragment");
-        }
-    };
-
-    let doc = match identity_resolver.resolve(base_did).await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!(%remote_did, %e, "Failed to resolve remote DID");
-            return XrpcResponse::error(502, "ErrRemoteDidResolution");
-        }
-    };
-
-    let endpoint = doc
-        .service
-        .iter()
-        .find(|s| s.id == fragment || s.id.ends_with(&fragment))
-        .map(|s| s.service_endpoint.clone());
-
-    let Some(endpoint) = endpoint else {
-        tracing::warn!(%remote_did, fragment, "No service found matching fragment");
-        return XrpcResponse::error(502, "ErrRemoteServiceNotFound");
-    };
-
     let url = format!(
         "{}/xrpc/{}",
-        endpoint.trim_end_matches('/'),
-        path.trim_start_matches('/')
+        pds.pds_endpoint.trim_end_matches('/'),
+        path.trim_start_matches('/'),
     );
 
-    match method {
+    let proxy_header = format!("{remote_did}");
+
+    let req_builder = match method {
         XrpcMethod::Query => {
             let mut req = client.get(&url);
             if let Some(obj) = input.as_object() {
@@ -196,30 +183,24 @@ async fn resolve_remote_request(
                     }
                 }
             }
-            match req.send().await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    let body = resp.json::<Value>().await.unwrap_or_default();
-                    XrpcResponse { status, body }
-                }
-                Err(e) => {
-                    tracing::warn!(%url, %e, "Remote query failed");
-                    XrpcResponse::error(502, "ErrRemoteRequestFailed")
-                }
-            }
+            req
         }
-        XrpcMethod::Procedure => {
-            match client.post(&url).json(&input).send().await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    let body = resp.json::<Value>().await.unwrap_or_default();
-                    XrpcResponse { status, body }
-                }
-                Err(e) => {
-                    tracing::warn!(%url, %e, "Remote procedure failed");
-                    XrpcResponse::error(502, "ErrRemoteRequestFailed")
-                }
-            }
+        XrpcMethod::Procedure => client.post(&url).json(&input),
+    };
+
+    let req_builder = req_builder
+        .header("Authorization", format!("Bearer {}", pds.app_password))
+        .header("atproto-proxy", &proxy_header);
+
+    match req_builder.send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let body = resp.json::<Value>().await.unwrap_or_default();
+            XrpcResponse { status, body }
+        }
+        Err(e) => {
+            tracing::warn!(%url, %e, "PDS proxy request failed");
+            XrpcResponse::error(502, "ErrPdsProxyFailed")
         }
     }
 }
@@ -233,7 +214,7 @@ async fn resolve_remote_request(
 /// 1. Reads `atproto-proxy` header to identify the target arbiter DID.
 /// 2. Extracts the NSID from the URL path.
 /// 3. If the NSID is `createArbiter` and the arbiter doesn't exist yet,
-///    bootstraps a new state machine.
+///    bootstraps a new PDS-backed state machine.
 /// 4. Otherwise routes the event through the existing state machine.
 /// 5. For `deleteArbiter`, removes the arbiter from the collection after
 ///    a successful response.
@@ -267,21 +248,66 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let body = parse_body_or_query(req).await;
     let params = build_params(&body);
 
-    // ── createArbiter (bootstrap) ───────────────────────────────────
+    // ── createArbiter (bootstrap with PDS account) ──────────────────
 
-    if nsid == "town.muni.arbiter.createArbiter" {
+    if nsid == NSID::CREATE_ARBITER {
         let mut coll = state.arbiters.lock().await;
         if coll.arbiters.contains_key(&did) {
             res.render(Json(err("ErrArbiterAlreadyExists")));
             return;
         }
+
         let config = body.get("config").cloned().unwrap_or_default();
         let policy = config
             .get("policy")
             .and_then(|v| v.as_str())
             .unwrap_or(state.default_policy)
             .to_string();
-        coll.create_arbiter(did, config, policy, caller);
+
+        // Extract PDS account info from request body
+        let pds_endpoint = match body
+            .get("pdsEndpoint")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
+            Some(e) => e,
+            None => {
+                res.render(Json(err("ErrMissingParam: pdsEndpoint required")));
+                return;
+            }
+        };
+
+        let account_did: Did = match body
+            .get("accountDid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
+            Some(d) => d,
+            None => {
+                res.render(Json(err("ErrMissingParam: accountDid required")));
+                return;
+            }
+        };
+
+        let app_password = match body
+            .get("appPassword")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+        {
+            Some(p) => p,
+            None => {
+                res.render(Json(err("ErrMissingParam: appPassword required")));
+                return;
+            }
+        };
+
+        let pds_account = PdsAccount {
+            pds_endpoint,
+            account_did,
+            app_password,
+        };
+
+        coll.create_arbiter_with_pds(did, config, policy, caller, pds_account);
         res.render(Json(serde_json::json!({})));
         return;
     }
@@ -307,7 +333,6 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let (status, body) = process_request(
         &mut coll,
         &state.client,
-        &*state.identity_resolver,
         &did,
         event,
     )

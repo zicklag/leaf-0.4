@@ -129,6 +129,17 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("No existing state found, starting fresh");
     }
 
+    // Load app-password arbiters (PDS accounts) from separate file
+    if let Ok(pds_snapshot) = persister.load_pds_arbiters() {
+        tracing::info!(
+            "Loaded {} app-password arbiters from disk",
+            pds_snapshot.arbiters.len()
+        );
+        collection.load_pds_snapshot(pds_snapshot);
+    } else {
+        tracing::info!("No existing app-password arbiters found");
+    }
+
     let state = Arc::new(ServerState {
         arbiters: tokio::sync::Mutex::new(collection),
         default_policy,
@@ -146,9 +157,16 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-            let snapshot = { state_clone.arbiters.lock().await.snapshot() };
-            if let Err(e) = persister_clone.save_all(&snapshot) {
-                tracing::error!("Failed to persist state: {e}");
+            {
+                let coll = state_clone.arbiters.lock().await;
+                let snapshot = coll.snapshot();
+                if let Err(e) = persister_clone.save_all(&snapshot) {
+                    tracing::error!("Failed to persist state: {e}");
+                }
+                let pds_snapshot = coll.pds_snapshot();
+                if let Err(e) = persister_clone.save_pds_arbiters(&pds_snapshot) {
+                    tracing::error!("Failed to persist PDS arbiters: {e}");
+                }
             }
         }
     });
