@@ -12,6 +12,9 @@ use anyhow::Context;
 use jacquard::{
     api::com_atproto::{
         admin::update_account_password::UpdateAccountPassword,
+        identity::{
+            sign_plc_operation::SignPlcOperation, submit_plc_operation::SubmitPlcOperation,
+        },
         server::{
             InviteCode, create_account::CreateAccount, create_invite_code::CreateInviteCode,
             describe_server::DescribeServer, get_account_invite_codes::GetAccountInviteCodes,
@@ -19,11 +22,22 @@ use jacquard::{
     },
     client::{Agent, MemoryCredentialSession},
     deps::smol_str::SmolStr,
-    types::{did::Did, string::Handle},
+    types::{did::Did, string::Handle, value::to_data},
     xrpc::XrpcClient,
 };
 
 pub use jacquard;
+
+/// Describes a service entry in a DID PLC operation (e.g. an AT Protocol PDS).
+#[derive(Debug, Clone)]
+pub struct PlcService {
+    /// Service ID, e.g. `"#atproto_pds"`.
+    pub id: String,
+    /// Service type, e.g. `"AtprotoPersonalDataServer"`.
+    pub r#type: String,
+    /// Service endpoint URL.
+    pub endpoint: String,
+}
 
 /// Admin client wrapping a jacquard credential session.
 pub struct PdsAdminClient {
@@ -34,7 +48,7 @@ impl PdsAdminClient {
     /// Login as with a PDS admin account.
     pub async fn login(id: &str, password: &str) -> anyhow::Result<Self> {
         let session =
-            MemoryCredentialSession::authenticated(dbg!(id).into(), password.into(), None, None)
+            MemoryCredentialSession::authenticated(id.into(), password.into(), None, None)
                 .await
                 .context("Admin login error")?
                 .0;
@@ -42,6 +56,10 @@ impl PdsAdminClient {
         Ok(Self {
             admin: Agent::from(session),
         })
+    }
+
+    pub async fn pds_endpoint(&self) -> String {
+        self.admin.base_uri().await.to_string()
     }
 
     // ── Invite codes ─────────────────────────────────────────────────
@@ -133,15 +151,16 @@ impl PdsAdminClient {
                     .password(password)
                     .build(),
             )
-            .await?
-            .into_output()?;
+            .await?;
         Ok(())
     }
 
     /// Log in as any account: set a random password, return a jacquard Agent.
     pub async fn login_as(&self, did: &str) -> anyhow::Result<Agent<MemoryCredentialSession>> {
         let password = gen_password()?;
-        self.set_password(did, &password).await?;
+        self.set_password(did, &password)
+            .await
+            .context("setting password")?;
         let session =
             MemoryCredentialSession::authenticated(did.into(), password.into(), None, None)
                 .await?
@@ -152,6 +171,91 @@ impl PdsAdminClient {
     pub async fn handle_suffixes(&self) -> anyhow::Result<Vec<SmolStr>> {
         let info = self.admin.send(DescribeServer).await?.into_output()?;
         Ok(info.available_user_domains)
+    }
+
+    // ── DID document service endpoints ──────────────────────────────
+
+    /// Set the service endpoints in a user's DID document via PLC operation.
+    ///
+    /// This logs in as the user, requests a signed PLC operation from the
+    /// user's PDS with the given services, and submits it to the PLC
+    /// directory (`https://plc.directory`).
+    ///
+    /// The `services` slice replaces all service entries in the DID
+    /// document. Pass every service the document should contain.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use pds_admin_client::{PdsAdminClient, PlcService};
+    /// # async fn example() -> anyhow::Result<()> {
+    /// # let client = PdsAdminClient::login("admin", "pass").await?;
+    /// client.set_service_endpoints(
+    ///     "did:plc:abc123",
+    ///     &[
+    ///         PlcService {
+    ///             id: "#atproto_pds".into(),
+    ///             r#type: "AtprotoPersonalDataServer".into(),
+    ///             endpoint: "https://pds.example.com".into(),
+    ///         },
+    ///     ],
+    /// )
+    /// .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn set_service_endpoints(
+        &self,
+        did: &str,
+        services: &[PlcService],
+    ) -> anyhow::Result<()> {
+        // 1. Log in as the target user so we can call signPlcOperation on their PDS.
+        let agent = self.login_as(did).await?;
+
+        // 2. Build the services map in the PLC operation format:
+        //    { "#id": { "type": "...", "endpoint": "..." }, ... }
+        let services_map = services
+            .iter()
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    serde_json::json!({
+                        "type": s.r#type,
+                        "endpoint": s.endpoint,
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<String, serde_json::Value>>();
+
+        let services_data = to_data(&serde_json::Value::Object(services_map))
+            .context("failed to serialize services to AT Protocol Data value")?;
+
+        // 3. Sign the PLC operation on the user's PDS.
+        let response = agent
+            .send(SignPlcOperation::<SmolStr> {
+                also_known_as: None,
+                rotation_keys: None,
+                services: Some(services_data),
+                token: None,
+                verification_methods: None,
+                extra_data: None,
+            })
+            .await
+            .context("signPlcOperation failed")?;
+
+        let output = response
+            .into_output()
+            .context("signPlcOperation returned error")?;
+        let signed_operation = output.operation;
+
+        agent
+            .send(SubmitPlcOperation::<SmolStr> {
+                operation: signed_operation,
+                extra_data: None,
+            })
+            .await?;
+
+        Ok(())
     }
 }
 
