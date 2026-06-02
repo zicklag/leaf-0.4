@@ -82,7 +82,7 @@
   </div>
 
   <!-- Step content -->
-  <div class="flex-1 overflow-auto">
+  <div class="flex-1 overflow-auto flex">
     {#if step === 'intro'}
       <SetupStepIntro />
     {:else if step === 'oauth'}
@@ -101,8 +101,8 @@
 
 <!-- Full reset confirmation modal -->
 {#if showFullReset}
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onclick={() => (showFullReset = false)}>
-    <div class="bg-white dark:bg-base-900 rounded-lg p-6 max-w-sm mx-4 shadow-xl" onclick={(e) => e.stopPropagation()}>
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div class="bg-white dark:bg-base-900 rounded-lg p-6 max-w-sm mx-4 shadow-xl">
       <h3 class="text-lg font-semibold text-base-900 dark:text-base-50 mb-2">Reset Setup?</h3>
       <p class="text-sm text-base-600 dark:text-base-400 mb-4">
         This will clear all progress and take you back to the home page.
