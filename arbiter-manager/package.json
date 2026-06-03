@@ -14,9 +14,12 @@
     "@atproto/oauth-client-browser": "^0.3.0",
     "@foxui/core": "^0.9.1",
     "@tanstack/svelte-query": "^6.1.33",
+    "arktype": "^2.2.0",
     "monaco-editor": "^0.55.1"
   },
   "devDependencies": {
+    "@atcute/identity-resolver": "^2.0.0",
+    "@atcute/lexicons": "^2.0.0",
     "@sveltejs/adapter-static": "^3.0.8",
     "@sveltejs/kit": "^2.20.8",
     "@sveltejs/vite-plugin-svelte": "^5.0.3",

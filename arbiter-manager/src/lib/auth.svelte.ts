@@ -8,6 +8,7 @@ import {
 import { Agent } from '@atproto/api';
 import type { ProfileViewDetailed } from '@atproto/api/dist/client/types/app/bsky/actor/defs';
 import { goto } from '$app/navigation';
+import { resetSetupState } from './setupState.svelte';
 
 const SESSION_DID_KEY = 'session-did';
 const atprotoOauthScope = ['atproto', 'identity:*', 'rpc:app.bsky.actor.getProfile?aud=*'].join(
@@ -40,6 +41,7 @@ export class Auth {
 
   async callback(params: URLSearchParams) {
     if (!this.client) this.client = await makeOauthClient();
+    if (this.session) await this.session.signOut();
     const { session } = await this.client.callback(params);
     this.session = session;
     this.#loadSession();
@@ -59,6 +61,7 @@ export class Auth {
     this.session = undefined;
     this.agent = undefined;
     this.profile = undefined;
+    resetSetupState();
     await goto('/');
   }
 

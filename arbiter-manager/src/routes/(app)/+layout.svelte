@@ -3,11 +3,24 @@
   import TopBar from '$lib/components/TopBar.svelte';
   import './app.css';
   import { auth } from '$lib/auth.svelte';
+  import { resetSetupState, setupState } from '$lib/setupState.svelte';
+  import { goto } from '$app/navigation';
 
   let ready = $state(false);
 
   onMount(async () => {
     await auth.init();
+
+    if (setupState.step == 'oauth' && auth.profile) {
+      setupState.step = 'app-password';
+    } else if (!auth.session && setupState.step != 'intro') {
+      resetSetupState();
+    }
+
+    if (setupState.step != 'intro' && auth.session) {
+      await goto('/setup');
+    }
+
     ready = true;
   });
 

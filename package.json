@@ -12,5 +12,8 @@
   "devDependencies": {
     "@typelex/cli": "^0.4.0",
     "@typelex/emitter": "^0.4.0"
+  },
+  "dependencies": {
+    "@foxui/all": "^0.7.5"
   }
 }

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import { goto } from '$app/navigation';
-  import { setupState, clearSetupState } from '$lib/setup-store.svelte';
+  import { resetSetupState, setupState } from '$lib/setupState.svelte';
   import SetupStepIntro from '$lib/components/setup/SetupStepIntro.svelte';
   import SetupStepOAuth from '$lib/components/setup/SetupStepOAuth.svelte';
   import SetupStepAppPassword from '$lib/components/setup/SetupStepAppPassword.svelte';
@@ -12,42 +12,58 @@
 
   let step = $derived(setupState.step);
   let showFullReset = $state(false);
-
-  // After OAuth callback lands us here, proceed to app-password step
-  // The oauth callback handler should have set the step to 'app-password'
-  // if the OAuth login was part of the setup flow.
-  onMount(() => {
-    // If there's no setup state, treat this as a fresh start
-    if (!browser) return;
-    const raw = localStorage.getItem('arbiter-manager-setup-state');
-    if (!raw) {
-      setupState.reset();
-    }
-  });
 </script>
 
 <div class="min-h-full flex flex-col">
   <!-- Steps indicator -->
-  <div class="px-6 py-4 border-b border-base-100 dark:border-base-800 flex items-center justify-center gap-4">
+  <div
+    class="px-6 py-4 border-b border-base-100 dark:border-base-800 flex items-center justify-center gap-4"
+  >
     <div class="flex items-center gap-2 text-xs font-medium">
       {#each ['intro', 'oauth', 'app-password', 'email-code', 'select-admin', 'complete'] as s, i}
         {@const active = step === s}
-        {@const done = ['intro', 'oauth', 'app-password', 'email-code', 'select-admin', 'complete'].indexOf(step) > i}
+        {@const done =
+          ['intro', 'oauth', 'app-password', 'email-code', 'select-admin', 'complete'].indexOf(
+            step,
+          ) > i}
         <div class="flex items-center gap-2">
           <span
             class="w-6 h-6 rounded-full flex items-center justify-center transition-colors
-              {active ? 'bg-accent-500 text-white' : done ? 'bg-green-500 text-white' : 'bg-base-200 dark:bg-base-700 text-base-500'}"
+              {active
+              ? 'bg-accent-500 text-white'
+              : done
+                ? 'bg-green-500 text-white'
+                : 'bg-base-200 dark:bg-base-700 text-base-500'}"
           >
             {#if done}
               <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2.5"
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             {:else}
               {i + 1}
             {/if}
           </span>
-          <span class="hidden sm:inline {active ? 'text-base-900 dark:text-base-50 font-semibold' : 'text-base-500'}">
-            {s === 'intro' ? 'Overview' : s === 'oauth' ? 'Sign In' : s === 'app-password' ? 'App Password' : s === 'email-code' ? 'Email Code' : s === 'select-admin' ? 'Admin' : 'Done'}
+          <span
+            class="hidden sm:inline {active
+              ? 'text-base-900 dark:text-base-50 font-semibold'
+              : 'text-base-500'}"
+          >
+            {s === 'intro'
+              ? 'Overview'
+              : s === 'oauth'
+                ? 'Sign In'
+                : s === 'app-password'
+                  ? 'App Password'
+                  : s === 'email-code'
+                    ? 'Email Code'
+                    : s === 'select-admin'
+                      ? 'Admin'
+                      : 'Done'}
           </span>
           {#if i < 5}
             <span class="w-6 h-px bg-base-300 dark:bg-base-700"></span>
@@ -58,7 +74,9 @@
 
     {#if step !== 'intro' && step !== 'complete'}
       <button
-        onclick={() => { showFullReset = true; }}
+        onclick={() => {
+          showFullReset = true;
+        }}
         class="text-xs text-base-500 hover:text-red-500 transition-colors shrink-0"
       >
         Cancel &amp; Reset
@@ -105,7 +123,7 @@
         </button>
         <button
           onclick={async () => {
-            clearSetupState();
+            resetSetupState();
             showFullReset = false;
             goto('/');
           }}

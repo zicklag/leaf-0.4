@@ -1,9 +1,9 @@
 <script lang="ts">
   import { Alert, Button } from '@foxui/core';
-  import { setupState } from '$lib/setup-store.svelte';
+  import { setupState } from '$lib/setupState.svelte';
 
   function startSetup() {
-    setupState.goTo('oauth');
+    setupState.step = 'oauth';
   }
 </script>
 
