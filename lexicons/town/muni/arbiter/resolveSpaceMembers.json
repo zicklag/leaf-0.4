@@ -4,7 +4,6 @@
   "defs": {
     "main": {
       "type": "query",
-      "description": "Get the flattened, resolved list of members for a space.\n\nThis member list will be the same as what the server is expected to return\nas the space host, but it will additionally contain a member config\nobject for each member.\n\nThe details of the member config object are dependent on the server implementation\nand possibly the arbiter config type.",
       "parameters": {
         "type": "params",
         "properties": {
@@ -36,46 +35,16 @@
             "members": {
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "did": {
-                    "type": "string",
-                    "format": "did",
-                    "description": "The member DID."
-                  },
-                  "access": {
-                    "type": "union",
-                    "refs": [],
-                    "description": "The member's access config object."
-                  }
-                },
-                "required": [
-                  "did",
-                  "access"
-                ]
+                "type": "ref",
+                "ref": "#resolvedMember"
               },
               "description": "The members of the space"
             },
             "missingSpaces": {
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "space": {
-                    "type": "ref",
-                    "ref": "town.muni.arbiter.defs#memberRemoteSpace",
-                    "description": "The space that could not be resolved."
-                  },
-                  "access": {
-                    "type": "union",
-                    "refs": [],
-                    "description": "The access object of the space that could not be resolved."
-                  }
-                },
-                "required": [
-                  "space",
-                  "access"
-                ]
+                "type": "ref",
+                "ref": "#missingSpace"
               },
               "description": "Contains the list of remote spaces that could not be resolved.\n\nIf the hosts of remote spaces time out, then the server will reply with all\nof the members that it was able to resolve and will list the spaces that\ncould not be resolved in `missingSpaces`."
             }
@@ -99,6 +68,46 @@
           "name": "ErrPermissionDenied",
           "description": "The requesting user is not allowed to make the request."
         }
+      ]
+    },
+    "resolvedMember": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "format": "did",
+          "description": "The member DID."
+        },
+        "access": {
+          "type": "union",
+          "refs": [],
+          "description": "The member's access config object."
+        }
+      },
+      "description": "Get the flattened, resolved list of members for a space.\n\nThis member list will be the same as what the server is expected to return\nas the space host, but it will additionally contain a member config\nobject for each member.\n\nThe details of the member config object are dependent on the server implementation\nand possibly the arbiter config type.A resolved member entry with DID and access config.",
+      "required": [
+        "did",
+        "access"
+      ]
+    },
+    "missingSpace": {
+      "type": "object",
+      "properties": {
+        "space": {
+          "type": "ref",
+          "ref": "town.muni.arbiter.defs#memberRemoteSpace",
+          "description": "The space that could not be resolved."
+        },
+        "access": {
+          "type": "union",
+          "refs": [],
+          "description": "The access object of the space that could not be resolved."
+        }
+      },
+      "description": "A remote space that could not be resolved.",
+      "required": [
+        "space",
+        "access"
       ]
     }
   }

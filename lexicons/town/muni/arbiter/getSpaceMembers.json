@@ -4,7 +4,6 @@
   "defs": {
     "main": {
       "type": "query",
-      "description": "Get the members that have been assigned to the space.\n\nThis is not a flat membership list, but a list of the direct members\nof the space, including DIDs, local spaces, and remote spaces that have\nbeen added as members, without doing any resolution of remote spaces.",
       "parameters": {
         "type": "params",
         "properties": {
@@ -36,27 +35,8 @@
             "members": {
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "member": {
-                    "type": "union",
-                    "refs": [
-                      "town.muni.arbiter.defs#memberDid",
-                      "town.muni.arbiter.defs#memberLocalSpace",
-                      "town.muni.arbiter.defs#memberRemoteSpace"
-                    ],
-                    "description": "The member ID"
-                  },
-                  "access": {
-                    "type": "union",
-                    "refs": [],
-                    "description": "The member's access config object."
-                  }
-                },
-                "required": [
-                  "member",
-                  "access"
-                ]
+                "type": "ref",
+                "ref": "#spaceMemberEntry"
               },
               "description": "The members of the space"
             }
@@ -79,6 +59,30 @@
           "name": "ErrPermissionDenied",
           "description": "The requesting user is not allowed to make the request."
         }
+      ]
+    },
+    "spaceMemberEntry": {
+      "type": "object",
+      "properties": {
+        "member": {
+          "type": "union",
+          "refs": [
+            "town.muni.arbiter.defs#memberDid",
+            "town.muni.arbiter.defs#memberLocalSpace",
+            "town.muni.arbiter.defs#memberRemoteSpace"
+          ],
+          "description": "The member ID"
+        },
+        "access": {
+          "type": "union",
+          "refs": [],
+          "description": "The member's access config object."
+        }
+      },
+      "description": "Get the members that have been assigned to the space.\n\nThis is not a flat membership list, but a list of the direct members\nof the space, including DIDs, local spaces, and remote spaces that have\nbeen added as members, without doing any resolution of remote spaces.An entry describing a member and their access config.",
+      "required": [
+        "member",
+        "access"
       ]
     }
   }

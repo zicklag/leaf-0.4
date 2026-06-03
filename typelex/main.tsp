@@ -120,7 +120,7 @@ namespace town.muni.arbiter.defs {
      * The ID should not include a `#` prefix; it will be added when rendering
      * the DID document. These keys do **not** have control over the DID.
      */
-    @required verificationMethods: Record<string>,
+    @required verificationMethods: unknown,
     /**
      * Priority-ordered list of URIs indicating other names or aliases
      * associated with the DID. For atproto, this should include an `at://`
@@ -132,7 +132,7 @@ namespace town.muni.arbiter.defs {
      * The ID should not include a `#` prefix; it will be added when rendering
      * the DID document.
      */
-    @required services: Record<ServiceEndpoint>,
+    @required services: unknown,
   }
 }
 
@@ -327,6 +327,14 @@ namespace town.muni.arbiter.getSpaceMembers {
    * of the space, including DIDs, local spaces, and remote spaces that have
    * been added as members, without doing any resolution of remote spaces.
    * */
+  /** An entry describing a member and their access config. */
+  model SpaceMemberEntry {
+    /** The member ID */
+    @required member: town.muni.arbiter.defs.Member,
+    /** The member's access config object. */
+    @required access: OpenUnion,
+  }
+
   @query
   @errors(
     town.muni.arbiter.defs.ErrArbiterNotExists,
@@ -341,12 +349,7 @@ namespace town.muni.arbiter.getSpaceMembers {
     resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
   ): {
     /** The members of the space */
-    @required members: {
-      /** The member ID */
-      @required member: town.muni.arbiter.defs.Member,
-      /** The member's access config object. */
-      @required access: OpenUnion,
-    }[],
+    @required members: SpaceMemberEntry[],
   };
 }
 
@@ -418,6 +421,22 @@ namespace town.muni.arbiter.resolveSpaceMembers {
    * The details of the member config object are dependent on the server implementation
    * and possibly the arbiter config type.
    * */
+  /** A resolved member entry with DID and access config. */
+  model ResolvedMember {
+    /** The member DID. */
+    @required did: did,
+    /** The member's access config object. */
+    @required access: OpenUnion,
+  }
+
+  /** A remote space that could not be resolved. */
+  model MissingSpace {
+    /** The space that could not be resolved. */
+    @required space: town.muni.arbiter.defs.MemberRemoteSpace,
+    /** The access object of the space that could not be resolved. */
+    @required access: OpenUnion,
+  }
+
   @query
   @errors(
     town.muni.arbiter.defs.ErrArbiterNotExists,
@@ -432,12 +451,7 @@ namespace town.muni.arbiter.resolveSpaceMembers {
     resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
   ): {
     /** The members of the space */
-    @required members: {
-      /** The member DID. */
-      @required did: did,
-      /** The member's access config object. */
-      @required access: OpenUnion,
-    }[],
+    @required members: ResolvedMember[],
     /** 
      * Contains the list of remote spaces that could not be resolved.
      * 
@@ -445,12 +459,7 @@ namespace town.muni.arbiter.resolveSpaceMembers {
      * of the members that it was able to resolve and will list the spaces that
      * could not be resolved in `missingSpaces`.
      * */
-    @required missingSpaces: {
-      /** The space that could not be resolved. */
-      @required space: town.muni.arbiter.defs.MemberRemoteSpace,
-      /** The access object of the space that could not be resolved. */
-      @required access: OpenUnion
-    }[]
+    @required missingSpaces: MissingSpace[],
   };
 }
 
@@ -462,6 +471,21 @@ namespace town.muni.arbiter.listSpaces {
    * of the space, including DIDs, local spaces, and remote spaces that have
    * been added as members, without doing any resolution of remote spaces.
    * */
+  /** A space entry containing key, type and optional config. */
+  model SpaceEntry {
+    /** The space's key. */
+    @required spaceKey: town.muni.arbiter.defs.SpaceKey,
+    /** The type of the space. */
+    @required spaceType: nsid,
+    /**
+     * The space config.
+     * 
+     * This may not be returned if the server does not want to allow the requesting user
+     * to read it.
+     * */
+    config?: OpenUnion,
+  }
+
   @query
   @errors(
     town.muni.arbiter.defs.ErrArbiterNotExists,
@@ -474,19 +498,7 @@ namespace town.muni.arbiter.listSpaces {
     resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
   ): {
     /** The list of spaces on the arbiter that the requesting user has access to. */
-    @required spaces: {
-      /** The space's key. */
-      @required spaceKey: town.muni.arbiter.defs.SpaceKey,
-      /** The type of the space. */
-      @required spaceType: nsid,
-      /**
-       * The space config.
-       * 
-       * This may not be returned if the server does not want to allow the requesting user
-       * to read it.
-       * */
-      config?: OpenUnion,
-    }[],
+    @required spaces: SpaceEntry[],
   };
 }
 

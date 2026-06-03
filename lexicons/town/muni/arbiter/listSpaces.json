@@ -4,7 +4,6 @@
   "defs": {
     "main": {
       "type": "query",
-      "description": "Get the members that have been assigned to the space.\n\nThis is not a flat membership list, but a list of the direct members\nof the space, including DIDs, local spaces, and remote spaces that have\nbeen added as members, without doing any resolution of remote spaces.",
       "parameters": {
         "type": "params",
         "properties": {
@@ -30,28 +29,8 @@
             "spaces": {
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "spaceKey": {
-                    "type": "string",
-                    "maxLength": 1024,
-                    "description": "The space's key."
-                  },
-                  "spaceType": {
-                    "type": "string",
-                    "format": "nsid",
-                    "description": "The type of the space."
-                  },
-                  "config": {
-                    "type": "union",
-                    "refs": [],
-                    "description": "The space config.\n\nThis may not be returned if the server does not want to allow the requesting user\nto read it."
-                  }
-                },
-                "required": [
-                  "spaceKey",
-                  "spaceType"
-                ]
+                "type": "ref",
+                "ref": "#spaceEntry"
               },
               "description": "The list of spaces on the arbiter that the requesting user has access to."
             }
@@ -74,6 +53,31 @@
           "name": "ErrPermissionDenied",
           "description": "The requesting user is not allowed to make the request."
         }
+      ]
+    },
+    "spaceEntry": {
+      "type": "object",
+      "properties": {
+        "spaceKey": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "The space's key."
+        },
+        "spaceType": {
+          "type": "string",
+          "format": "nsid",
+          "description": "The type of the space."
+        },
+        "config": {
+          "type": "union",
+          "refs": [],
+          "description": "The space config.\n\nThis may not be returned if the server does not want to allow the requesting user\nto read it."
+        }
+      },
+      "description": "Get the members that have been assigned to the space.\n\nThis is not a flat membership list, but a list of the direct members\nof the space, including DIDs, local spaces, and remote spaces that have\nbeen added as members, without doing any resolution of remote spaces.A space entry containing key, type and optional config.",
+      "required": [
+        "spaceKey",
+        "spaceType"
       ]
     }
   }
