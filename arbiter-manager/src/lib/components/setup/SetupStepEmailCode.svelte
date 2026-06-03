@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Alert, Button, Input } from '@foxui/core';
+  import * as com from '$lib/lexicons/com';
   import {
     ARBITER_SERVICE_KEY,
     ARBITER_SERVICE_TYPE,
@@ -27,10 +28,10 @@
     setupState.loading = true;
 
     try {
-      if (!setupState.appPassword || !auth.agent)
+      if (!setupState.appPassword || !auth.client)
         throw new Error('Missing app password or session');
 
-      await auth.agent.com.atproto.identity.requestPlcOperationSignature();
+      await auth.client.xrpc(com.atproto.identity.requestPlcOperationSignature);
 
       codeSent = true;
       setupState.loading = false;
@@ -47,22 +48,26 @@
     setupState.error = undefined;
 
     try {
-      if (!auth.agent || !isAtprotoDid(auth.did)) throw new Error('Not logged in');
+      if (!auth.client || !isAtprotoDid(auth.did)) throw new Error('Not logged in');
 
       // Build the services map
       const services = await buildServicesMap();
 
       if (await needsServiceUpdate(auth.did)) {
         // Sign the PLC operation
-        const resp = await auth.agent.com.atproto.identity.signPlcOperation({
-          services,
-          token: code,
+        const resp = await auth.client.xrpc(com.atproto.identity.signPlcOperation, {
+          body: {
+            services,
+            token: code,
+          },
         });
-        const operation = resp.data.operation;
+        const operation = resp.body.operation;
 
         // Submit the PLC operation
-        await auth.agent.com.atproto.identity.submitPlcOperation({
-          operation,
+        await auth.client.xrpc(com.atproto.identity.submitPlcOperation, {
+          body: {
+            operation,
+          },
         });
       }
 

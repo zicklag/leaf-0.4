@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Button, Badge, Box } from '@foxui/core';
-  import { queryClient } from '$lib/query-client';
-  import { getSession } from '$lib/store.svelte';
-  import { ArbiterClient, XrpcRequestError } from '$lib/api';
+  // import { queryClient } from '$lib/query-client';
+  // import { getSession } from '$lib/store.svelte';
+  // import { ArbiterClient, XrpcRequestError } from '$lib/api';
   import type { Did, SpaceSummary } from '$lib/types';
   import CreateSpaceSheet from './CreateSpaceSheet.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
@@ -20,17 +20,17 @@
     loading = true;
     error = null;
     try {
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      const result = await client.listSpaces(arbiterDid);
-      spaces = result.spaces;
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // const result = await client.listSpaces(arbiterDid);
+      // spaces = result.spaces;
     } catch (e) {
-      if (e instanceof XrpcRequestError && e.isPermissionDenied) {
-        error = "You don't have permission to view spaces on this arbiter.";
-      } else {
-        error = String(e);
-      }
+      // if (e instanceof XrpcRequestError && e.isPermissionDenied) {
+      //   error = "You don't have permission to view spaces on this arbiter.";
+      // } else {
+      //   error = String(e);
+      // }
     } finally {
       loading = false;
     }
@@ -39,12 +39,12 @@
   async function deletespace(spaceKey: string) {
     deletingKey = spaceKey;
     try {
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      await client.deleteSpace(arbiterDid, spaceKey);
-      spaces = spaces.filter((s) => s.key !== spaceKey);
-      deleteSpaceKey = null;
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // await client.deleteSpace(arbiterDid, spaceKey);
+      // spaces = spaces.filter((s) => s.key !== spaceKey);
+      // deleteSpaceKey = null;
     } catch (e) {
       error = String(e);
     } finally {
@@ -116,7 +116,7 @@
   {/if}
 </div>
 
-{#if showCreate}
+<!-- {#if showCreate}
   <CreateSpaceSheet bind:open={showCreate} {arbiterDid} oncreated={handleCreated} />
 {/if}
 
@@ -129,4 +129,4 @@
     danger={true}
     onconfirm={() => deleteSpace(deleteSpaceKey!)}
   />
-{/if}
+{/if} -->

@@ -113,7 +113,7 @@ export async function needsServiceUpdate(did: AtprotoDid): Promise<boolean> {
 export async function buildServicesMap(): Promise<
   Record<string, { type: string; endpoint: string }>
 > {
-  if (!auth.agent) throw new Error('Not logged in');
+  if (!auth.client) throw new Error('Not logged in');
   const did = auth.did;
   if (!isAtprotoDid(did)) throw new Error('Invalid DID');
 

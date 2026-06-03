@@ -16,17 +16,17 @@
     loading = true;
     error = null;
     try {
-      const { getSession } = await import('$lib/store.svelte');
-      const { ArbiterClient, XrpcRequestError } = await import('$lib/api');
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      // Try to get policy from arbiter config or a dedicated endpoint
-      // For now, attempt to get config which may contain policy
-      const config = await client.getArbiterConfig(arbiterDid);
-      policy =
-        ((config as Record<string, unknown>)?.policy as string) ||
-        '# Enter your Rego policy here\n\nallow = true\n';
+      // const { getSession } = await import('$lib/store.svelte');
+      // const { ArbiterClient, XrpcRequestError } = await import('$lib/api');
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // // Try to get policy from arbiter config or a dedicated endpoint
+      // // For now, attempt to get config which may contain policy
+      // const config = await client.getArbiterConfig(arbiterDid);
+      // policy =
+      //   ((config as Record<string, unknown>)?.policy as string) ||
+      //   '# Enter your Rego policy here\n\nallow = true\n';
     } catch (e) {
       error = String(e);
     } finally {
@@ -39,15 +39,15 @@
     saveError = null;
     saveSuccess = false;
     try {
-      const { getSession } = await import('$lib/store.svelte');
-      const { ArbiterClient } = await import('$lib/api');
-      const session = getSession();
-      if (!session) throw new Error('Not authenticated');
-      const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
-      // Update config with policy field
-      const config = await client.getArbiterConfig(arbiterDid);
-      await client.setArbiterConfig(arbiterDid, { ...config, policy });
-      saveSuccess = true;
+      // const { getSession } = await import('$lib/store.svelte');
+      // const { ArbiterClient } = await import('$lib/api');
+      // const session = getSession();
+      // if (!session) throw new Error('Not authenticated');
+      // const client = new ArbiterClient(session.pdsUrl, session.accessJwt);
+      // // Update config with policy field
+      // const config = await client.getArbiterConfig(arbiterDid);
+      // await client.setArbiterConfig(arbiterDid, { ...config, policy });
+      // saveSuccess = true;
     } catch (e) {
       saveError = String(e);
     } finally {
@@ -77,7 +77,7 @@
     {/if}
   </div>
 
-  {#if loading}
+  <!-- {#if loading}
     <Box class="animate-pulse h-48" />
   {:else if error}
     <Box class="text-sm text-red-500 p-4">{error}</Box>
@@ -86,5 +86,5 @@
     {#if saveError}
       <Box class="text-sm text-red-500 p-3">{saveError}</Box>
     {/if}
-  {/if}
+  {/if} -->
 </div>

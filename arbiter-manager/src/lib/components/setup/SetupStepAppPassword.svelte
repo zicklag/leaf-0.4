@@ -21,10 +21,10 @@
     setupState.loading = true;
 
     try {
-      if (!auth.agent?.did) throw new Error('Missing DID');
+      if (!auth.client?.did) throw new Error('Missing DID');
 
       // Verify the app password works
-      await setupClient.login(auth.agent.did, setupState.appPassword);
+      await setupClient.login(auth.client.did, setupState.appPassword);
 
       // Save the app password
       setupState.step = 'email-code';

@@ -5,8 +5,8 @@ import {
   type OAuthClientMetadataInput,
   type OAuthSession,
 } from '@atproto/oauth-client-browser';
-import { Agent } from '@atproto/api';
-import type { ProfileViewDetailed } from '@atproto/api/dist/client/types/app/bsky/actor/defs';
+import * as app from '$lib/lexicons/app';
+import { Client } from '@atproto/lex';
 import { goto } from '$app/navigation';
 import { resetSetupState } from './setupState.svelte';
 
@@ -16,39 +16,41 @@ const atprotoOauthScope = ['atproto', 'identity:*', 'rpc:app.bsky.actor.getProfi
 );
 
 export class Auth {
-  client?: BrowserOAuthClient = $state(undefined);
+  oauth?: BrowserOAuthClient = $state(undefined);
   session?: OAuthSession = $state(undefined);
-  agent?: Agent = $state(undefined);
-  profile?: ProfileViewDetailed = $state(undefined);
+  client?: Client = $state(undefined);
+  profile?: app.bsky.actor.defs.ProfileViewDetailed = $state(undefined);
 
   async init() {
-    this.client = await makeOauthClient();
+    this.oauth = await makeOauthClient();
     const did = localStorage.getItem(SESSION_DID_KEY);
     try {
-      if (did) this.session = await this.client.restore(did);
+      if (did) this.session = await this.oauth.restore(did);
     } catch (_) {}
     await this.#loadSession();
   }
 
   async #loadSession() {
     if (this.session) {
-      this.agent = new Agent(this.session);
-      const resp = await this.agent.getProfile({ actor: this.agent.assertDid });
-      this.profile = resp.data;
+      this.client = new Client(this.session);
+      const resp = await this.client.xrpc(app.bsky.actor.getProfile, {
+        params: { actor: this.session.did },
+      });
+      this.profile = resp.body;
       localStorage.setItem(SESSION_DID_KEY, this.session.did);
     }
   }
 
   async callback(params: URLSearchParams) {
-    if (!this.client) this.client = await makeOauthClient();
+    if (!this.oauth) this.oauth = await makeOauthClient();
     if (this.session) await this.session.signOut();
-    const { session } = await this.client.callback(params);
+    const { session } = await this.oauth.callback(params);
     this.session = session;
     this.#loadSession();
   }
 
   get did(): string | undefined {
-    return this.agent?.did;
+    return this.client?.did;
   }
 
   get name(): string | undefined {
@@ -59,7 +61,7 @@ export class Auth {
     localStorage.removeItem(SESSION_DID_KEY);
     await this.session?.signOut();
     this.session = undefined;
-    this.agent = undefined;
+    this.client = undefined;
     this.profile = undefined;
     resetSetupState();
     await goto('/');
@@ -73,7 +75,7 @@ export class Auth {
 
   async loginWithHandle(handle: string): Promise<void> {
     if (!handle.trim()) return;
-    await this.client?.signInRedirect(handle.trim());
+    await this.oauth?.signInRedirect(handle.trim());
   }
 }
 
