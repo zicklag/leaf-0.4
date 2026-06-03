@@ -13,6 +13,14 @@ use salvo::prelude::*;
 use crate::CONFIG;
 use crate::resolver::RESOLVER;
 
+pub struct CallerDid(String);
+impl std::ops::Deref for CallerDid {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_str()
+    }
+}
+
 /// Auth middleware that extracts the caller DID from JWT tokens.
 #[derive(Clone)]
 pub struct AuthMiddleware;
@@ -55,7 +63,7 @@ impl salvo::Handler for AuthMiddleware {
             None => String::new(),
         };
 
-        depot.insert("caller_did", caller_did);
+        depot.inject(CallerDid(caller_did));
         ctrl.call_next(req, depot, res).await;
     }
 }

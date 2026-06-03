@@ -155,34 +155,17 @@ pub struct ArbiterState {
     pub did: Did,
     pub version: u64,
     pub config: Value,
-    pub policy: String,
     pub spaces: HashMap<SpaceId, Space>,
 }
 
 impl ArbiterState {
     /// Create a new arbiter with the given DID and initial owner.
-    pub fn create(did: Did, config: Value, policy: String, owner_did: Did) -> Self {
-        let admin_id = SpaceId {
-            space_key: "$admin".into(),
-            space_type: "town.muni.arbiter.config.adminSpace".into(),
-        };
-        let admin_space = Space {
-            key: "$admin".into(),
-            space_type: "town.muni.arbiter.config.adminSpace".into(),
-            config: Value::Null,
-            members: vec![MemberEntry {
-                did: owner_did,
-                access: serde_json::json!({"level": "Owner"}),
-            }],
-        };
-        let mut spaces = HashMap::new();
-        spaces.insert(admin_id, admin_space);
+    pub fn create(did: Did, config: Value) -> Self {
         ArbiterState {
             did,
             version: 1,
             config,
-            policy,
-            spaces,
+            spaces: Default::default(),
         }
     }
 
@@ -206,7 +189,8 @@ impl NSID {
     pub const GET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.getArbiterConfig";
     pub const SET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.setArbiterConfig";
     pub const CREATE_ARBITER: &'static str = "town.muni.arbiter.createArbiter";
-    pub const CREATE_APP_PASSWORD_ARBITER: &'static str = "town.muni.arbiter.createAppPasswordArbiter";
+    pub const CREATE_APP_PASSWORD_ARBITER: &'static str =
+        "town.muni.arbiter.createAppPasswordArbiter";
     pub const DELETE_ARBITER: &'static str = "town.muni.arbiter.deleteArbiter";
     pub const CREATE_SPACE: &'static str = "town.muni.arbiter.createSpace";
     pub const GET_SPACE_CONFIG: &'static str = "town.muni.arbiter.getSpaceConfig";
@@ -302,8 +286,8 @@ impl StateMachine {
         }
     }
 
-    pub fn create(did: Did, config: Value, policy: String, owner_did: Did) -> Self {
-        Self::new(ArbiterState::create(did, config, policy, owner_did))
+    pub fn create(did: Did, config: Value) -> Self {
+        Self::new(ArbiterState::create(did, config))
     }
 
     fn alloc_job_id(&mut self) -> JobId {
@@ -436,12 +420,8 @@ impl StateMachine {
                 method,
                 input,
             } => {
-                let resolved = self.resolve_local(
-                    method,
-                    &nsid,
-                    &rego_to_serde(input),
-                    ctx.start_version,
-                );
+                let resolved =
+                    self.resolve_local(method, &nsid, &rego_to_serde(input), ctx.start_version);
                 let resolved_rego = serde_to_rego(resolved.to_json());
                 self.eval(session, ctx, EvalStep::Resume(&resolved_rego))
             }
@@ -452,8 +432,7 @@ impl StateMachine {
                 input,
             } => {
                 let j = self.alloc_job_id();
-                self.pending_jobs
-                    .insert(j, PendingEval { session, ctx });
+                self.pending_jobs.insert(j, PendingEval { session, ctx });
                 vec![IoAction::SendXrpcRequest {
                     did: did.to_string(),
                     method,
@@ -465,12 +444,7 @@ impl StateMachine {
         }
     }
 
-    fn resume_pending_eval(
-        &mut self,
-        job_id: JobId,
-        status: u16,
-        body: Value,
-    ) -> Vec<IoAction> {
+    fn resume_pending_eval(&mut self, job_id: JobId, status: u16, body: Value) -> Vec<IoAction> {
         let Some(pending) = self.pending_jobs.remove(&job_id) else {
             // No job found for this job_id — stale or already handled.
             return vec![];
@@ -525,10 +499,7 @@ impl StateMachine {
 
             NSID::GET_SPACE_CONFIG => {
                 let Some(space_id) = self.space_id_from_params(params) else {
-                    return XrpcResponse::error(
-                        400,
-                        "ErrMissingParam: spaceKey/spaceType",
-                    );
+                    return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                 };
                 let config = self.arbiter.get_space(&space_id).map(|s| &s.config);
                 XrpcResponse {
@@ -542,10 +513,7 @@ impl StateMachine {
 
             NSID::GET_SPACE_MEMBERS => {
                 let Some(space_id) = self.space_id_from_params(params) else {
-                    return XrpcResponse::error(
-                        400,
-                        "ErrMissingParam: spaceKey/spaceType",
-                    );
+                    return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                 };
                 let members: Vec<Value> = self
                     .arbiter
@@ -593,10 +561,7 @@ impl StateMachine {
                 // default — the policy can override by not calling this
                 // and doing the resolution in Rego directly.
                 let Some(space_id) = self.space_id_from_params(params) else {
-                    return XrpcResponse::error(
-                        400,
-                        "ErrMissingParam: spaceKey/spaceType",
-                    );
+                    return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                 };
                 let members: Vec<Value> = self
                     .arbiter
@@ -647,10 +612,7 @@ impl StateMachine {
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return XrpcResponse::error(
-                            400,
-                            "ErrMissingParam: spaceKey/spaceType",
-                        );
+                        return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                     }
                 };
                 let space_id = SpaceId {
@@ -682,10 +644,7 @@ impl StateMachine {
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return XrpcResponse::error(
-                            400,
-                            "ErrMissingParam: spaceKey/spaceType",
-                        );
+                        return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                     }
                 };
                 let space_id = SpaceId {
@@ -713,10 +672,7 @@ impl StateMachine {
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return XrpcResponse::error(
-                            400,
-                            "ErrMissingParam: spaceKey/spaceType",
-                        );
+                        return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                     }
                 };
                 if sk == "$admin" && st == "town.muni.arbiter.config.adminSpace" {
@@ -743,10 +699,7 @@ impl StateMachine {
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return XrpcResponse::error(
-                            400,
-                            "ErrMissingParam: spaceKey/spaceType",
-                        );
+                        return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                     }
                 };
                 let space_id = SpaceId {
@@ -788,10 +741,7 @@ impl StateMachine {
                 let (st, sk) = match self.space_params(params) {
                     Some(p) => p,
                     None => {
-                        return XrpcResponse::error(
-                            400,
-                            "ErrMissingParam: spaceKey/spaceType",
-                        );
+                        return XrpcResponse::error(400, "ErrMissingParam: spaceKey/spaceType");
                     }
                 };
                 let space_id = SpaceId {

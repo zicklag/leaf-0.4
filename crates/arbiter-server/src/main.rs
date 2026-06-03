@@ -186,11 +186,9 @@ fn build_router(state: Arc<ServerState>) -> Router {
     let auth_middleware = auth::AuthMiddleware;
 
     Router::new()
-        .hoop(ServerDataMiddleware {
-            state: state.clone(),
-        })
+        .hoop(affix_state::inject(state))
         .push(
-            Router::with_path("/xrpc/{**rest}")
+            Router::with_path("/xrpc/{nsid}")
                 .hoop(auth_middleware)
                 .post(handlers::handle_xrpc)
                 .get(handlers::handle_xrpc),

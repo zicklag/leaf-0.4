@@ -25,9 +25,7 @@ type Did = String;
 /// Used to proxy XRPC requests during policy evaluation through the
 /// associated PDS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PdsAccount {
-    /// The AT Protocol DID of this account.
-    pub account_did: Did,
+pub struct PdsCredentials {
     /// The app password (stored locally for proxied auth).
     pub app_password: String,
 }
@@ -62,7 +60,7 @@ pub struct ServerSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PdsArbiterSnapshot {
     pub did: Did,
-    pub pds_account: PdsAccount,
+    pub pds_account: PdsCredentials,
 }
 
 /// All arbiter PDS accounts.
@@ -83,7 +81,7 @@ pub struct PdsArbiterSnapshotSet {
 pub struct ArbiterCollection {
     pub arbiters: HashMap<Did, StateMachine>,
     /// PDS accounts for proxying XRPC requests, keyed by arbiter DID.
-    pub pds_accounts: HashMap<Did, PdsAccount>,
+    pub pds_accounts: HashMap<Did, PdsCredentials>,
 }
 
 impl ArbiterCollection {
@@ -104,21 +102,19 @@ impl ArbiterCollection {
 
     /// Create an arbiter backed by a PDS account.  All XRPC requests
     /// triggered during policy evaluation are proxied through the PDS.
-    pub fn create_arbiter_with_pds(
+    pub fn create_arbiter_with_app_password(
         &mut self,
         did: Did,
         config: Value,
-        policy: String,
-        owner_did: Did,
-        pds_account: PdsAccount,
+        pds_account: PdsCredentials,
     ) {
-        let sm = StateMachine::create(did.clone(), config, policy, owner_did);
+        let sm = StateMachine::create(did.clone(), config);
         self.pds_accounts.insert(did.clone(), pds_account);
         self.arbiters.insert(did, sm);
     }
 
     /// Get the PDS account associated with an arbiter, if any.
-    pub fn get_pds_account(&self, arbiter_did: &str) -> Option<&PdsAccount> {
+    pub fn get_pds_account(&self, arbiter_did: &str) -> Option<&PdsCredentials> {
         self.pds_accounts.get(arbiter_did)
     }
 

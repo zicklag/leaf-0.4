@@ -9,73 +9,56 @@
 //! backed by a PDS account (app password). Any XRPC requests triggered
 //! during policy evaluation are proxied through that PDS.
 
-use std::sync::Arc;
-
-use crate::lexicons::town_muni::arbiter::create_app_password_arbiter::CreateAppPasswordArbiter;
-use crate::resolver::RESOLVER;
 use arbiter_core::{Event, IoAction, NSID, XrpcResponse, nsid_method, policy_core::XrpcMethod};
+use atproto_identity::validation::{is_valid_did_method_plc, is_valid_did_method_web};
 use jacquard_common::types::value;
 use salvo::prelude::*;
 use salvo::writing::Json;
 use serde_json::Value;
 
-use crate::ServerState;
-use crate::state::{ArbiterCollection, PdsAccount};
+use crate::{
+    ServerState,
+    auth::CallerDid,
+    lexicons::town_muni::arbiter::create_app_password_arbiter::CreateAppPasswordArbiter,
+    resolver::RESOLVER,
+    state::{ArbiterCollection, PdsCredentials},
+};
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn caller_did(depot: &Depot) -> String {
-    depot
-        .get::<String>("caller_did")
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn err(msg: &str) -> Value {
-    serde_json::json!({ "error": msg })
+/// Create a JSON error response from a message or error.
+fn err<M: std::fmt::Display>(msg: M) -> Value {
+    serde_json::json!({ "error": msg.to_string() })
 }
 
 /// Extract the target arbiter DID from the `atproto-proxy` header.
 ///
 /// Format: `{did}#{serviceId}`  e.g. `did:plc:abc123#arbiter`
-fn arbiter_did_from_proxy(req: &Request) -> Option<String> {
-    let header = req.header::<&str>("atproto-proxy")?;
-    let did = header.split('#').next()?;
-    if did.is_empty() {
-        return None;
+fn arbiter_did_from_req(req: &Request) -> anyhow::Result<&str> {
+    let proxy_header: &str = req
+        .header("atproto-proxy")
+        .ok_or(anyhow::format_err!("Must provide atproto-proxy header"))?;
+    let did = proxy_header
+        .strip_suffix("#arbiter")
+        .ok_or(anyhow::format_err!(
+            "Invalid atproto-proxy header, requires `#arbiter` suffix."
+        ))?;
+    if !is_valid_did_method_web(did, true) && !is_valid_did_method_plc(did) {
+        anyhow::bail!("Could not parse atproto-proxy DID");
     }
-    Some(did.to_string())
+    Ok(did)
 }
 
-/// Extract the NSID from the XRPC path: `/xrpc/town.muni.arbiter.getArbiterConfig`
-fn nsid_from_path(req: &Request) -> Option<String> {
-    let path = req.uri().path();
-    path.strip_prefix("/xrpc/")
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-}
-
-fn build_params(body: &Value) -> Value {
-    let mut params = body.clone();
-    if let Some(obj) = params.as_object_mut() {
-        obj.remove("arbiterDid");
-    }
-    params
-}
-
-async fn parse_body_or_query(req: &mut Request) -> Value {
+async fn xrpc_params_from_req(req: &mut Request) -> anyhow::Result<Value> {
     if req.method() == salvo::http::Method::GET {
         let mut map = serde_json::Map::new();
-        for key in &["spaceKey", "spaceType"] {
-            if let Some(v) = req.query::<String>(key) {
-                map.insert(key.to_string(), Value::String(v));
-            }
+        for (key, values) in req.queries() {
+            let Some(last_value) = values.last() else {
+                continue;
+            };
+            map.insert(key.clone(), Value::String(last_value.clone()));
         }
-        Value::Object(map)
+        Ok(Value::Object(map))
     } else {
-        req.parse_json::<Value>().await.unwrap_or_default()
+        Ok(req.parse_json::<Value>().await?)
     }
 }
 
@@ -152,7 +135,7 @@ async fn process_request(
 /// fragment is passed in the `atproto-proxy` header.
 async fn resolve_remote_request(
     client: &reqwest::Client,
-    pds: &PdsAccount,
+    pds: &PdsCredentials,
     remote_did: &str,
     method: &XrpcMethod,
     path: &str,
@@ -212,73 +195,43 @@ async fn resolve_remote_request(
 ///    a successful response.
 #[handler]
 pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let state = depot.get::<Arc<ServerState>>("state").cloned().unwrap();
-    let caller = caller_did(depot);
+    if let Err(e) = handle(req, depot, res).await {
+        res.status_code(StatusCode::BAD_REQUEST)
+            .render(Json(serde_json::json!({
+                "error": e.to_string()
+            })));
+    }
+}
 
-    // ── Extract routing info ────────────────────────────────────────
+// TODO: better error handling instead of "every error is 400"
+async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> anyhow::Result<()> {
+    let state = depot.obtain::<ServerState>().expect("server state");
+    let caller = depot.obtain::<CallerDid>().expect("caller did");
+    let nsid = req.param::<&str>("nsid").expect("nsid in path");
+    let arbiter_did = arbiter_did_from_req(req)?;
+    let xrpc_params = xrpc_params_from_req(req).await?;
 
-    let did = match arbiter_did_from_proxy(req) {
-        Some(d) => d,
-        None => {
-            res.status_code(salvo::http::StatusCode::BAD_REQUEST);
-            res.render(Json(err(
-                "missing atproto-proxy header (format: <did>#arbiter)",
-            )));
-            return;
-        }
-    };
-
-    let nsid = match nsid_from_path(req) {
-        Some(n) => n,
-        None => {
-            res.status_code(salvo::http::StatusCode::BAD_REQUEST);
-            res.render(Json(err("invalid XRPC path")));
-            return;
-        }
-    };
-
-    let body = parse_body_or_query(req).await;
-    let params = build_params(&body);
-
-    // ── createAppPasswordArbiter (bootstrap with PDS account) ──────
-
-    if nsid == NSID::CREATE_APP_PASSWORD_ARBITER {
+    // Handle arbiter creation
+    if nsid == NSID::CREATE_APP_PASSWORD_ARBITER && req.method() == salvo::http::Method::POST {
         let mut coll = state.arbiters.lock().await;
-        if coll.arbiters.contains_key(&did) {
+        if coll.arbiters.contains_key(arbiter_did) {
             res.render(Json(err("ErrArbiterAlreadyExists")));
-            return;
+            return Ok(());
         }
 
-        let input = match value::from_json_value::<CreateAppPasswordArbiter>(body.clone()) {
-            Ok(input) => input,
-            Err(e) => {
-                res.render(Json(err(&format!("ErrInvalidRequest: {e}"))));
-                return;
-            }
-        };
+        let input = value::from_json_value::<CreateAppPasswordArbiter>(xrpc_params)?;
 
-        let policy = input
-            .config
-            .as_object()
-            .and_then(|obj| obj.get("policy"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(state.default_policy)
-            .to_string();
-
-        let pds_account = PdsAccount {
-            account_did: input.account_did.parse().unwrap(),
+        let pds_account = PdsCredentials {
             app_password: input.app_password.to_string(),
         };
 
-        coll.create_arbiter_with_pds(
+        coll.create_arbiter_with_app_password(
             input.arbiter_did.to_string(),
             serde_json::to_value(input.config).unwrap_or_default(),
-            policy,
-            caller,
             pds_account,
         );
         res.render(Json(serde_json::json!({})));
-        return;
+        return Ok(());
     }
 
     // ── Route to state machine ──────────────────────────────────────
@@ -296,7 +249,7 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let mut coll = state.arbiters.lock().await;
     if !coll.arbiters.contains_key(&did) {
         res.render(Json(err("ErrArbiterNotExists")));
-        return;
+        return Ok(());
     }
 
     let (status, body) = process_request(&mut coll, &state.client, &did, event).await;
@@ -311,4 +264,6 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
             .unwrap_or(salvo::http::StatusCode::INTERNAL_SERVER_ERROR),
     );
     res.render(Json(body));
+
+    Ok(())
 }
