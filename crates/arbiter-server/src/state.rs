@@ -107,10 +107,12 @@ impl ArbiterCollection {
         did: Did,
         config: Value,
         pds_account: PdsCredentials,
-    ) {
-        let sm = StateMachine::create(did.clone(), config);
+    ) -> anyhow::Result<()> {
+        let sm = StateMachine::create(did.clone(), config)?;
         self.pds_accounts.insert(did.clone(), pds_account);
         self.arbiters.insert(did, sm);
+
+        Ok(())
     }
 
     /// Get the PDS account associated with an arbiter, if any.
@@ -174,7 +176,6 @@ impl ArbiterCollection {
                 did: a.did.clone(),
                 version: a.version,
                 config: a.config,
-                policy: a.policy,
                 spaces,
             };
             self.arbiters.insert(a.did, StateMachine::new(arb_state));

@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use arbiter_core::{
-    Event, IoAction, NSID, SpaceId, StateMachine, XrpcResponse, nsid_method,
+    Event, IoAction, MemberEntry, NSID, Space, SpaceId, StateMachine, XrpcResponse, nsid_method,
     policy_core::XrpcMethod,
 };
 use serde_json::Value;
@@ -35,28 +35,54 @@ impl TestDriver {
     }
 
     /// Create an arbiter with the default policy and insert its state machine.
+    ///
+    /// The admin space is initialised with the given `owner_did` as an Owner.
     pub fn create_default_arbiter(&mut self, did: &str, owner_did: &str) {
         let policy = self.default_policy.clone();
-        let sm = StateMachine::create(
-            did.into(),
-            serde_json::json!({"policy": &policy}),
-            policy,
-            owner_did.into(),
-        );
+        let config = serde_json::json!({
+            "$type": "town.muni.arbiter.server.v1.config",
+            "policy": policy,
+        });
+        let mut sm = StateMachine::create(did.into(), config)
+            .expect("Invalid arbiter config");
+        Self::init_admin_space(&mut sm, owner_did);
         self.machines.insert(did.into(), sm);
         self.online.insert(did.to_string());
     }
 
     /// Create an arbiter with a custom policy.
+    ///
+    /// The admin space is initialised with the given `owner_did` as an Owner.
     pub fn create_arbiter(&mut self, did: &str, owner_did: &str, policy: &str) {
-        let sm = StateMachine::create(
-            did.into(),
-            serde_json::json!({"policy": policy}),
-            policy.into(),
-            owner_did.into(),
-        );
+        let config = serde_json::json!({
+            "$type": "town.muni.arbiter.server.v1.config",
+            "policy": policy,
+        });
+        let mut sm = StateMachine::create(did.into(), config)
+            .expect("Invalid arbiter config");
+        Self::init_admin_space(&mut sm, owner_did);
         self.machines.insert(did.into(), sm);
         self.online.insert(did.to_string());
+    }
+
+    /// Bootstrap the `$admin` space with an Owner member.
+    fn init_admin_space(sm: &mut StateMachine, owner_did: &str) {
+        let admin_id = SpaceId {
+            space_key: "$admin".into(),
+            space_type: "town.muni.arbiter.config.adminSpace".into(),
+        };
+        sm.arbiter.spaces.insert(
+            admin_id,
+            Space {
+                key: "$admin".into(),
+                space_type: "town.muni.arbiter.config.adminSpace".into(),
+                config: serde_json::json!({}),
+                members: vec![MemberEntry {
+                    did: owner_did.into(),
+                    access: serde_json::json!({"level": "Owner"}),
+                }],
+            },
+        );
     }
 
     /// Perform an XRPC operation and assert it succeeds.

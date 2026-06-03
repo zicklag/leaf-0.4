@@ -837,9 +837,14 @@ response := xrpc_remote(
 "#,
     );
 
-    // Set backend_did on the org arbiter's config.
+    // Set backend_did on the org arbiter's config, preserving $type and policy.
     if let Some(sm) = h.machines.get_mut("org") {
-        sm.arbiter.config = serde_json::json!({"backend_did": "backend"});
+        if let Some(obj) = sm.arbiter.config.as_object_mut() {
+            obj.insert(
+                "backend_did".into(),
+                serde_json::Value::String("backend".into()),
+            );
+        }
     }
 
     let result = h.call_nsid(

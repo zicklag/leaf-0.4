@@ -69,8 +69,9 @@ impl ArbiterStateMachine {
     /// Create a new arbiter with an initial owner.
     ///
     /// - `did` — the arbiter's DID (e.g. `"did:plc:abc"`)
-    /// - `config` — a JS object with the arbiter's configuration
-    /// - `policy` — the raw Rego policy source
+    /// - `config` — a JS object with the arbiter's configuration.
+    ///   It MUST include `$type: "town.muni.arbiter.server.v1.config"`
+    ///   and a `policy` (the raw Rego source) field.
     /// - `owner_did` — the initial owner's DID
     #[wasm_bindgen(constructor)]
     pub fn new(
@@ -79,10 +80,44 @@ impl ArbiterStateMachine {
         policy: &str,
         owner_did: &str,
     ) -> Result<ArbiterStateMachine, JsValue> {
-        let config: serde_json::Value = from_js_value(config)?;
-        Ok(ArbiterStateMachine {
-            inner: StateMachine::create(did.into(), config, policy.into(), owner_did.into()),
-        })
+        let mut config: serde_json::Value = from_js_value(config)?;
+        // Merge the policy and $type into the config object — always override
+        // $type to the canonical value so existing JS callers (which use
+        // legacy $type values like "town.muni.arbiter.config.regoPolicy")
+        // continue to work.
+        if let Some(obj) = config.as_object_mut() {
+            obj.insert("policy".into(), serde_json::Value::String(policy.into()));
+            obj.insert(
+                "$type".into(),
+                serde_json::Value::String("town.muni.arbiter.server.v1.config".into()),
+            );
+        }
+        let mut sm = StateMachine::create(did.into(), config).map_err(|e| {
+            JsValue::from_str(&format!("Failed to create arbiter state machine: {e}"))
+        })?;
+        // Bootstrap admin space with owner
+        Self::init_admin_space(&mut sm, owner_did);
+        Ok(ArbiterStateMachine { inner: sm })
+    }
+
+    /// Bootstrap the `$admin` space with an Owner member.
+    fn init_admin_space(sm: &mut StateMachine, owner_did: &str) {
+        let admin_id = SpaceId {
+            space_key: "$admin".into(),
+            space_type: "town.muni.arbiter.config.adminSpace".into(),
+        };
+        sm.arbiter.spaces.insert(
+            admin_id,
+            arbiter_core::Space {
+                key: "$admin".into(),
+                space_type: "town.muni.arbiter.config.adminSpace".into(),
+                config: serde_json::json!({}),
+                members: vec![arbiter_core::MemberEntry {
+                    did: owner_did.into(),
+                    access: serde_json::json!({"level": "Owner"}),
+                }],
+            },
+        );
     }
 
     /// Restore a state machine from a previously serialised arbiter state.
@@ -128,7 +163,6 @@ impl ArbiterStateMachine {
             did: &arbiter.did,
             version: arbiter.version,
             config: &arbiter.config,
-            policy: &arbiter.policy,
             spaces: &spaces,
         })
     }
@@ -158,7 +192,13 @@ impl ArbiterStateMachine {
     /// The arbiter's Rego policy source string.
     #[wasm_bindgen(getter)]
     pub fn policy(&self) -> String {
-        self.inner.arbiter.policy.clone()
+        self.inner
+            .arbiter
+            .config
+            .get("policy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     }
 
     /// Set the arbiter's Rego policy.  The state machine will use it for
@@ -166,7 +206,9 @@ impl ArbiterStateMachine {
     /// first.)
     #[wasm_bindgen(js_name = setPolicy)]
     pub fn set_policy(&mut self, policy: &str) {
-        self.inner.arbiter.policy = policy.into();
+        if let Some(obj) = self.inner.arbiter.config.as_object_mut() {
+            obj.insert("policy".into(), serde_json::Value::String(policy.into()));
+        }
     }
 
     // -------------------------------------------------------------------
@@ -349,7 +391,6 @@ struct StateView<'a> {
     did: &'a str,
     version: u64,
     config: &'a serde_json::Value,
-    policy: &'a str,
     spaces: &'a [[SerialisableSpaceEntry<'a>; 2]],
 }
 

@@ -49,6 +49,43 @@ pub type Did = String;
 pub type SpaceKey = String;
 pub type JobId = u64;
 
+// ---------------------------------------------------------------------------
+// Error types
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur when constructing a [`StateMachine`].
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum CreateError {
+    /// The config is missing the required `$type` field.
+    #[error("Arbiter config must have `$type` set to 'town.muni.arbiter.server.v1.config'")]
+    MissingType,
+
+    /// The `$type` field is present but has an unexpected value.
+    #[error("Arbiter config `$type` must be 'town.muni.arbiter.server.v1.config', got '{0}'")]
+    InvalidType(String),
+
+    /// The config is missing the required `policy` field.
+    #[error("Arbiter config must have a `policy` field (Rego source)")]
+    MissingPolicy,
+}
+
+/// Validate that a config value has the required `$type` and `policy` fields.
+///
+/// Returns the policy.
+pub fn validate_config(config: &Value) -> Result<String, CreateError> {
+    let type_str = config
+        .get("$type")
+        .and_then(|v| v.as_str())
+        .ok_or(CreateError::MissingType)?;
+    if type_str != "town.muni.arbiter.server.v1.config" {
+        return Err(CreateError::InvalidType(type_str.into()));
+    }
+    let Some(policy) = config.get("policy").and_then(|v| v.as_str()) else {
+        return Err(CreateError::MissingPolicy);
+    };
+    Ok(policy.into())
+}
+
 /// Unique identifier for a space, combining its key and type.
 /// Both fields are required — `space_type` is part of the space's identity.
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
@@ -286,8 +323,9 @@ impl StateMachine {
         }
     }
 
-    pub fn create(did: Did, config: Value) -> Self {
-        Self::new(ArbiterState::create(did, config))
+    pub fn create(did: Did, config: Value) -> Result<Self, CreateError> {
+        validate_config(&config)?;
+        Ok(Self::new(ArbiterState::create(did, config)))
     }
 
     fn alloc_job_id(&mut self) -> JobId {
@@ -329,6 +367,13 @@ impl StateMachine {
         params: Value,
         caller_did: Did,
     ) -> Vec<IoAction> {
+        let Ok(policy) = validate_config(&self.arbiter.config) else {
+            return Vec[IoAction::SendXrpcResponse {
+                body: serde_json::json!({"error": "Arbiter policy invalid, cannot process request."}),
+                status: 500,
+            }];
+        };
+
         let data = serde_json::json!({ "arbiter": { "config": &self.arbiter.config, "did": &self.arbiter.did } });
         let input = serde_json::json!({
             "caller": { "did": &caller_did },
@@ -340,16 +385,15 @@ impl StateMachine {
 
         let entry_points = ["data.arbiter.response"];
 
-        let session =
-            match VmSession::new(&self.arbiter.policy, &rego_data, &rego_input, &entry_points) {
-                Ok(s) => s,
-                Err(e) => {
-                    return vec![IoAction::SendXrpcResponse {
-                        body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
-                        status: 500,
-                    }];
-                }
-            };
+        let session = match VmSession::new(&policy, &rego_data, &rego_input, &entry_points) {
+            Ok(s) => s,
+            Err(e) => {
+                return vec![IoAction::SendXrpcResponse {
+                    body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
+                    status: 500,
+                }];
+            }
+        };
 
         let ctx = EvalContext {
             start_version: self.arbiter.version,
@@ -587,10 +631,15 @@ impl StateMachine {
                 if self.arbiter.version != start_version {
                     return XrpcResponse::error(409, "ErrVersionMismatch");
                 }
-                if let Some(new_config) = params.get("config") {
-                    self.arbiter.config = new_config.clone();
-                    self.arbiter.version += 1;
+                let Some(new_config) = params.get("config") else {
+                    return XrpcResponse::error(400, "ErrMissingParam: config");
+                };
+                // Validate that the new config has the required fields.
+                if let Err(err) = validate_config(new_config) {
+                    return XrpcResponse::error(400, format!("ErrInvalidConfig: {err}"));
                 }
+                self.arbiter.config = new_config.clone();
+                self.arbiter.version += 1;
                 XrpcResponse {
                     status: 200,
                     body: serde_json::json!({}),
@@ -812,16 +861,16 @@ mod tests {
     fn test_create_arbiter_state() {
         let arb = ArbiterState::create(
             "did:plc:abc".into(),
-            serde_json::json!({"foo": "bar"}),
-            "package arbiter".into(),
-            "did:plc:alice".into(),
+            serde_json::json!({
+                "$type": "town.muni.arbiter.server.v1.config",
+                "policy": "package arbiter\nimport rego.v1\n",
+            }),
         );
         assert_eq!(arb.did, "did:plc:abc");
-        let admin_id = SpaceId {
-            space_key: "$admin".into(),
-            space_type: "town.muni.arbiter.config.adminSpace".into(),
-        };
-        assert!(arb.spaces.contains_key(&admin_id));
+        assert_eq!(
+            arb.config.get("$type").and_then(|v| v.as_str()),
+            Some("town.muni.arbiter.server.v1.config")
+        );
     }
 
     #[test]
@@ -855,10 +904,13 @@ mod tests {
         "#;
         let mut sm = StateMachine::create(
             "did:plc:abc".into(),
-            serde_json::json!({"key": "val"}),
-            policy.into(),
-            "did:plc:alice".into(),
-        );
+            serde_json::json!({
+                "$type": "town.muni.arbiter.server.v1.config",
+                "policy": policy,
+                "key": "val",
+            }),
+        )
+        .expect("valid config");
         let actions = sm.handle_event(Event::IncomingXrpc {
             nsid: NSID::GET_ARBITER_CONFIG.into(),
             method: XrpcMethod::Query,
@@ -890,10 +942,12 @@ mod tests {
         "#;
         let mut sm = StateMachine::create(
             "did:plc:abc".into(),
-            serde_json::json!({}),
-            policy.into(),
-            "did:plc:alice".into(),
-        );
+            serde_json::json!({
+                "$type": "town.muni.arbiter.server.v1.config",
+                "policy": policy,
+            }),
+        )
+        .expect("valid config");
         let actions = sm.handle_event(Event::IncomingXrpc {
             nsid: NSID::GET_ARBITER_CONFIG.into(),
             method: XrpcMethod::Query,
