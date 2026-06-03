@@ -10,11 +10,11 @@
 
 use std::collections::HashMap;
 
-use arbiter_core::{ArbiterState, StateMachine, SpaceId, Space, MemberEntry};
+use arbiter_core::{ArbiterState, MemberEntry, Space, SpaceId, StateMachine};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub type Did = String;
+type Did = String;
 
 // ---------------------------------------------------------------------------
 // PDS account — stored alongside app-password arbiters
@@ -26,8 +26,6 @@ pub type Did = String;
 /// associated PDS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PdsAccount {
-    /// Endpoint URL of the PDS (e.g. `https://bsky.social`).
-    pub pds_endpoint: String,
     /// The AT Protocol DID of this account.
     pub account_did: Did,
     /// The app password (stored locally for proxied auth).
@@ -183,8 +181,7 @@ impl ArbiterCollection {
                 policy: a.policy,
                 spaces,
             };
-            self.arbiters
-                .insert(a.did, StateMachine::new(arb_state));
+            self.arbiters.insert(a.did, StateMachine::new(arb_state));
         }
     }
 

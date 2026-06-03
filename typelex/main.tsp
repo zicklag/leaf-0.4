@@ -91,6 +91,12 @@ namespace town.muni.arbiter.defs {
   /** The specified DID is not managed by this service. */
   model ErrDidNotManaged {}
 
+  /** 
+   * This error is thrown when you try to create an arbiter for an existing DID, but
+   * The DID doc does not have an arbiter record pointing to this server.
+   */
+  model ErrDidDocNotPointingToThisArbiter {}
+
   /**
    * A service endpoint entry within a DID document's `services` field.
    *
@@ -171,6 +177,44 @@ namespace town.muni.arbiter.createArbiter {
        * access.
        */
       @required config: OpenUnion
+    },
+  ): OpenUnion;
+}
+
+namespace town.muni.arbiter.createAppPasswordArbiter {
+  /**
+   * Create a new arbiter backed by a PDS app password.
+   *
+   * This creates an arbiter with credentials for an AT Protocol PDS account
+   * that will be used to proxy XRPC requests during policy evaluation.
+   */
+  @procedure
+  @errors(
+    town.muni.arbiter.defs.ErrArbiterAlreadyExists,
+    town.muni.arbiter.defs.ErrPermissionDenied,
+    town.muni.arbiter.defs.ErrUnsupportedConfigLexicon,
+    town.muni.arbiter.defs.ErrInvalidConfig,
+    town.muni.arbiter.defs.ErrDidDocNotPointingToThisArbiter,
+  )
+  op main(
+    @required input: {
+      /**
+       * The DID of the arbiter.
+       */
+      @required arbiterDid: did;
+      /**
+       * The app password for the PDS account.
+       */
+      @required appPassword: string;
+      /**
+       * A configuration object for the arbiter.
+       *
+       * Different servers will support different config lexicons. The NSID of
+       * the config lexicon determines what kind of arbiter it is. Different
+       * kinds of arbiters may have totally different mechanisms for determining
+       * access.
+       */
+      @required config: OpenUnion,
     },
   ): OpenUnion;
 }

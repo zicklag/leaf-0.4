@@ -6,11 +6,8 @@
 
 extern crate alloc;
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use atproto_identity::resolve::{
-    HickoryDnsResolver, IdentityResolver, InnerIdentityResolver, SharedIdentityResolver,
-};
 use clap::Parser;
 use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
@@ -22,9 +19,9 @@ pub use lexicons::*;
 mod auth;
 mod handlers;
 mod persistence;
+mod resolver;
 mod state;
 
-use auth::AuthConfig;
 use persistence::Persister;
 use state::ArbiterCollection;
 
@@ -35,7 +32,7 @@ use state::ArbiterCollection;
 /// Muni Town Arbiter Server v2 — AT Protocol XRPC HTTP server.
 #[derive(Parser, Debug)]
 #[command(name = "arbiter-server", version, about)]
-struct AppConfig {
+struct ServerConfig {
     #[arg(short, long = "listen", env = "LISTEN", default_value = "0.0.0.0:8203")]
     listen: String,
     #[arg(
@@ -77,9 +74,6 @@ pub struct ServerState {
     pub default_policy: &'static str,
     pub server_did: String,
     pub client: reqwest::Client,
-    pub auth: Arc<AuthConfig>,
-    pub identity_resolver: Arc<dyn IdentityResolver>,
-    pub plc_directory_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +99,8 @@ impl salvo::Handler for ServerDataMiddleware {
     }
 }
 
+static CONFIG: LazyLock<ServerConfig> = LazyLock::new(ServerConfig::parse);
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -117,32 +113,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = AppConfig::parse();
     let default_policy = include_str!("../../../policies/arbiter/access-levels.rego");
-    let server_did = format!("did:web:{}", config.hostname.replace(':', "%3A"));
+    let server_did = format!("did:web:{}", CONFIG.hostname.replace(':', "%3A"));
 
     tracing::info!(
         "Starting arbiter server v2 on {} (DID: {})",
-        config.listen,
+        CONFIG.listen,
         server_did
     );
 
-    // Identity resolver
-    let resolver_client = reqwest::Client::new();
-    let dns_resolver = HickoryDnsResolver::create_resolver(&[]);
-    let identity_resolver = SharedIdentityResolver(Arc::new(InnerIdentityResolver {
-        dns_resolver: Arc::new(dns_resolver),
-        http_client: resolver_client,
-        plc_hostname: config.plc_directory_url.clone(),
-    }));
-    let identity_resolver = Arc::new(identity_resolver) as Arc<dyn IdentityResolver>;
-    let auth = Arc::new(
-        AuthConfig::new(identity_resolver.clone())
-            .with_unsafe_token_if(config.unsafe_auth_token.clone()),
-    );
-
     // Load persisted state
-    let persister = Persister::new(config.data_dir.clone());
+    let persister = Persister::new(CONFIG.data_dir.clone());
     let mut collection = ArbiterCollection::new();
     if let Ok(snapshot) = persister.load_all() {
         tracing::info!("Loaded {} arbiters from disk", snapshot.arbiters.len());
@@ -167,15 +148,12 @@ async fn main() -> anyhow::Result<()> {
         default_policy,
         server_did,
         client: reqwest::Client::new(),
-        auth: auth.clone(),
-        identity_resolver: identity_resolver.clone(),
-        plc_directory_url: config.plc_directory_url.clone(),
     });
 
     // Persistence loop
     let state_clone = state.clone();
     let persister_clone = persister.clone();
-    let interval = config.persist_interval_secs;
+    let interval = CONFIG.persist_interval_secs;
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
@@ -193,9 +171,9 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let router = build_router(state.clone(), auth);
-    tracing::info!("Listening on {}", config.listen);
-    let acceptor = TcpListener::new(&config.listen).bind().await;
+    let router = build_router(state.clone());
+    tracing::info!("Listening on {}", CONFIG.listen);
+    let acceptor = TcpListener::new(&CONFIG.listen).bind().await;
     Server::new(acceptor).serve(router).await;
     Ok(())
 }
@@ -204,8 +182,8 @@ async fn main() -> anyhow::Result<()> {
 // Router
 // ---------------------------------------------------------------------------
 
-fn build_router(state: Arc<ServerState>, auth_config: Arc<AuthConfig>) -> Router {
-    let auth_middleware = auth::AuthMiddleware::new(auth_config);
+fn build_router(state: Arc<ServerState>) -> Router {
+    let auth_middleware = auth::AuthMiddleware;
 
     Router::new()
         .hoop(ServerDataMiddleware {

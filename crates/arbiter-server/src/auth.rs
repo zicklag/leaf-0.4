@@ -5,54 +5,17 @@
 //!    the issuer's resolved DID document using atproto-identity.
 //! 2. `Authorization: Bearer <token>` — with the unsafe dev token (if configured).
 
-use std::sync::Arc;
-
 use atproto_identity::key;
-use atproto_identity::resolve::IdentityResolver;
 use atproto_oauth::encoding::FromBase64;
 use atproto_oauth::jwt;
 use salvo::prelude::*;
 
-/// Auth configuration.
-pub struct AuthConfig {
-    unsafe_token: Option<String>,
-    identity_resolver: Arc<dyn IdentityResolver>,
-}
-
-impl AuthConfig {
-    /// Create a new auth config with the given identity resolver.
-    pub fn new(identity_resolver: Arc<dyn IdentityResolver>) -> Self {
-        Self {
-            unsafe_token: None,
-            identity_resolver,
-        }
-    }
-
-    /// Enable an unsafe development token that bypasses real auth.
-    pub fn with_unsafe_token(mut self, token: String) -> Self {
-        self.unsafe_token = Some(token);
-        self
-    }
-
-    pub fn with_unsafe_token_if(self, token: Option<String>) -> Self {
-        match token {
-            Some(t) => self.with_unsafe_token(t),
-            None => self,
-        }
-    }
-}
+use crate::CONFIG;
+use crate::resolver::RESOLVER;
 
 /// Auth middleware that extracts the caller DID from JWT tokens.
 #[derive(Clone)]
-pub struct AuthMiddleware {
-    config: Arc<AuthConfig>,
-}
-
-impl AuthMiddleware {
-    pub fn new(config: Arc<AuthConfig>) -> Self {
-        Self { config }
-    }
-}
+pub struct AuthMiddleware;
 
 #[async_trait]
 impl salvo::Handler for AuthMiddleware {
@@ -72,7 +35,7 @@ impl salvo::Handler for AuthMiddleware {
         let caller_did = match auth_header {
             Some(token) => {
                 // First check for unsafe dev token
-                if let Some(ref unsafe_token) = self.config.unsafe_token
+                if let Some(ref unsafe_token) = CONFIG.unsafe_auth_token
                     && token == *unsafe_token
                 {
                     // Unsafe token matched — use the token value as the DID
@@ -80,7 +43,7 @@ impl salvo::Handler for AuthMiddleware {
                     token
                 } else {
                     // Try JWT verification
-                    match verify_jwt(&token, &*self.config.identity_resolver).await {
+                    match verify_jwt(&token).await {
                         Ok(did) => did,
                         Err(e) => {
                             tracing::warn!(%e, "JWT verification failed");
@@ -104,14 +67,11 @@ impl salvo::Handler for AuthMiddleware {
 /// 2. Resolve the DID document via the identity resolver
 /// 3. Extract public keys from the DID document
 /// 4. Verify the JWT signature against each key
-async fn verify_jwt(
-    token: &str,
-    identity_resolver: &dyn IdentityResolver,
-) -> anyhow::Result<String> {
+async fn verify_jwt(token: &str) -> anyhow::Result<String> {
     let issuer = decode_jwt_issuer(token)?;
 
     // Resolve the DID document
-    let did_document = identity_resolver
+    let did_document = RESOLVER
         .resolve(&issuer)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to resolve DID {issuer}: {e}"))?;
@@ -132,9 +92,7 @@ async fn verify_jwt(
         }
     }
 
-    anyhow::bail!(
-        "JWT signature could not be verified with any key for {issuer}"
-    );
+    anyhow::bail!("JWT signature could not be verified with any key for {issuer}");
 }
 
 /// Extract the issuer DID from a JWT without full signature verification.

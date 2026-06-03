@@ -11,18 +11,16 @@
 
 use std::sync::Arc;
 
-use arbiter_core::{
-    Event, IoAction, NSID, XrpcResponse,
-    nsid_method,
-    policy_core::XrpcMethod,
-};
+use crate::lexicons::town_muni::arbiter::create_app_password_arbiter::CreateAppPasswordArbiter;
+use crate::resolver::RESOLVER;
+use arbiter_core::{Event, IoAction, NSID, XrpcResponse, nsid_method, policy_core::XrpcMethod};
+use jacquard_common::types::value;
 use salvo::prelude::*;
 use salvo::writing::Json;
 use serde_json::Value;
 
-use crate::state::{ArbiterCollection, PdsAccount};
 use crate::ServerState;
-use crate::state::Did;
+use crate::state::{ArbiterCollection, PdsAccount};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -103,10 +101,7 @@ async fn process_request(
         let actions = match coll.arbiters.get_mut(did) {
             Some(sm) => sm.handle_event(event),
             None => {
-                return (
-                    404,
-                    serde_json::json!({"error": "ErrArbiterNotExists"}),
-                );
+                return (404, serde_json::json!({"error": "ErrArbiterNotExists"}));
             }
         };
 
@@ -124,7 +119,8 @@ async fn process_request(
                 } => {
                     // Check if this arbiter has a PDS account — if so,
                     // proxy the request through the PDS.
-                    let pds_account = coll.get_pds_account(did)
+                    let pds_account = coll
+                        .get_pds_account(did)
                         .cloned()
                         .expect("every arbiter must have a PDS account");
                     let resp = resolve_remote_request(
@@ -146,10 +142,7 @@ async fn process_request(
         }
     }
 
-    (
-        500,
-        serde_json::json!({"error": "ErrNoResponse"}),
-    )
+    (500, serde_json::json!({"error": "ErrNoResponse"}))
 }
 
 /// Proxy a remote XRPC request through the arbiter's PDS account.
@@ -165,13 +158,12 @@ async fn resolve_remote_request(
     path: &str,
     input: Value,
 ) -> XrpcResponse {
-    let url = format!(
-        "{}/xrpc/{}",
-        pds.pds_endpoint.trim_end_matches('/'),
-        path.trim_start_matches('/'),
-    );
+    let did_doc = RESOLVER.resolve(&pds.account_did).await.unwrap();
+    let pds_url = did_doc.pds_endpoints().into_iter().next().unwrap();
 
-    let proxy_header = format!("{remote_did}");
+    let url = format!("{}/xrpc/{}", pds_url, path.trim_start_matches('/'),);
+
+    let proxy_header = remote_did.to_string();
 
     let req_builder = match method {
         XrpcMethod::Query => {
@@ -248,66 +240,43 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
     let body = parse_body_or_query(req).await;
     let params = build_params(&body);
 
-    // ── createArbiter (bootstrap with PDS account) ──────────────────
+    // ── createAppPasswordArbiter (bootstrap with PDS account) ──────
 
-    if nsid == NSID::CREATE_ARBITER {
+    if nsid == NSID::CREATE_APP_PASSWORD_ARBITER {
         let mut coll = state.arbiters.lock().await;
         if coll.arbiters.contains_key(&did) {
             res.render(Json(err("ErrArbiterAlreadyExists")));
             return;
         }
 
-        let config = body.get("config").cloned().unwrap_or_default();
-        let policy = config
-            .get("policy")
+        let input = match value::from_json_value::<CreateAppPasswordArbiter>(body.clone()) {
+            Ok(input) => input,
+            Err(e) => {
+                res.render(Json(err(&format!("ErrInvalidRequest: {e}"))));
+                return;
+            }
+        };
+
+        let policy = input
+            .config
+            .as_object()
+            .and_then(|obj| obj.get("policy"))
             .and_then(|v| v.as_str())
             .unwrap_or(state.default_policy)
             .to_string();
 
-        // Extract PDS account info from request body
-        let pds_endpoint = match body
-            .get("pdsEndpoint")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-        {
-            Some(e) => e,
-            None => {
-                res.render(Json(err("ErrMissingParam: pdsEndpoint required")));
-                return;
-            }
-        };
-
-        let account_did: Did = match body
-            .get("accountDid")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-        {
-            Some(d) => d,
-            None => {
-                res.render(Json(err("ErrMissingParam: accountDid required")));
-                return;
-            }
-        };
-
-        let app_password = match body
-            .get("appPassword")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-        {
-            Some(p) => p,
-            None => {
-                res.render(Json(err("ErrMissingParam: appPassword required")));
-                return;
-            }
-        };
-
         let pds_account = PdsAccount {
-            pds_endpoint,
-            account_did,
-            app_password,
+            account_did: input.account_did.parse().unwrap(),
+            app_password: input.app_password.to_string(),
         };
 
-        coll.create_arbiter_with_pds(did, config, policy, caller, pds_account);
+        coll.create_arbiter_with_pds(
+            input.arbiter_did.to_string(),
+            serde_json::to_value(input.config).unwrap_or_default(),
+            policy,
+            caller,
+            pds_account,
+        );
         res.render(Json(serde_json::json!({})));
         return;
     }
@@ -330,13 +299,7 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
         return;
     }
 
-    let (status, body) = process_request(
-        &mut coll,
-        &state.client,
-        &did,
-        event,
-    )
-    .await;
+    let (status, body) = process_request(&mut coll, &state.client, &did, event).await;
 
     // If deleteArbiter succeeded, remove from collection.
     if is_delete_arbiter && status == 200 {

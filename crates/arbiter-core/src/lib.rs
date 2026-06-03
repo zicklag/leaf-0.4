@@ -206,6 +206,7 @@ impl NSID {
     pub const GET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.getArbiterConfig";
     pub const SET_ARBITER_CONFIG: &'static str = "town.muni.arbiter.setArbiterConfig";
     pub const CREATE_ARBITER: &'static str = "town.muni.arbiter.createArbiter";
+    pub const CREATE_APP_PASSWORD_ARBITER: &'static str = "town.muni.arbiter.createAppPasswordArbiter";
     pub const DELETE_ARBITER: &'static str = "town.muni.arbiter.deleteArbiter";
     pub const CREATE_SPACE: &'static str = "town.muni.arbiter.createSpace";
     pub const GET_SPACE_CONFIG: &'static str = "town.muni.arbiter.getSpaceConfig";
