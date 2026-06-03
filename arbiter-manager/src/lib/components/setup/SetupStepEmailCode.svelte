@@ -1,9 +1,14 @@
 <script lang="ts">
   import { Alert, Button, Input } from '@foxui/core';
-  import { buildServicesMap, needsServiceUpdate, setupState } from '$lib/setupState.svelte';
+  import {
+    ARBITER_SERVICE_KEY,
+    ARBITER_SERVICE_TYPE,
+    buildServicesMap,
+    needsServiceUpdate,
+    setupState,
+  } from '$lib/setupState.svelte';
   import { auth } from '$lib/auth.svelte';
   import { isAtprotoDid } from '@atproto/oauth-client-browser';
-  import { PUBLIC_ARBITER_URL } from '$env/static/public';
 
   let emailCode = $state('');
   let codeSent = $state(false);
@@ -42,12 +47,12 @@
     setupState.error = undefined;
 
     try {
-      if (!auth.agent) throw new Error('Not logged in');
+      if (!auth.agent || !isAtprotoDid(auth.did)) throw new Error('Not logged in');
 
       // Build the services map
       const services = await buildServicesMap();
 
-      if (services['arbiter'].endpoint != PUBLIC_ARBITER_URL) {
+      if (await needsServiceUpdate(auth.did)) {
         // Sign the PLC operation
         const resp = await auth.agent.com.atproto.identity.signPlcOperation({
           services,
@@ -72,8 +77,7 @@
   }
 </script>
 
-{#await needsUpdate}
-{:then needsUpdate}
+{#await needsUpdate then needsUpdate}
   {#if needsUpdate}
     <div class="max-w-lg mx-auto px-6 py-12 space-y-6">
       <div class="space-y-2">
@@ -89,13 +93,17 @@
         class="p-4 rounded-lg bg-base-50 dark:bg-base-900 border border-base-200 dark:border-base-800 space-y-1 text-sm"
       >
         <p class="text-base-700 dark:text-base-300">
-          <strong>What's happening:</strong> We're adding a
-          <code class="text-xs bg-base-200 dark:bg-base-700 px-1 rounded">#arbiter</code>
-          service of type
-          <code class="text-xs bg-base-200 dark:bg-base-700 px-1 rounded">MuniTownArbiter</code>
-          to your DID document. Your existing services (<code
-            class="text-xs bg-base-200 dark:bg-base-700 px-1 rounded">#atproto_pds</code
-          >) are preserved.
+          <strong>What's happening:</strong> We're adding a service endpoint to your DID with a
+          <code class="text-xs bg-base-200 dark:bg-base-700 px-1 rounded"
+            >#{ARBITER_SERVICE_KEY}</code
+          >
+          key and the
+          <code class="text-xs bg-base-200 dark:bg-base-700 px-1 rounded"
+            >{ARBITER_SERVICE_TYPE}</code
+          >
+          type.
+          <br /><br />This will tell compatible apps which arbiter to use to communicate with this
+          account.
         </p>
       </div>
 
@@ -105,11 +113,12 @@
           <Button onclick={requestCode} disabled={setupState.loading} class="w-full">
             {setupState.loading ? 'Sending request…' : 'Send Confirmation Code'}
           </Button>
-          <a
+          <button
             class="text-accent-400 text-center text-sm w-full"
-            href="#already"
-            onclick={() => (codeSent = true)}>Already Have a Code</a
+            onclick={() => (codeSent = true)}
           >
+            Already Have a Code
+          </button>
 
           {#if setupState.error}
             <p class="text-sm text-red-500">{setupState.error}</p>
@@ -163,7 +172,7 @@
       <Alert type="info" class="text-md max-w-xl">
         <span>The arbiter service has already been configured properly for this account!</span>
       </Alert>
-      <div class="max-w-lg  flex items-center justify-between">
+      <div class="max-w-lg flex items-center justify-between">
         <Button variant="ghost" onclick={goBack} disabled={setupState.loading}>Back</Button>
         <Button onclick={() => (setupState.step = 'select-admin')}>Continue</Button>
       </div>

@@ -15,7 +15,9 @@ import { didResolver } from './resolver';
 import { PUBLIC_ARBITER_URL } from '$env/static/public';
 import type { AtprotoDid } from '@atcute/lexicons/syntax';
 
-const STORAGE_KEY = 'arbiter-manager-setup-state';
+export const STORAGE_KEY = 'arbiter-manager-setup-state';
+export const ARBITER_SERVICE_KEY = "arbiter"
+export const ARBITER_SERVICE_TYPE = "MuniTownArbiter"
 
 const setupStepTy = type(
   '"intro" | "oauth" | "app-password" | "email-code" | "select-admin" | "complete"',
@@ -99,8 +101,8 @@ export async function needsServiceUpdate(did: AtprotoDid): Promise<boolean> {
   const existingServices = await getExistingServices(did);
   console.log('existing services', existingServices);
   return (
-    existingServices['xrpc_arbiter']?.endpoint != PUBLIC_ARBITER_URL &&
-    existingServices['xrpc_arbiter']?.type != 'XrpcArbiter'
+    existingServices[ARBITER_SERVICE_KEY]?.endpoint != PUBLIC_ARBITER_URL &&
+    existingServices[ARBITER_SERVICE_KEY]?.type != ARBITER_SERVICE_TYPE
   );
 }
 
@@ -118,8 +120,8 @@ export async function buildServicesMap(): Promise<
   const services = await getExistingServices(did);
 
   // Add the arbiter service
-  services['xrpc_arbiter'] = {
-    type: 'XrpcArbiter',
+  services[ARBITER_SERVICE_KEY] = {
+    type: ARBITER_SERVICE_TYPE,
     endpoint: PUBLIC_ARBITER_URL || `${window.location.origin}`,
   };
 
