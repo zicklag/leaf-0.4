@@ -4,6 +4,8 @@
 //! the `atproto-proxy` header to identify the target arbiter DID and
 //! routes through its [`StateMachine`](arbiter_core::StateMachine).
 
+extern crate alloc;
+
 use std::sync::Arc;
 
 use atproto_identity::resolve::{
@@ -13,6 +15,9 @@ use clap::Parser;
 use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
 use salvo::writing::Json;
+
+mod lexicons;
+pub use lexicons::*;
 
 mod auth;
 mod handlers;
@@ -33,15 +38,33 @@ use state::ArbiterCollection;
 struct AppConfig {
     #[arg(short, long = "listen", env = "LISTEN", default_value = "0.0.0.0:8203")]
     listen: String,
-    #[arg(short = 'H', long = "hostname", env = "HOSTNAME", default_value = "localhost:8080")]
+    #[arg(
+        short = 'H',
+        long = "hostname",
+        env = "HOSTNAME",
+        default_value = "localhost:8080"
+    )]
     hostname: String,
-    #[arg(short, long = "data-dir", env = "DATA_DIR", default_value = "./data/arbiters")]
+    #[arg(
+        short,
+        long = "data-dir",
+        env = "DATA_DIR",
+        default_value = "./data/arbiters"
+    )]
     data_dir: std::path::PathBuf,
     #[arg(long = "unsafe-auth-token", env = "UNSAFE_AUTH_TOKEN")]
     unsafe_auth_token: Option<String>,
-    #[arg(long = "persist-interval", env = "PERSIST_INTERVAL", default_value = "5")]
+    #[arg(
+        long = "persist-interval",
+        env = "PERSIST_INTERVAL",
+        default_value = "5"
+    )]
     persist_interval_secs: u64,
-    #[arg(long = "plc-directory-url", env = "PLC_DIRECTORY_URL", default_value = "http://localhost:3001")]
+    #[arg(
+        long = "plc-directory-url",
+        env = "PLC_DIRECTORY_URL",
+        default_value = "http://localhost:3001"
+    )]
     plc_directory_url: String,
 }
 
@@ -90,8 +113,7 @@ impl salvo::Handler for ServerDataMiddleware {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
