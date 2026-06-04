@@ -368,7 +368,7 @@ impl StateMachine {
         caller_did: Did,
     ) -> Vec<IoAction> {
         let Ok(policy) = validate_config(&self.arbiter.config) else {
-            return Vec[IoAction::SendXrpcResponse {
+            return vec![IoAction::SendXrpcResponse {
                 body: serde_json::json!({"error": "Arbiter policy invalid, cannot process request."}),
                 status: 500,
             }];

@@ -47,7 +47,6 @@ pub struct ArbiterSnapshot {
     pub did: Did,
     pub version: u64,
     pub config: Value,
-    pub policy: String,
     pub spaces: Vec<SpaceSnapshot>,
 }
 
@@ -116,7 +115,7 @@ impl ArbiterCollection {
     }
 
     /// Get the PDS account associated with an arbiter, if any.
-    pub fn get_pds_account(&self, arbiter_did: &str) -> Option<&PdsCredentials> {
+    pub fn get_pds_credential(&self, arbiter_did: &str) -> Option<&PdsCredentials> {
         self.pds_accounts.get(arbiter_did)
     }
 
@@ -144,7 +143,6 @@ impl ArbiterCollection {
                     did: arb.did.clone(),
                     version: arb.version,
                     config: arb.config.clone(),
-                    policy: arb.policy.clone(),
                     spaces,
                 }
             })

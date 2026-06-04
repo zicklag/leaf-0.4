@@ -505,7 +505,6 @@ export class Simulator {
         did: string;
         version: bigint;
         config: Record<string, unknown>;
-        policy: string;
         spaces: Array<[SpaceIdRaw, SpaceRaw]>;
       };
       const spaces: SpaceSnapshot[] = (state.spaces ?? []).map(
@@ -519,12 +518,17 @@ export class Simulator {
           })),
         }),
       );
+      // Policy is embedded in config; extract it for the snapshot's top-level field
+      const policy = (
+        (state.config as Record<string, unknown> | undefined)?.policy ??
+        ''
+      ) as string;
       arbiters.push({
         did: state.did,
         version: Number(state.version),
         online: !this.offline.has(did),
         config: deepClone(state.config),
-        policy: state.policy,
+        policy,
         spaces,
       });
     }
@@ -548,6 +552,7 @@ export class Simulator {
 
       // Create the state object in the format `fromState` expects.
       // The `spaces` field must be an array of [SpaceId, Space] pairs.
+      // Policy is stored inside config, not at the top level.
       const spaces: Array<[SpaceIdRaw, SpaceRaw]> = (a.spaces ?? []).map((s) => [
         {
           space_type: s.spaceType,
@@ -561,11 +566,16 @@ export class Simulator {
         },
       ]);
 
+      const config = {
+        ...a.config,
+        $type: 'town.muni.arbiter.server.v1.config',
+        policy,
+      };
+
       const stateObj = {
         did: a.did,
         version: a.version,
-        config: a.config,
-        policy,
+        config,
         spaces,
       };
 

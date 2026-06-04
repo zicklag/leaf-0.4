@@ -25,9 +25,7 @@ mod state;
 use persistence::Persister;
 use state::ArbiterCollection;
 
-// ---------------------------------------------------------------------------
-// CLI / env configuration
-// ---------------------------------------------------------------------------
+static CONFIG: LazyLock<ServerConfig> = LazyLock::new(ServerConfig::parse);
 
 /// Muni Town Arbiter Server v2 — AT Protocol XRPC HTTP server.
 #[derive(Parser, Debug)]
@@ -65,45 +63,12 @@ struct ServerConfig {
     plc_directory_url: String,
 }
 
-// ---------------------------------------------------------------------------
-// Shared server state
-// ---------------------------------------------------------------------------
-
 pub struct ServerState {
     pub arbiters: tokio::sync::Mutex<ArbiterCollection>,
     pub default_policy: &'static str,
     pub server_did: String,
     pub client: reqwest::Client,
 }
-
-// ---------------------------------------------------------------------------
-// Middleware
-// ---------------------------------------------------------------------------
-
-#[derive(Clone)]
-struct ServerDataMiddleware {
-    state: Arc<ServerState>,
-}
-
-#[async_trait]
-impl salvo::Handler for ServerDataMiddleware {
-    async fn handle(
-        &self,
-        req: &mut Request,
-        depot: &mut Depot,
-        res: &mut Response,
-        ctrl: &mut FlowCtrl,
-    ) {
-        depot.insert("state", self.state.clone());
-        ctrl.call_next(req, depot, res).await;
-    }
-}
-
-static CONFIG: LazyLock<ServerConfig> = LazyLock::new(ServerConfig::parse);
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

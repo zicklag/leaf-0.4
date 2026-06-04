@@ -75,13 +75,13 @@ async fn xrpc_params_from_req(req: &mut Request) -> anyhow::Result<Value> {
 async fn process_request(
     coll: &mut ArbiterCollection,
     client: &reqwest::Client,
-    did: &str,
+    arbiter_did: &str,
     event: Event,
 ) -> (u16, Value) {
     let mut stack = vec![event];
 
     while let Some(event) = stack.pop() {
-        let actions = match coll.arbiters.get_mut(did) {
+        let actions = match coll.arbiters.get_mut(arbiter_did) {
             Some(sm) => sm.handle_event(event),
             None => {
                 return (404, serde_json::json!({"error": "ErrArbiterNotExists"}));
@@ -100,14 +100,14 @@ async fn process_request(
                     input,
                     job_id,
                 } => {
-                    // Check if this arbiter has a PDS account — if so,
-                    // proxy the request through the PDS.
+                    // Proxy the outgoing requests through the PDS
                     let pds_account = coll
-                        .get_pds_account(did)
+                        .get_pds_credential(arbiter_did)
                         .cloned()
                         .expect("every arbiter must have a PDS account");
                     let resp = resolve_remote_request(
                         client,
+                        arbiter_did,
                         &pds_account,
                         &target_did,
                         &method,
@@ -135,18 +135,16 @@ async fn process_request(
 /// fragment is passed in the `atproto-proxy` header.
 async fn resolve_remote_request(
     client: &reqwest::Client,
-    pds: &PdsCredentials,
-    remote_did: &str,
+    pds_did: &str,
+    pds_creds: &PdsCredentials,
+    target_did_and_service: &str,
     method: &XrpcMethod,
     path: &str,
     input: Value,
 ) -> XrpcResponse {
-    let did_doc = RESOLVER.resolve(&pds.account_did).await.unwrap();
+    let did_doc = RESOLVER.resolve(pds_did).await.unwrap();
     let pds_url = did_doc.pds_endpoints().into_iter().next().unwrap();
-
     let url = format!("{}/xrpc/{}", pds_url, path.trim_start_matches('/'),);
-
-    let proxy_header = remote_did.to_string();
 
     let req_builder = match method {
         XrpcMethod::Query => {
@@ -164,8 +162,11 @@ async fn resolve_remote_request(
     };
 
     let req_builder = req_builder
-        .header("Authorization", format!("Bearer {}", pds.app_password))
-        .header("atproto-proxy", &proxy_header);
+        .header(
+            "Authorization",
+            format!("Basic {}", pds_creds.app_password),
+        )
+        .header("atproto-proxy", target_did_and_service);
 
     match req_builder.send().await {
         Ok(resp) => {
@@ -207,9 +208,9 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
 async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> anyhow::Result<()> {
     let state = depot.obtain::<ServerState>().expect("server state");
     let caller = depot.obtain::<CallerDid>().expect("caller did");
+    let xrpc_params = xrpc_params_from_req(req).await?;
     let nsid = req.param::<&str>("nsid").expect("nsid in path");
     let arbiter_did = arbiter_did_from_req(req)?;
-    let xrpc_params = xrpc_params_from_req(req).await?;
 
     // Handle arbiter creation
     if nsid == NSID::CREATE_APP_PASSWORD_ARBITER && req.method() == salvo::http::Method::POST {
@@ -229,7 +230,7 @@ async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> any
             input.arbiter_did.to_string(),
             serde_json::to_value(input.config).unwrap_or_default(),
             pds_account,
-        );
+        )?;
         res.render(Json(serde_json::json!({})));
         return Ok(());
     }
@@ -237,26 +238,26 @@ async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> any
     // ── Route to state machine ──────────────────────────────────────
 
     let is_delete_arbiter = nsid == NSID::DELETE_ARBITER;
-    let method = nsid_method(&nsid);
+    let method = nsid_method(nsid);
 
     let event = Event::IncomingXrpc {
-        nsid,
+        nsid: nsid.into(),
         method,
-        params,
-        caller_did: caller,
+        params: xrpc_params,
+        caller_did: caller.to_string(),
     };
 
     let mut coll = state.arbiters.lock().await;
-    if !coll.arbiters.contains_key(&did) {
+    if !coll.arbiters.contains_key(arbiter_did) {
         res.render(Json(err("ErrArbiterNotExists")));
         return Ok(());
     }
 
-    let (status, body) = process_request(&mut coll, &state.client, &did, event).await;
+    let (status, body) = process_request(&mut coll, &state.client, arbiter_did, event).await;
 
     // If deleteArbiter succeeded, remove from collection.
     if is_delete_arbiter && status == 200 {
-        coll.remove(&did);
+        coll.remove(arbiter_did);
     }
 
     res.status_code(
