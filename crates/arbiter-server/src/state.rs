@@ -16,10 +16,6 @@ use serde_json::Value;
 
 type Did = String;
 
-// ---------------------------------------------------------------------------
-// PDS account — stored alongside app-password arbiters
-// ---------------------------------------------------------------------------
-
 /// PDS account — stored alongside every arbiter.
 ///
 /// Used to proxy XRPC requests during policy evaluation through the

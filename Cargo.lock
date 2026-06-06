@@ -161,16 +161,15 @@ dependencies = [
  "arbiter-core",
  "atproto-identity",
  "atproto-oauth",
+ "atrium-api",
+ "atrium-xrpc",
+ "atrium-xrpc-client",
  "clap",
- "jacquard-common 0.11.0",
- "jacquard-derive 0.11.0",
- "jacquard-lexicon 0.11.1",
- "miette",
+ "moka",
  "reqwest",
  "salvo",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -322,6 +321,66 @@ dependencies = [
 ]
 
 [[package]]
+name = "atrium-api"
+version = "0.25.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e04c38c6bfc922a7950a13ad52f8d21bee77020b90e822364c7ec8625c4cd403"
+dependencies = [
+ "atrium-common",
+ "atrium-xrpc",
+ "chrono",
+ "http",
+ "ipld-core",
+ "langtag",
+ "regex",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "trait-variant",
+]
+
+[[package]]
+name = "atrium-common"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98466259d2e6189ddf3439b96432d5303668b4d51c2a78996934d981065550f3"
+dependencies = [
+ "dashmap",
+ "lru",
+ "moka",
+ "thiserror 1.0.69",
+ "tokio",
+ "trait-variant",
+ "web-time",
+]
+
+[[package]]
+name = "atrium-xrpc"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "944b35cc08732d40ddbb3356be9e38d11aed4b4c40c33f5b0f235e0650eff296"
+dependencies = [
+ "http",
+ "serde",
+ "serde_html_form 0.2.8",
+ "serde_json",
+ "thiserror 1.0.69",
+ "trait-variant",
+]
+
+[[package]]
+name = "atrium-xrpc-client"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9d1c0ebd71047b85ccfcad936ded56179af24beb60239ab590c549d2325e679"
+dependencies = [
+ "atrium-xrpc",
+ "reqwest",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -363,9 +422,9 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bitflags"
-version = "2.12.1"
+version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d7ced0ae9557296835c32bf1b1e02b44c746701f898460fb000d7eaa84f00a"
+checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blake3"
@@ -514,9 +573,9 @@ dependencies = [
 
 [[package]]
 name = "chrono"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -2056,8 +2115,8 @@ dependencies = [
  "gloo-storage",
  "http",
  "jacquard-api",
- "jacquard-common 0.12.0-beta.2",
- "jacquard-derive 0.12.0-beta.2",
+ "jacquard-common",
+ "jacquard-derive",
  "jacquard-identity",
  "jacquard-oauth",
  "jose-jwk",
@@ -2066,7 +2125,7 @@ dependencies = [
  "regex-lite",
  "reqwest",
  "serde",
- "serde_html_form",
+ "serde_html_form 0.3.2",
  "serde_json",
  "smol_str",
  "thiserror 2.0.18",
@@ -2081,63 +2140,12 @@ version = "0.12.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4edfa5ed674d8e4874909386914e3d35d74ab79d171060558732f41c06c0cd40"
 dependencies = [
- "jacquard-common 0.12.0-beta.2",
- "jacquard-derive 0.12.0-beta.2",
- "jacquard-lexicon 0.12.0-beta.2",
+ "jacquard-common",
+ "jacquard-derive",
+ "jacquard-lexicon",
  "miette",
  "serde",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "jacquard-common"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9631f08f1e65d19e204bc6774d00b4e0b69fb649d7d7ac59ccf97797bd9a196e"
-dependencies = [
- "base64",
- "bon",
- "bytes",
- "chrono",
- "ciborium",
- "ciborium-io",
- "cid",
- "fluent-uri",
- "futures",
- "getrandom 0.2.17",
- "getrandom 0.3.4",
- "hashbrown 0.15.5",
- "http",
- "ipld-core",
- "k256",
- "maitake-sync",
- "miette",
- "multibase",
- "multihash",
- "ouroboros",
- "oxilangtag",
- "p256",
- "phf",
- "postcard",
- "rand 0.9.4",
- "regex",
- "regex-automata",
- "regex-lite",
- "reqwest",
- "rustversion",
- "serde",
- "serde_bytes",
- "serde_html_form",
- "serde_ipld_dagcbor",
- "serde_json",
- "signature",
- "smol_str",
- "spin 0.10.0",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "trait-variant",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -2177,7 +2185,7 @@ dependencies = [
  "rustversion",
  "serde",
  "serde_bytes",
- "serde_html_form",
+ "serde_html_form 0.3.2",
  "serde_ipld_dagcbor",
  "serde_json",
  "signature",
@@ -2192,25 +2200,12 @@ dependencies = [
 
 [[package]]
 name = "jacquard-derive"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22904bd0f9a959591e14ee9e1dab91a9110209cb8b292930e584134f96a83ece"
-dependencies = [
- "heck 0.5.0",
- "jacquard-lexicon 0.11.1",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "jacquard-derive"
 version = "0.12.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93f83b8049e4e7916e0f6764c3deaf5e55a7ffbab26c379415e9b1d4d645d957"
 dependencies = [
  "heck 0.5.0",
- "jacquard-lexicon 0.12.0-beta.2",
+ "jacquard-lexicon",
  "proc-macro2",
  "quote",
  "syn",
@@ -2225,46 +2220,18 @@ dependencies = [
  "bon",
  "bytes",
  "http",
- "jacquard-common 0.12.0-beta.2",
- "jacquard-lexicon 0.12.0-beta.2",
+ "jacquard-common",
+ "jacquard-lexicon",
  "miette",
  "mini-moka-wasm",
  "n0-future",
  "reqwest",
  "serde",
- "serde_html_form",
+ "serde_html_form 0.3.2",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "trait-variant",
-]
-
-[[package]]
-name = "jacquard-lexicon"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd7863d4f56a49f07391b5f775e82be12e6381156642ee83574f481ca73e8b0e"
-dependencies = [
- "cid",
- "dashmap",
- "heck 0.5.0",
- "inventory",
- "jacquard-common 0.11.0",
- "miette",
- "multihash",
- "prettyplease",
- "proc-macro2",
- "quote",
- "serde",
- "serde_ipld_dagcbor",
- "serde_json",
- "serde_path_to_error",
- "serde_repr",
- "serde_with",
- "sha2 0.10.9",
- "syn",
- "thiserror 2.0.18",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -2277,7 +2244,7 @@ dependencies = [
  "dashmap",
  "heck 0.5.0",
  "inventory",
- "jacquard-common 0.12.0-beta.2",
+ "jacquard-common",
  "miette",
  "multihash",
  "prettyplease",
@@ -2308,7 +2275,7 @@ dependencies = [
  "ed25519-dalek",
  "elliptic-curve",
  "http",
- "jacquard-common 0.12.0-beta.2",
+ "jacquard-common",
  "jacquard-identity",
  "jose-jwa",
  "jose-jwk",
@@ -2318,7 +2285,7 @@ dependencies = [
  "p384",
  "rand 0.8.6",
  "serde",
- "serde_html_form",
+ "serde_html_form 0.3.2",
  "serde_json",
  "sha2 0.10.9",
  "smallvec",
@@ -2406,6 +2373,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "langtag"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed60c85f254d6ae8450cec15eedd921efbc4d1bdf6fcf6202b9a58b403f6f805"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2455,9 +2431,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.31"
+version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
+checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
 name = "loom"
@@ -2648,10 +2624,13 @@ version = "0.12.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "957228ad12042ee839f93c8f257b62b4c0ab5eaae1d4fa60de53b27c9d7c5046"
 dependencies = [
+ "async-lock",
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
  "equivalent",
+ "event-listener",
+ "futures-util",
  "parking_lot",
  "portable-atomic",
  "smallvec",
@@ -3970,6 +3949,19 @@ dependencies = [
 
 [[package]]
 name = "serde_html_form"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2f2d7ff8a2140333718bb329f5c40fc5f0865b84c426183ce14c97d2ab8154f"
+dependencies = [
+ "form_urlencoded",
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde_core",
+]
+
+[[package]]
+name = "serde_html_form"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acf96b1d9364968fce46ebb548f1c0e1d7eceae27bdff73865d42e6c7369d94"
@@ -4041,9 +4033,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.20.0"
+version = "3.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e72c1c2cb7b223fafb600a619537a871c2818583d619401b785e7c0b746ccde2"
+checksum = "76a5c54c7310e7b8b9577c286d7e399ddd876c3e12b3ed917a8aabc4b96e9e8c"
 dependencies = [
  "base64",
  "bs58",
@@ -4057,9 +4049,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.20.0"
+version = "3.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b90c488738ecb4fb0262f41f43bc40efc5868d9fb744319ddf5f5317f417bfac"
+checksum = "84d57bc0c8b9a17920c178daa6bb924850d54a9c97ab45194bb8c17ad66bb660"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -5380,9 +5372,9 @@ checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yoke"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abe8c5fda708d9ca3df187cae8bfb9ceda00dd96231bed36e445a1a48e66f9ca"
+checksum = "709fe23a0424b6a435d82152b1bd3fdfb0833487d5fa90d05d42762a9891fef5"
 dependencies = [
  "stable_deref_trait",
  "yoke-derive",

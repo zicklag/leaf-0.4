@@ -13,9 +13,6 @@ use salvo::conn::tcp::TcpListener;
 use salvo::prelude::*;
 use salvo::writing::Json;
 
-mod lexicons;
-pub use lexicons::*;
-
 mod auth;
 mod handlers;
 mod persistence;
