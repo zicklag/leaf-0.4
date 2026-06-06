@@ -1,7 +1,12 @@
 <script lang="ts">
-  import { Button, Input } from '@foxui/core';
+  import { Button } from '@foxui/core';
   import { setupState } from '$lib/setupState.svelte';
   import { AtprotoHandlePopup, type Profile } from '@foxui/all';
+  import { PUBLIC_ARBITER_URL } from '$env/static/public';
+  import { auth } from '$lib/auth.svelte';
+  import * as town from '$lib/lexicons/town';
+  import { isAtprotoDid } from '@atproto/oauth-client-browser';
+  import { xrpc } from '@atproto/lex';
 
   let selectedAdmin: Profile | undefined = $state(undefined);
 
@@ -19,7 +24,50 @@
     setupState.error = undefined;
 
     try {
-      // Store the admin selection
+      if (!auth.client) throw new Error('Not logged in');
+      if (!selectedAdmin.did) throw new Error('You must select an admin.');
+      if (!isAtprotoDid(auth.did)) throw new Error('Not logged in with valid DID');
+      if (!setupState.appPassword) throw new Error('Must provide AppPassword');
+
+      // Create the new arbiter!
+      await xrpc(PUBLIC_ARBITER_URL, town.muni.arbiter.createAppPasswordArbiter, {
+        body: {
+          arbiterDid: auth.did,
+          appPassword: setupState.appPassword,
+          config: {
+            $type: 'town.muni.arbiter.server.v1.config',
+            policy: `
+              package arbiter
+              import rego.v1
+              arbiter_xrpc_nsids := {
+               	"town.muni.arbiter.getArbiterConfig",
+               	"town.muni.arbiter.setArbiterConfig",
+               	"town.muni.arbiter.deleteArbiter",
+               	"town.muni.arbiter.createSpace",
+               	"town.muni.arbiter.getSpaceConfig",
+               	"town.muni.arbiter.setSpaceConfig",
+               	"town.muni.arbiter.deleteSpace",
+               	"town.muni.arbiter.listSpaces",
+               	"town.muni.arbiter.getSpaceMembers",
+               	"town.muni.arbiter.setSpaceMemberAccess",
+               	"town.muni.arbiter.removeSpaceMember",
+              }
+              response := {"status": 403, "body": {"error": "ErrPermissionDenied"}} if not allow
+              response := xrpc_local(input.operation.method, input.operation.nsid, input.operation.params) if {
+               	allow
+               	input.operation.nsid in arbiter_xrpc_nsids
+              }
+              default allow := false
+              allow if input.caller.did == data.arbiter.did
+              allow if input.caller.did == "${selectedAdmin.did}"
+          `,
+          } as any,
+        },
+        headers: {
+          'atproto-proxy': `${auth.did}#arbiter`,
+        },
+      });
+
       setupState.step = 'complete';
       setupState.error = undefined;
       setupState.loading = false;

@@ -159,21 +159,29 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
 
 // TODO: better error handling instead of "every error is 400"
 async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> anyhow::Result<()> {
-    let state = depot.obtain::<ServerState>().expect("server state");
+    let state = depot.obtain::<Arc<ServerState>>().expect("server state");
     let caller = depot.obtain::<CallerDid>().expect("caller did");
     let xrpc_params = xrpc_params_from_req(req).await?;
     let nsid = req.param::<&str>("nsid").expect("nsid in path");
     let arbiter_did = arbiter_did_from_req(req)?;
+    let mut coll = state.arbiters.lock().await;
 
     // Handle arbiter creation
     if nsid == NSID::CREATE_APP_PASSWORD_ARBITER && req.method() == salvo::http::Method::POST {
-        let mut coll = state.arbiters.lock().await;
         if coll.arbiters.contains_key(arbiter_did) {
             res.render(Json(err("ErrArbiterAlreadyExists")));
             return Ok(());
         }
 
         let input = serde_json::from_value::<CreateAppPasswordArbiterInput>(xrpc_params)?;
+        if input.arbiter_did != arbiter_did {
+            res.render(Json(err(format!(
+                "Arbiter ( {arbiter_did} ) from \
+                atproto-proxy did not match arbiter ( {} ) from XRPC req.",
+                input.arbiter_did
+            ))));
+            return Ok(());
+        }
 
         let pds_account = PdsCredentials {
             app_password: input.app_password.to_string(),
@@ -184,7 +192,9 @@ async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> any
             serde_json::to_value(input.config).unwrap_or_default(),
             pds_account,
         )?;
-        res.render(Json(serde_json::json!({})));
+        res.render(Json(serde_json::json!({
+            "$type": "town.muni.arbiter.server.v1.ok"
+        })));
         return Ok(());
     }
 
@@ -200,7 +210,6 @@ async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> any
         caller_did: caller.to_string(),
     };
 
-    let mut coll = state.arbiters.lock().await;
     if !coll.arbiters.contains_key(arbiter_did) {
         res.render(Json(err("ErrArbiterNotExists")));
         return Ok(());

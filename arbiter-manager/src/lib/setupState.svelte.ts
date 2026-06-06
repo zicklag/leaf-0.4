@@ -26,10 +26,8 @@ export type SetupStep = typeof setupStepTy.infer;
 
 const setupStateTy = type({
   step: setupStepTy.default('intro'),
-  did: type.string.optional(),
   appPassword: type.string.optional(),
   emailCode: type.string.optional(),
-  adminDid: type.string.optional(),
   error: type.string.optional(),
   loading: type.boolean.default(false),
 });

@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock};
 
 use clap::Parser;
 use salvo::conn::tcp::TcpListener;
+use salvo::cors::Cors;
 use salvo::prelude::*;
 use salvo::writing::Json;
 
@@ -30,6 +31,13 @@ static CONFIG: LazyLock<ServerConfig> = LazyLock::new(ServerConfig::parse);
 struct ServerConfig {
     #[arg(short, long = "listen", env = "LISTEN", default_value = "0.0.0.0:8203")]
     listen: String,
+    #[arg(
+        short,
+        long = "server-did",
+        env = "DID",
+        default_value = "did:web:localhost:8203"
+    )]
+    server_did: String,
     #[arg(
         short = 'H',
         long = "hostname",
@@ -62,9 +70,6 @@ struct ServerConfig {
 
 pub struct ServerState {
     pub arbiters: tokio::sync::Mutex<ArbiterCollection>,
-    pub default_policy: &'static str,
-    pub server_did: String,
-    pub client: reqwest::Client,
 }
 
 #[tokio::main]
@@ -75,13 +80,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let default_policy = include_str!("../../../policies/arbiter/access-levels.rego");
-    let server_did = format!("did:web:{}", CONFIG.hostname.replace(':', "%3A"));
-
     tracing::info!(
         "Starting arbiter server v2 on {} (DID: {})",
         CONFIG.listen,
-        server_did
+        CONFIG.server_did
     );
 
     // Load persisted state
@@ -107,9 +109,6 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(ServerState {
         arbiters: tokio::sync::Mutex::new(collection),
-        default_policy,
-        server_did,
-        client: reqwest::Client::new(),
     });
 
     // Persistence loop
@@ -133,10 +132,10 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let router = build_router(state.clone());
+    let service = Service::new(build_router(state.clone())).hoop(Cors::permissive().into_handler());
     tracing::info!("Listening on {}", CONFIG.listen);
     let acceptor = TcpListener::new(&CONFIG.listen).bind().await;
-    Server::new(acceptor).serve(router).await;
+    Server::new(acceptor).serve(service).await;
     Ok(())
 }
 
@@ -148,9 +147,9 @@ fn build_router(state: Arc<ServerState>) -> Router {
     let auth_middleware = auth::AuthMiddleware;
 
     Router::new()
-        .hoop(affix_state::inject(state))
         .push(
             Router::with_path("/xrpc/{nsid}")
+                .hoop(affix_state::inject(state))
                 .hoop(auth_middleware)
                 .post(handlers::handle_xrpc)
                 .get(handlers::handle_xrpc),

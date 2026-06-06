@@ -2,16 +2,21 @@ import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 
 // Re-export auth helpers so components can import from a single module
-import type { Did, ManagedCommunity } from './types';
 
 const MANAGED_DIDS_KEY = 'arbiter-manager-communities';
+
+type Did = string;
+
+type ManagedCommunity = {
+  did: Did;
+  label: string;
+};
 
 // ---------------------------------------------------------------------------
 // Managed communities (localStorage persisted list of DIDs)
 // ---------------------------------------------------------------------------
 
 function loadManagedCommunities(): ManagedCommunity[] {
-  if (!browser) return [];
   try {
     const raw = localStorage.getItem(MANAGED_DIDS_KEY);
     return raw ? JSON.parse(raw) : [];
