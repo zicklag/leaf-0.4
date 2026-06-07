@@ -36,7 +36,7 @@
 {:else}
   <div class="flex flex-col h-screen">
     <TopBar />
-    <div class="flex flex-1 justify-center">
+    <div class="flex flex-1 justify-center min-w-0">
       {@render children()}
     </div>
   </div>

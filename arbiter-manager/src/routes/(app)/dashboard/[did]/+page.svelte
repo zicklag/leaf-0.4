@@ -1,8 +1,12 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import PolicyTab from '$lib/components/PolicyTab.svelte';
+  import { goto } from '$app/navigation';
 
   const did = $derived(page.params.did as string);
-</script>
 
-<PolicyTab arbiterDid={did} />
+  $effect(() => {
+    if (did) {
+      goto(`/dashboard/${encodeURIComponent(did)}/spaces`, { replaceState: true });
+    }
+  });
+</script>
