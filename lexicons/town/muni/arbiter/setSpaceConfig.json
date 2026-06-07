@@ -23,7 +23,12 @@
             "spaceType": {
               "type": "string",
               "format": "nsid",
-              "description": "The new type of the space."
+              "description": "The type of the space to configure."
+            },
+            "newSpaceType": {
+              "type": "string",
+              "format": "nsid",
+              "description": "If provided sets a new type for the space."
             },
             "config": {
               "type": "union",

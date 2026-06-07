@@ -12,10 +12,15 @@
             "format": "did",
             "description": "The DID of the arbiter that the space is in."
           },
+          "spaceType": {
+            "type": "string",
+            "format": "nsid",
+            "description": "The type of the space."
+          },
           "spaceKey": {
             "type": "string",
             "maxLength": 1024,
-            "description": "The key of the space to configure."
+            "description": "The key of the space."
           },
           "resolverDepth": {
             "type": "integer",
@@ -24,6 +29,7 @@
         },
         "required": [
           "arbiterDid",
+          "spaceType",
           "spaceKey"
         ]
       },

@@ -174,14 +174,14 @@ export const arbiter = {
   /**
    * Fetch a space's configuration.
    */
-  async getSpaceConfig(did: string, spaceKey: string): Promise<Record<string, unknown>> {
+  async getSpaceConfig(did: string, spaceKey: string, spaceType: string): Promise<Record<string, unknown>> {
     const token = await this.getServiceAuth(did, 'town.muni.arbiter.getSpaceConfig');
 
     const res = await xrpc(
       PUBLIC_ARBITER_URL,
       town.muni.arbiter.getSpaceConfig,
       {
-        params: { arbiterDid: did as AtprotoDid, spaceKey },
+        params: { arbiterDid: did as AtprotoDid, spaceKey, spaceType: spaceType as any },
         headers: {
           'atproto-proxy': `${did}#arbiter`,
           Authorization: `Bearer ${token}`,
@@ -223,14 +223,14 @@ export const arbiter = {
   /**
    * Delete a space from an arbiter.
    */
-  async deleteSpace(did: string, spaceKey: string): Promise<void> {
+  async deleteSpace(did: string, spaceKey: string, spaceType: string): Promise<void> {
     const token = await this.getServiceAuth(did, 'town.muni.arbiter.deleteSpace');
 
     await xrpc(
       PUBLIC_ARBITER_URL,
       town.muni.arbiter.deleteSpace,
       {
-        body: { arbiterDid: did as AtprotoDid, spaceKey },
+        body: { arbiterDid: did as AtprotoDid, spaceKey, spaceType: spaceType as any },
         headers: {
           'atproto-proxy': `${did}#arbiter`,
           Authorization: `Bearer ${token}`,
@@ -247,6 +247,7 @@ export const arbiter = {
   async getSpaceMembers(
     did: string,
     spaceKey: string,
+    spaceType: string,
   ): Promise<{ member: Record<string, unknown>; access: Record<string, unknown> }[]> {
     const token = await this.getServiceAuth(did, 'town.muni.arbiter.getSpaceMembers');
 
@@ -254,7 +255,7 @@ export const arbiter = {
       PUBLIC_ARBITER_URL,
       town.muni.arbiter.getSpaceMembers,
       {
-        params: { arbiterDid: did as AtprotoDid, spaceKey },
+        params: { arbiterDid: did as AtprotoDid, spaceKey, spaceType: spaceType as any },
         headers: {
           'atproto-proxy': `${did}#arbiter`,
           Authorization: `Bearer ${token}`,
@@ -270,6 +271,7 @@ export const arbiter = {
   async resolveSpaceMembers(
     did: string,
     spaceKey: string,
+    spaceType: string,
   ): Promise<{ did: string; access: Record<string, unknown> }[]> {
     const token = await this.getServiceAuth(did, 'town.muni.arbiter.resolveSpaceMembers');
 
@@ -277,7 +279,7 @@ export const arbiter = {
       PUBLIC_ARBITER_URL,
       town.muni.arbiter.resolveSpaceMembers,
       {
-        params: { arbiterDid: did as AtprotoDid, spaceKey },
+        params: { arbiterDid: did as AtprotoDid, spaceKey, spaceType: spaceType as any },
         headers: {
           'atproto-proxy': `${did}#arbiter`,
           Authorization: `Bearer ${token}`,
@@ -293,6 +295,7 @@ export const arbiter = {
   async setSpaceMemberAccess(
     did: string,
     spaceKey: string,
+    spaceType: string,
     member: Record<string, unknown>,
     access: Record<string, unknown>,
   ): Promise<void> {
@@ -305,6 +308,7 @@ export const arbiter = {
         body: {
           arbiterDid: did as AtprotoDid,
           spaceKey,
+          spaceType: spaceType as any,
           member: member as any,
           access: access as any,
         },
@@ -322,6 +326,7 @@ export const arbiter = {
   async removeSpaceMember(
     did: string,
     spaceKey: string,
+    spaceType: string,
     member: Record<string, unknown>,
   ): Promise<void> {
     const token = await this.getServiceAuth(did, 'town.muni.arbiter.removeSpaceMember');
@@ -333,6 +338,7 @@ export const arbiter = {
         body: {
           arbiterDid: did as AtprotoDid,
           spaceKey,
+          spaceType: spaceType as any,
           member: member as any,
           access: {} as any,
         },

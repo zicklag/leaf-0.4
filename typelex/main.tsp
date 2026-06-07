@@ -319,6 +319,8 @@ namespace town.muni.arbiter.deleteSpace {
     @required input: {
       /** The DID of the arbiter to delete the space from. */
       @required arbiterDid: did,
+      /** The space type of the spc */
+      @required spaceType: nsid,
       /** The space key of the space to delete. */
       @required spaceKey: town.muni.arbiter.defs.SpaceKey,
       resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
@@ -341,8 +343,10 @@ namespace town.muni.arbiter.setSpaceConfig {
       @required arbiterDid: did,
       /** The key of the space to configure. */
       @required spaceKey: town.muni.arbiter.defs.SpaceKey,
-      /** The new type of the space. */
+      /** The type of the space to configure. */
       @required spaceType: nsid,
+      /** If provided sets a new type for the space. */
+      newSpaceType?: nsid,
       /** The new space configuration. */
       @required config: OpenUnion,
       resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
@@ -361,7 +365,9 @@ namespace town.muni.arbiter.getSpaceConfig {
   op main(
     /** The DID of the arbiter that the space is in. */
     @required arbiterDid: did,
-    /** The key of the space to configure. */
+    /** The type of the space. */
+    @required spaceType: nsid,
+    /** The key of the space. */
     @required spaceKey: town.muni.arbiter.defs.SpaceKey,
     resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
   ): {
@@ -397,7 +403,9 @@ namespace town.muni.arbiter.getSpaceMembers {
   op main(
     /** The DID of the arbiter that the space is in. */
     @required arbiterDid: did,
-    /** The key of the space to configure. */
+    /** The type of the space. */
+    @required spaceType: nsid,
+    /** The key of the space. */
     @required spaceKey: town.muni.arbiter.defs.SpaceKey,
     resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
   ): {
@@ -425,7 +433,9 @@ namespace town.muni.arbiter.setSpaceMemberAccess {
     @required input: {
       /** The DID of the arbiter that the space is in. */
       @required arbiterDid: did,
-      /** The key of the space to configure. */
+      /** The type of the space. */
+      @required spaceType: nsid,
+      /** The key of the space. */
       @required spaceKey: town.muni.arbiter.defs.SpaceKey,
       /** The member to set the access of. */
       @required member: town.muni.arbiter.defs.Member,
@@ -452,7 +462,9 @@ namespace town.muni.arbiter.removeSpaceMember {
     @required input: {
       /** The DID of the arbiter that the space is in. */
       @required arbiterDid: did,
-      /** The key of the space to configure. */
+      /** The type of the space. */
+      @required spaceType: nsid,
+      /** The key of the space. */
       @required spaceKey: town.muni.arbiter.defs.SpaceKey,
       /** The member to set the access of. */
       @required member: town.muni.arbiter.defs.Member,
@@ -499,7 +511,9 @@ namespace town.muni.arbiter.resolveSpaceMembers {
   op main(
     /** The DID of the arbiter that the space is in. */
     @required arbiterDid: did,
-    /** The key of the space to configure. */
+    /** The type of the space. */
+    @required spaceType: nsid,
+    /** The key of the space. */
     @required spaceKey: town.muni.arbiter.defs.SpaceKey,
     resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
   ): {

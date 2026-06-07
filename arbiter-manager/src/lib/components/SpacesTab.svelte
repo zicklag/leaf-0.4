@@ -46,7 +46,9 @@
   let addMemberLocalKey = $state('');
   let addMemberRemoteDid = $state('');
   let addMemberRemoteKey = $state('');
-  let addMemberAccessJson = $state('{}');
+  let addMemberAccessJson = $state(`{
+  "$type": "town.muni.arbiter.defs#yourType"
+}`);
   let addingMember = $state(false);
   let addMemberError = $state<string | null>(null);
 
@@ -128,7 +130,9 @@
     membersLoading = true;
     membersError = null;
     try {
-      members = await arbiter.getSpaceMembers(did, key);
+      const st = spaces.find((s) => s.spaceKey === key)?.spaceType;
+      if (!st) return;
+      members = await arbiter.getSpaceMembers(did, key, st);
     } catch (e) {
       membersError = arbiter.formatError(e);
     } finally {
@@ -181,7 +185,7 @@
     deleting = true;
     deleteError = null;
     try {
-      await arbiter.deleteSpace(did, selectedKey);
+      await arbiter.deleteSpace(did, selectedKey, selectedSpace?.spaceType ?? '');
       showDeleteConfirm = false;
       selectedKey = null;
       await loadSpaces();
@@ -249,7 +253,7 @@
       }
 
       if (selectedKey) {
-        await arbiter.setSpaceMemberAccess(did, selectedKey, member, access);
+        await arbiter.setSpaceMemberAccess(did, selectedKey, selectedSpace?.spaceType ?? '', member, access);
         showAddMember = false;
         resetAddMemberForm();
         loadMembers(selectedKey);
@@ -266,7 +270,9 @@
     addMemberLocalKey = '';
     addMemberRemoteDid = '';
     addMemberRemoteKey = '';
-    addMemberAccessJson = '{}';
+    addMemberAccessJson = `{
+  "$type": "town.muni.arbiter.defs#yourType"
+}`;
     addMemberError = null;
   }
 
@@ -287,7 +293,7 @@
     if (!removingMember || !selectedKey) return;
     removingMemberKey = true;
     try {
-      await arbiter.removeSpaceMember(did, selectedKey, removingMember);
+      await arbiter.removeSpaceMember(did, selectedKey, selectedSpace?.spaceType ?? '', removingMember);
       showRemoveMember = false;
       removingMember = null;
       loadMembers(selectedKey);
@@ -376,7 +382,7 @@
             <input
               id="space-type-input"
               bind:value={editingType}
-              class="text-xs px-2 py-1 rounded border border-base-200 dark:border-base-800 bg-base-50 dark:bg-base-950 text-base-700 dark:text-base-300 font-mono w-48"
+                class="text-xs px-2 py-1 rounded border border-base-200 dark:border-base-800 bg-base-50 dark:bg-base-950 text-base-700 dark:text-base-300 font-mono w-62"
               placeholder="town.muni.arbiter.defs#yourType"
             />
             <Button size="sm" onclick={saveSpaceConfig} disabled={configSaving}>
@@ -534,7 +540,9 @@
     {#if addMemberType === 'did'}
       <div class="flex flex-col gap-1">
         <span class="text-xs font-medium text-base-600 dark:text-base-400">DID</span>
+        <div class="relative z-[60]">
         <AtprotoHandlePopup onselected={onMemberProfileSelect} />
+        </div>
         {#if addMemberDid}
           <p class="text-xs text-base-400 font-mono">{addMemberDid}</p>
         {/if}
@@ -552,11 +560,13 @@
     {:else}
       <div class="flex flex-col gap-1">
         <span class="text-xs font-medium text-base-600 dark:text-base-400">Remote Arbiter DID</span>
+        <div class="relative z-[60]">
         <AtprotoHandlePopup
           onselected={(p) => {
             addMemberRemoteDid = p.did;
           }}
         />
+        </div>
         {#if addMemberRemoteDid}
           <p class="text-xs text-base-400 font-mono">{addMemberRemoteDid}</p>
         {/if}
@@ -575,7 +585,7 @@
     <!-- Access config -->
     <div class="flex flex-col gap-1">
       <span class="text-xs font-medium text-base-600 dark:text-base-400">Access Config (JSON)</span>
-      <div class="h-32">
+      <div class="h-32 relative z-0">
         <MonacoEditor bind:value={addMemberAccessJson} language="json" />
       </div>
     </div>

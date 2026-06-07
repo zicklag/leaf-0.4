@@ -15,6 +15,11 @@
               "format": "did",
               "description": "The DID of the arbiter to delete the space from."
             },
+            "spaceType": {
+              "type": "string",
+              "format": "nsid",
+              "description": "The space type of the spc"
+            },
             "spaceKey": {
               "type": "string",
               "maxLength": 1024,
@@ -27,6 +32,7 @@
           },
           "required": [
             "arbiterDid",
+            "spaceType",
             "spaceKey"
           ]
         }
