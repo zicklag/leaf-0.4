@@ -8,6 +8,7 @@
   import * as com from '$lib/lexicons/com';
   import { isAtprotoDid } from '@atproto/oauth-client-browser';
   import { xrpc } from '@atproto/lex';
+  import { defaultPolicyWithOwner } from '$lib/default-policy';
 
   let selectedAdmin: Profile | undefined = $state(undefined);
 
@@ -46,31 +47,7 @@
           replaceExisting: true,
           config: {
             $type: 'town.muni.arbiter.server.v1.config',
-            policy: `
-              package arbiter
-              import rego.v1
-              arbiter_xrpc_nsids := {
-               	"town.muni.arbiter.getArbiterConfig",
-               	"town.muni.arbiter.setArbiterConfig",
-               	"town.muni.arbiter.deleteArbiter",
-               	"town.muni.arbiter.createSpace",
-               	"town.muni.arbiter.getSpaceConfig",
-               	"town.muni.arbiter.setSpaceConfig",
-               	"town.muni.arbiter.deleteSpace",
-               	"town.muni.arbiter.listSpaces",
-               	"town.muni.arbiter.getSpaceMembers",
-               	"town.muni.arbiter.setSpaceMemberAccess",
-               	"town.muni.arbiter.removeSpaceMember",
-              }
-              response := {"status": 403, "body": {"error": "ErrPermissionDenied"}} if not allow
-              response := xrpc_local(input.operation.method, input.operation.nsid, input.operation.params) if {
-               	allow
-               	input.operation.nsid in arbiter_xrpc_nsids
-              }
-              default allow := false
-              allow if input.caller.did == data.arbiter.did
-              allow if input.caller.did == "${selectedAdmin.did}"
-          `,
+            policy: defaultPolicyWithOwner(selectedAdmin.did),
           } as any,
         },
         headers: {
