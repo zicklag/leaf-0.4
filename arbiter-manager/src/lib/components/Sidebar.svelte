@@ -1,16 +1,13 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { Button, Box } from '@foxui/core';
+  import { Button } from '@foxui/core';
   import { managedCommunities } from '$lib/store.svelte';
   import LookupArbiterSheet from './LookupArbiterSheet.svelte';
 
   let showLookup = $state(false);
-  let currentPage = $state(page);
 
-  page.subscribe((p) => (currentPage = p));
-
-  const currentDid = $derived(currentPage.params.did as string | undefined);
+  let currentDid = $derived(page.params.did as string | undefined);
 
   function select(did: string) {
     goto(`/dashboard/${encodeURIComponent(did)}`);

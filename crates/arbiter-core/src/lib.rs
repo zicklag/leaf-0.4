@@ -396,9 +396,9 @@ impl StateMachine {
             Err(e) => {
                 return vec![IoAction::SendXrpcResponse {
                     body: serde_json::json!({
-                    "$type": "town.muni.arbiter.server.v1.error",
-                    "error": format!("ErrPolicyCompile: {e}")
-                }),
+                        "$type": "town.muni.arbiter.server.v1.error",
+                        "error": format!("ErrPolicyCompile: {e}")
+                    }),
                     status: 500,
                 }];
             }
@@ -431,9 +431,9 @@ impl StateMachine {
             Err(e) => {
                 vec![IoAction::SendXrpcResponse {
                     body: serde_json::json!({
-                    "$type": "town.muni.arbiter.server.v1.error",
-                    "error": format!("{error_label}: {e}")
-                }),
+                        "$type": "town.muni.arbiter.server.v1.error",
+                        "error": format!("{error_label}: {e}")
+                    }),
                     status: 500,
                 }]
             }
@@ -452,13 +452,10 @@ impl StateMachine {
             .get("status")
             .and_then(|v| v.as_u64())
             .unwrap_or(500) as u16;
-        let body = response
-            .get("body")
-            .cloned()
-            .unwrap_or(serde_json::json!({
-                "$type": "town.muni.arbiter.server.v1.error",
-                "error": "ErrInvalidPolicyResponse: missing `body`"
-            }));
+        let body = response.get("body").cloned().unwrap_or(serde_json::json!({
+            "$type": "town.muni.arbiter.server.v1.error",
+            "error": "ErrInvalidPolicyResponse: missing `body`"
+        }));
 
         vec![IoAction::SendXrpcResponse { body, status }]
     }
@@ -553,7 +550,10 @@ impl StateMachine {
             // ── Queries ──────────────────────────────────────────────
             NSID::GET_ARBITER_CONFIG => XrpcResponse {
                 status: 200,
-                body: serde_json::json!({"config": &self.arbiter.config}),
+                body: serde_json::json!({
+                    "$type": "town.muni.arbiter.server.v1.config",
+                    "config": &self.arbiter.config
+                }),
             },
 
             NSID::GET_SPACE_CONFIG => {
@@ -580,7 +580,11 @@ impl StateMachine {
                     .map(|s| {
                         s.members
                             .iter()
-                            .map(|m| serde_json::json!({"did": m.did, "access": m.access}))
+                            .map(|m| {
+                                serde_json::json!({
+                                    "did": m.did, "access": m.access
+                                })
+                            })
                             .collect()
                     })
                     .unwrap_or_default();

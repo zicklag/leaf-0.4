@@ -1,11 +1,8 @@
 <script lang="ts">
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import ArbiterDashboard from '$lib/components/ArbiterDashboard.svelte';
 
-  let currentPage = $state(page);
-  page.subscribe((p) => (currentPage = p));
-
-  const did = $derived(currentPage.params.did as string);
+  const did = $derived(page.params.did as string);
 </script>
 
 <ArbiterDashboard {did} />

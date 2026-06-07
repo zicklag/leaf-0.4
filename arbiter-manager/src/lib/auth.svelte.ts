@@ -11,9 +11,27 @@ import { goto } from '$app/navigation';
 import { resetSetupState } from './setupState.svelte';
 
 const SESSION_DID_KEY = 'session-did';
-const atprotoOauthScope = ['atproto', 'identity:*', 'rpc:app.bsky.actor.getProfile?aud=*'].join(
-  ' ',
-);
+const atprotoOauthScope = [
+  'atproto',
+  'identity:*',
+  'rpc:app.bsky.actor.getProfile?aud=*',
+  'rpc:town.muni.arbiter.getArbiterConfig?aud=*',
+  'rpc:town.muni.arbiter.setArbiterConfig?aud=*',
+  'rpc:town.muni.arbiter.createArbiter?aud=*',
+  'rpc:town.muni.arbiter.createAppPasswordArbiter?aud=*',
+  'rpc:town.muni.arbiter.createDid?aud=*',
+  'rpc:town.muni.arbiter.deleteArbiter?aud=*',
+  'rpc:town.muni.arbiter.createSpace?aud=*',
+  'rpc:town.muni.arbiter.getSpaceConfig?aud=*',
+  'rpc:town.muni.arbiter.setSpaceConfig?aud=*',
+  'rpc:town.muni.arbiter.deleteSpace?aud=*',
+  'rpc:town.muni.arbiter.listSpaces?aud=*',
+  'rpc:town.muni.arbiter.getSpaceMembers?aud=*',
+  'rpc:town.muni.arbiter.setSpaceMemberAccess?aud=*',
+  'rpc:town.muni.arbiter.removeSpaceMember?aud=*',
+  'rpc:town.muni.arbiter.resolveSpaceMembers?aud=*',
+  'rpc:town.muni.arbiter.updateDidDoc?aud=*',
+].join(' ');
 
 export class Auth {
   oauth?: BrowserOAuthClient = $state(undefined);

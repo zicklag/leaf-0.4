@@ -10,7 +10,6 @@ use atproto_oauth::encoding::FromBase64;
 use atproto_oauth::jwt;
 use salvo::prelude::*;
 
-use crate::CONFIG;
 use crate::resolver::RESOLVER;
 
 pub struct CallerDid(String);
@@ -41,26 +40,25 @@ impl salvo::Handler for AuthMiddleware {
             .map(|s| s.to_string());
 
         let caller_did = match auth_header {
-            Some(token) => {
-                // First check for unsafe dev token
-                if let Some(ref unsafe_token) = CONFIG.unsafe_auth_token
-                    && token == *unsafe_token
-                {
-                    // Unsafe token matched — use the token value as the DID
-                    // (the client sets their DID as the token for dev purposes)
-                    token
-                } else {
-                    // Try JWT verification
-                    match verify_jwt(&token).await {
-                        Ok(did) => did,
-                        Err(e) => {
-                            tracing::warn!(%e, "JWT verification failed");
-                            String::new()
-                        }
-                    }
+            Some(token) => match verify_jwt(&token).await {
+                Ok(did) => did,
+                Err(e) => {
+                    res.status_code(StatusCode::FORBIDDEN)
+                        .render(Json(serde_json::json!({
+                            "error": "ErrAccessDenied",
+                            "message": format!("JWT verification failed: {e}")
+                        })));
+                    return;
                 }
+            },
+            None => {
+                res.status_code(StatusCode::FORBIDDEN)
+                    .render(Json(serde_json::json!({
+                        "error": "ErrAccessDenied",
+                        "message": format!("Missing authorization header"),
+                    })));
+                return;
             }
-            None => String::new(),
         };
 
         depot.inject(CallerDid(caller_did));

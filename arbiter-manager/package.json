@@ -14,6 +14,7 @@
     "@atproto/api": "^0.14.0",
     "@atproto/lex": "^0.1.3",
     "@atproto/oauth-client-browser": "^0.3.0",
+    "@foxui/all": "^0.7.5",
     "@foxui/core": "^0.9.1",
     "@tanstack/svelte-query": "^6.1.33",
     "arktype": "^2.2.0",

@@ -52,8 +52,8 @@ struct ServerConfig {
         default_value = "./data/arbiters"
     )]
     data_dir: std::path::PathBuf,
-    #[arg(long = "unsafe-auth-token", env = "UNSAFE_AUTH_TOKEN")]
-    unsafe_auth_token: Option<String>,
+    // #[arg(long = "unsafe-auth-token", env = "UNSAFE_AUTH_TOKEN")]
+    // unsafe_auth_token: Option<String>,
     #[arg(
         long = "persist-interval",
         env = "PERSIST_INTERVAL",
@@ -61,11 +61,11 @@ struct ServerConfig {
     )]
     persist_interval_secs: u64,
     #[arg(
-        long = "plc-directory-url",
-        env = "PLC_DIRECTORY_URL",
-        default_value = "http://localhost:3001"
+        long = "plc-hostname",
+        env = "PLC_HOSTNAME",
+        default_value = "plc.directory"
     )]
-    plc_directory_url: String,
+    plc_hostname: String,
 }
 
 pub struct ServerState {

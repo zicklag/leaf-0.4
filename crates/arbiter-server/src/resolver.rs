@@ -9,12 +9,12 @@ use crate::CONFIG;
 
 pub static RESOLVER: LazyLock<Arc<dyn IdentityResolver>> = LazyLock::new(|| {
     // Identity resolver
-    let resolver_client = reqwest::Client::new();
+    let resolver_client = reqwest::Client::builder().use_rustls_tls().build().unwrap();
     let dns_resolver = HickoryDnsResolver::create_resolver(&[]);
     let identity_resolver = SharedIdentityResolver(Arc::new(InnerIdentityResolver {
         dns_resolver: Arc::new(dns_resolver),
         http_client: resolver_client,
-        plc_hostname: CONFIG.plc_directory_url.clone(),
+        plc_hostname: CONFIG.plc_hostname.clone(),
     }));
     Arc::new(identity_resolver)
 });

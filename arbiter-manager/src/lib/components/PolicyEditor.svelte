@@ -2,90 +2,91 @@
   import { Box } from '@foxui/core';
   import { onMount } from 'svelte';
 
-  let { value, onChange }: { value: string; onChange?: (v: string) => void } = $props();
+  let { value = $bindable(), onChange }: { value?: string; onChange?: (v: string) => void } = $props();
 
   let containerEl: HTMLDivElement;
   let editor: any = null;
 
   // Rego syntax highlighting configuration for Monaco
   const regoLanguageConfig: any = {
-    defaultToken: '',
-    tokenPostfix: '.rego',
+    defaultToken: 'identifier',
     keywords: [
-      'package',
-      'import',
-      'as',
-      'data',
-      'input',
-      'with',
-      'default',
-      'true',
-      'false',
-      'null',
-      'some',
-      'in',
-      'not',
-      'and',
-      'or',
-      'all',
-      'any',
-      'if',
+      'default', 'not', 'package', 'import', 'as', 'with', 'else',
+      'some', 'in', 'every', 'if', 'contains',
     ],
-    typeKeywords: ['set', 'object', 'array', 'string', 'number', 'boolean'],
-    operators: ['=', '==', '!=', '<', '<=', '>', '>=', ':', ':=', '.', '+', '-', '*', '/', '%'],
-    symbols: /[=><!~?:&|+\-*/^%]+/,
-    escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/,
-    digits: /\d+/,
-    octaldigits: /[0-7]+/,
-    binarydigits: /[01]+/,
-    hexdigits: /[0-9a-fA-F]+/,
+    typeKeywords: ['true', 'false', 'null'],
+    operators: [
+      '=', '!=', '<', '>', '<=', '>=',
+      '+', '-', '*', '/', '%',
+      ':', ':=', '|', '&',
+      '&&', '||',
+    ],
+    builtins: [
+      'count', 'sum', 'max', 'min', 'product', 'any', 'all', 'sort', 'union', 'intersection',
+      'sprintf', 'concat', 'replace', 'split', 'trim', 'trim_left', 'trim_right',
+      'trim_prefix', 'trim_suffix', 'substring', 'contains', 'startswith', 'endswith',
+      'indexof', 'last_indexof', 'lower', 'upper', 'format_int', 'reverse',
+      're_match',
+      'object.get', 'object.keys', 'object.union', 'object.remove', 'object.filter',
+      'array.reverse', 'array.slice', 'array.concat',
+      'is_number', 'is_string', 'is_boolean', 'is_array', 'is_set', 'is_object', 'is_null', 'type_name',
+      'time.now_ns', 'time.parse_ns', 'time.parse_rfc3339_ns',
+      'time.clock', 'time.date', 'time.diff',
+      'opa.runtime', 'print', 'trace', 'walk', 'set',
+      'xrpc_local', 'xrpc_remote',
+    ],
     tokenizer: {
       root: [
-        [/package\s+/, { token: 'keyword' }],
-        [/import\s+/, { token: 'keyword' }],
-        [/(default)\s+/, { token: 'keyword' }],
-        [
-          /[a-z_$][\w$]*/,
-          {
-            cases: {
-              '@keywords': 'keyword',
-              '@typeKeywords': 'type',
-              '@default': 'identifier',
-            },
-          },
-        ],
         { include: '@whitespace' },
-        [/[{}()[\]]/, '@brackets'],
-        [/[<>](?!@symbols)/, '@brackets'],
-        [/@symbols/, { cases: { '@operators': 'operator', '@default': '' } }],
-        [/\d*\.\d+([eE][\-+]?\d+)?/, 'number.float'],
-        [/\d+/, 'number'],
-        [/[;,.]/, 'delimiter'],
-        [/"([^"\\]|\\.)*$/, 'string.invalid'],
-        [/"/, { token: 'string.quote', bracket: '@open', next: '@string' }],
-        [/'[^\\']'/, 'string'],
-        [/(')(@escapes)(')/, ['string', 'string.escape', 'string']],
-        [/'/, 'string.invalid'],
-      ],
-      comment: [
-        [/[^#]+/, 'comment'],
+        [/\d+(\.\d+)?([eE][+-]?\d+)?/, 'number'],
+        [/"/, { token: 'string.quote', next: '@stringDouble' }],
+        [/`/, { token: 'string.quote', next: '@stringBacktick' }],
         [/#.*$/, 'comment'],
+        [/[{}()\[\]]/, '@brackets'],
+        [/[;,]/, 'delimiter'],
+        [/[<>!=]=?/, 'delimiter'],
+        [/&&|\|\||[+\-*/%:]/, 'delimiter'],
+        [/[A-Z_][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*/, 'variable'],
+        [/[a-z][a-zA-Z0-9_$]*(?:\.[a-zA-Z_$][a-zA-Z0-9_$]*)*/, {
+          cases: {
+            '@keywords': 'keyword',
+            '@typeKeywords': 'type',
+            '@builtins': 'type.identifier',
+            '@default': 'identifier',
+          },
+        }],
       ],
-      string: [
-        [/[^\\"]+/, 'string'],
-        [/@escapes/, 'string.escape'],
-        [/\\./, 'string.escape.invalid'],
-        [/"/, { token: 'string.quote', bracket: '@close', next: '@pop' }],
+      whitespace: [[/[ \t\r\n]+/, 'white']],
+      stringDouble: [
+        [/[^"\\]+/, 'string'],
+        [/\\./, 'string.escape'],
+        [/"/, { token: 'string.quote', next: '@pop' }],
       ],
-      whitespace: [
-        [/[ \t\r\n]+/, ''],
-        [/#.*$/, 'comment'],
+      stringBacktick: [
+        [/[^`\\]+/, 'string'],
+        [/\\./, 'string.escape'],
+        [/`/, { token: 'string.quote', next: '@pop' }],
       ],
     },
   };
 
   onMount(async () => {
     const monaco = await import('monaco-editor');
+
+    // ── Worker setup ─────────────────────────────────────────────────────
+    const EditorWorker = (await import(
+      'monaco-editor/esm/vs/editor/editor.worker?worker'
+    )).default;
+    const JsonWorker = (await import(
+      'monaco-editor/esm/vs/language/json/json.worker?worker'
+    )).default;
+
+    (self as unknown as Record<string, unknown>).MonacoEnvironment = {
+      getWorker(_: unknown, label: string) {
+        if (label === 'json') return new JsonWorker();
+        return new EditorWorker();
+      },
+    };
 
     // Register Rego language
     monaco.languages.register({ id: 'rego' });
@@ -106,6 +107,34 @@
       ],
     });
 
+    // Register Rego completion provider
+    monaco.languages.registerCompletionItemProvider('rego', {
+      provideCompletionItems: (_model: any, _position: any) => {
+        const suggestions: any[] = [
+          ...['package', 'import', 'default', 'if', 'else', 'not', 'some', 'in',
+            'every', 'with', 'as', 'contains'].map((kw) => ({
+            label: kw,
+            kind: monaco.languages.CompletionItemKind.Keyword,
+            insertText: kw,
+            range: undefined as any,
+          })),
+          ...['count', 'sum', 'max', 'min', 'sprintf', 'concat', 'split',
+            'startswith', 'endswith', 'contains', 'lower', 'upper',
+            'object.get', 'object.keys', 'object.union',
+            'is_string', 'is_number', 'is_array', 'is_object',
+            'time.now_ns', 'time.clock', 'time.date', 'print', 'trace',
+            'walk', 'set', 'xrpc_local', 'xrpc_remote',
+          ].map((fn) => ({
+            label: fn,
+            kind: monaco.languages.CompletionItemKind.Function,
+            insertText: fn,
+            range: undefined as any,
+          })),
+        ];
+        return { suggestions };
+      },
+    });
+
     // Create editor
     editor = monaco.editor.create(containerEl, {
       value,
@@ -121,6 +150,8 @@
       padding: { top: 12, bottom: 12 },
       renderLineHighlight: 'line',
       folding: true,
+      renderWhitespace: 'selection',
+      bracketPairColorization: { enabled: true },
     });
 
     // Sync changes back
@@ -138,6 +169,6 @@
   });
 </script>
 
-<Box class="p-0 overflow-hidden border border-base-200 dark:border-base-800">
-  <div bind:this={containerEl} class="h-96"></div>
+<Box class="p-0 overflow-hidden border border-base-200 dark:border-base-800 h-full">
+  <div bind:this={containerEl} class="h-full"></div>
 </Box>

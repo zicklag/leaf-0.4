@@ -1,16 +1,18 @@
 <script lang="ts">
-  import { Sheet, Input, Button } from '@foxui/core';
+  import { Sheet, Button } from '@foxui/core';
+  import { AtprotoHandlePopup, type Profile } from '@foxui/all';
+  import { managedCommunities } from '$lib/store.svelte';
+  import { goto } from '$app/navigation';
 
-  let { open }: { open: boolean } = $props();
+  let { open = $bindable() }: { open: boolean } = $props();
 
-  let didInput = $state('');
-  let error = $state<string | null>(null);
   let loading = $state(false);
+  let error = $state<string | null>(null);
 
-  async function lookup() {
-    const value = didInput.trim();
-    if (!value) {
-      error = 'Please enter a DID or handle';
+  async function onSelect(profile: Profile) {
+    const did = profile.did;
+    if (!did || !did.startsWith('did:')) {
+      error = 'Invalid DID from profile';
       return;
     }
 
@@ -18,34 +20,8 @@
     error = null;
 
     try {
-      // Resolve handle → DID if needed
-      let did = value;
-      if (!value.startsWith('did:')) {
-        // Could be a handle — resolve it
-        const res = await fetch(`https://plc.directory/${value}`);
-        if (res.ok) {
-          const doc = await res.json();
-          did = doc.id || doc.did || value;
-        } else {
-          // Try as a handle via atproto handle resolution
-          const handleRes = await fetch(
-            `https://resolve.handle.net/.well-known/atproto-did?handle=${encodeURIComponent(value)}`,
-          );
-          if (handleRes.ok) {
-            did = await handleRes.text();
-          }
-        }
-      }
-
-      if (!did.startsWith('did:')) {
-        error = `Could not resolve "${value}" to a DID`;
-        return;
-      }
-
       // Add to managed communities
-      const { managedCommunities } = await import('$lib/store.svelte');
-      const { goto } = await import('$app/navigation');
-      managedCommunities.add(did, value);
+      managedCommunities.add(did, profile.handle ?? did);
       goto(`/dashboard/${encodeURIComponent(did)}`);
       open = false;
     } catch (e) {
@@ -59,18 +35,15 @@
 <Sheet
   bind:open
   title="Lookup Community"
-  description="Enter a DID or handle to start managing a community."
+  description="Search for an AT Protocol account to manage."
 >
   <div class="flex flex-col gap-4 py-2">
     <div class="flex flex-col gap-2">
-      <label for="did-input" class="text-sm font-medium text-base-700 dark:text-base-300">
-        DID or Handle
-      </label>
-      <Input
-        id="did-input"
-        bind:value={didInput}
-        placeholder="did:plc:abc123 or handle.example.com"
-      />
+      <p class="text-sm text-base-600 dark:text-base-400">
+        Type a handle to find the account. It must have an
+        <code class="font-mono text-xs">#arbiter</code> service to be managed here.
+      </p>
+      <AtprotoHandlePopup onselected={onSelect} />
       {#if error}
         <p class="text-sm text-red-500">{error}</p>
       {/if}
@@ -79,8 +52,5 @@
 
   {#snippet footer()}
     <Button variant="secondary" onclick={() => (open = false)}>Cancel</Button>
-    <Button onclick={lookup} disabled={loading}>
-      {loading ? 'Looking up…' : 'Lookup &amp; Add'}
-    </Button>
   {/snippet}
 </Sheet>
