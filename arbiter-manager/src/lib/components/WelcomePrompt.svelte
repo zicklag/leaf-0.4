@@ -3,15 +3,12 @@
   import { managedCommunities } from '$lib/store.svelte';
   import LookupArbiterSheet from './LookupArbiterSheet.svelte';
 
-  let communities: unknown[] = $state([]);
   let showLookup = $state(false);
-
-  managedCommunities.subscribe((v) => (communities = v));
 </script>
 
 <div class="flex items-center justify-center h-full p-8">
   <Box class="max-w-md w-full text-center space-y-4 p-8">
-    {#if communities && communities.length > 0}
+    {#if managedCommunities.communities && managedCommunities.communities.length > 0}
       <h2 class="text-xl font-semibold text-base-900 dark:text-base-50">Select a Community</h2>
       <p class="text-sm text-base-600 dark:text-base-400">
         Choose a community from the sidebar to view and manage its authorization settings.

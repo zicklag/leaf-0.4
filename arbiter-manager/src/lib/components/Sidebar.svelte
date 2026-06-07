@@ -2,14 +2,12 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { Button, Box } from '@foxui/core';
-  import { managedCommunities, removeManagedCommunity } from '$lib/store.svelte';
+  import { managedCommunities } from '$lib/store.svelte';
   import LookupArbiterSheet from './LookupArbiterSheet.svelte';
 
-  let communities = $state<typeof managedCommunities>();
   let showLookup = $state(false);
   let currentPage = $state(page);
 
-  managedCommunities.subscribe((v) => (communities = v));
   page.subscribe((p) => (currentPage = p));
 
   const currentDid = $derived(currentPage.params.did as string | undefined);
@@ -29,12 +27,12 @@
       Communities
     </h2>
 
-    {#if !communities || communities.length === 0}
+    {#if !managedCommunities.communities || managedCommunities.communities.length === 0}
       <p class="text-sm text-base-400 dark:text-base-500 px-2 py-4">
         No communities yet. Look one up or create a new one.
       </p>
     {:else}
-      {#each communities as community (community.did)}
+      {#each managedCommunities.communities as community (community.did)}
         <div
           role="button"
           tabindex="0"
@@ -60,7 +58,7 @@
             class="ml-1 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-base-300 dark:hover:bg-base-700 text-base-400 dark:text-base-500 hover:text-red-500 transition-all"
             onclick={(e) => {
               e.stopPropagation();
-              removeManagedCommunity(community.did);
+              managedCommunities.remove(community.did);
               if (currentDid === community.did) goto('/dashboard');
             }}
             aria-label="Remove {community.label}"

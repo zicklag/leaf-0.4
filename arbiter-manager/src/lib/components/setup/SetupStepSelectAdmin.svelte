@@ -34,6 +34,7 @@
         body: {
           arbiterDid: auth.did,
           appPassword: setupState.appPassword,
+          replaceExisting: true,
           config: {
             $type: 'town.muni.arbiter.server.v1.config',
             policy: `

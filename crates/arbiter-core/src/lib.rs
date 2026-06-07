@@ -150,7 +150,10 @@ impl XrpcResponse {
     pub fn error(status: u16, msg: impl Into<String>) -> Self {
         XrpcResponse {
             status,
-            body: serde_json::json!({"error": msg.into()}),
+            body: serde_json::json!({
+                "$type": "town.muni.arbiter.server.v1.error",
+                "error": msg.into()
+            }),
         }
     }
 
@@ -369,7 +372,10 @@ impl StateMachine {
     ) -> Vec<IoAction> {
         let Ok(policy) = validate_config(&self.arbiter.config) else {
             return vec![IoAction::SendXrpcResponse {
-                body: serde_json::json!({"error": "Arbiter policy invalid, cannot process request."}),
+                body: serde_json::json!({
+                    "$type": "town.muni.arbiter.server.v1.error",
+                    "error": "Arbiter policy invalid, cannot process request."
+                }),
                 status: 500,
             }];
         };
@@ -389,7 +395,10 @@ impl StateMachine {
             Ok(s) => s,
             Err(e) => {
                 return vec![IoAction::SendXrpcResponse {
-                    body: serde_json::json!({"error": format!("ErrPolicyCompile: {e}")}),
+                    body: serde_json::json!({
+                    "$type": "town.muni.arbiter.server.v1.error",
+                    "error": format!("ErrPolicyCompile: {e}")
+                }),
                     status: 500,
                 }];
             }
@@ -421,7 +430,10 @@ impl StateMachine {
             Ok(VmResult::Suspended(req)) => self.handle_vm_suspension(req, session, ctx),
             Err(e) => {
                 vec![IoAction::SendXrpcResponse {
-                    body: serde_json::json!({"error": format!("{error_label}: {e}")}),
+                    body: serde_json::json!({
+                    "$type": "town.muni.arbiter.server.v1.error",
+                    "error": format!("{error_label}: {e}")
+                }),
                     status: 500,
                 }]
             }
@@ -443,7 +455,10 @@ impl StateMachine {
         let body = response
             .get("body")
             .cloned()
-            .unwrap_or(serde_json::json!({"error": "ErrInvalidPolicyResponse: missing `body`"}));
+            .unwrap_or(serde_json::json!({
+                "$type": "town.muni.arbiter.server.v1.error",
+                "error": "ErrInvalidPolicyResponse: missing `body`"
+            }));
 
         vec![IoAction::SendXrpcResponse { body, status }]
     }

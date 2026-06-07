@@ -203,6 +203,13 @@ namespace town.muni.arbiter.createAppPasswordArbiter {
        */
       @required arbiterDid: did;
       /**
+       * If set to `true` this will replace an existing arbiter for the
+       * same DID without erroring, if one exists.
+       * 
+       * The old configuration WILL BE LOST.
+       */
+      replaceExisting?: boolean;
+      /**
        * The app password for the PDS account.
        */
       @required appPassword: string;

@@ -1,12 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Button } from '@foxui/core';
-  import { resetSetupState } from '$lib/setupState.svelte';
-  import { addManagedCommunity } from '$lib/store.svelte';
+  import { resetSetupState, setupState } from '$lib/setupState.svelte';
+  import { managedCommunities } from '$lib/store.svelte';
   import { goto } from '$app/navigation';
+  import { auth } from '$lib/auth.svelte';
 
   let oauthDid = $state('');
   let adminDid = $state('');
+
+  onMount(() => {
+    if (auth.did && auth.profile?.handle) {
+      managedCommunities.add(auth.did, auth.profile?.handle);
+    }
+  });
 
   function goToDashboard() {
     resetSetupState();

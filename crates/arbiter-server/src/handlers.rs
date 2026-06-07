@@ -36,13 +36,21 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 struct CreateAppPasswordArbiterInput {
     arbiter_did: String,
+    #[serde(default = "bool_false")]
+    replace_existing: bool,
     app_password: String,
     config: Value,
+}
+fn bool_false() -> bool {
+    false
 }
 
 /// Create a JSON error response from a message or error.
 fn err<M: std::fmt::Display>(msg: M) -> Value {
-    serde_json::json!({ "error": msg.to_string() })
+    serde_json::json!({
+        "$type": "town.muni.arbiter.server.v1.error",
+        "error": msg.to_string()
+    })
 }
 
 /// Extract the target arbiter DID from the `atproto-proxy` header.
@@ -95,7 +103,13 @@ async fn process_request(
         let actions = match coll.arbiters.get_mut(arbiter_did) {
             Some(sm) => sm.handle_event(event),
             None => {
-                return (404, serde_json::json!({"error": "ErrArbiterNotExists"}));
+                return (
+                    404,
+                    serde_json::json!({
+                        "$type": "town.muni.arbiter.server.v1.error",
+                        "error": "ErrArbiterNotExists"
+                    }),
+                );
             }
         };
 
@@ -135,7 +149,13 @@ async fn process_request(
         }
     }
 
-    (500, serde_json::json!({"error": "ErrNoResponse"}))
+    (
+        500,
+        serde_json::json!({
+            "$type": "town.muni.arbiter.server.v1.error",
+            "error": "ErrNoResponse"
+        }),
+    )
 }
 
 /// Single handler for all XRPC requests.
@@ -152,6 +172,7 @@ pub async fn handle_xrpc(req: &mut Request, depot: &mut Depot, res: &mut Respons
     if let Err(e) = handle(req, depot, res).await {
         res.status_code(StatusCode::BAD_REQUEST)
             .render(Json(serde_json::json!({
+                "$type": "town.muni.arbiter.server.v1.error",
                 "error": e.to_string()
             })));
     }
@@ -168,13 +189,16 @@ async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> any
 
     // Handle arbiter creation
     if nsid == NSID::CREATE_APP_PASSWORD_ARBITER && req.method() == salvo::http::Method::POST {
-        if coll.arbiters.contains_key(arbiter_did) {
+        let input = serde_json::from_value::<CreateAppPasswordArbiterInput>(xrpc_params)?;
+
+        if coll.arbiters.contains_key(arbiter_did) && !input.replace_existing {
+            res.status_code(StatusCode::CONFLICT);
             res.render(Json(err("ErrArbiterAlreadyExists")));
             return Ok(());
         }
 
-        let input = serde_json::from_value::<CreateAppPasswordArbiterInput>(xrpc_params)?;
         if input.arbiter_did != arbiter_did {
+            res.status_code(StatusCode::BAD_REQUEST);
             res.render(Json(err(format!(
                 "Arbiter ( {arbiter_did} ) from \
                 atproto-proxy did not match arbiter ( {} ) from XRPC req.",
@@ -211,6 +235,7 @@ async fn handle(req: &mut Request, depot: &mut Depot, res: &mut Response) -> any
     };
 
     if !coll.arbiters.contains_key(arbiter_did) {
+        res.status_code(StatusCode::NOT_FOUND);
         res.render(Json(err("ErrArbiterNotExists")));
         return Ok(());
     }

@@ -1,53 +1,63 @@
-import { writable } from 'svelte/store';
-import { browser } from '$app/environment';
+/**
+ * Managed communities (localStorage persisted list of DIDs).
+ *
+ * Uses Svelte 5 runes ($state, $effect) for reactivity and
+ * arktype for runtime type validation.
+ *
+ * Pattern: class with $state fields + singleton instance (see auth.svelte.ts).
+ */
 
-// Re-export auth helpers so components can import from a single module
+import { type } from 'arktype';
 
-const MANAGED_DIDS_KEY = 'arbiter-manager-communities';
+export const STORAGE_KEY = 'arbiter-manager-communities';
 
 type Did = string;
 
-type ManagedCommunity = {
-  did: Did;
-  label: string;
-};
+const managedCommunityTy = type({
+  did: 'string',
+  label: 'string',
+  addedAt: 'number',
+});
+export type ManagedCommunity = typeof managedCommunityTy.infer;
 
-// ---------------------------------------------------------------------------
-// Managed communities (localStorage persisted list of DIDs)
-// ---------------------------------------------------------------------------
+export class ManagedCommunities {
+  communities: ManagedCommunity[] = $state([]);
 
-function loadManagedCommunities(): ManagedCommunity[] {
-  try {
-    const raw = localStorage.getItem(MANAGED_DIDS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
+  constructor() {
+    this.communities = this.#load();
+  }
+
+  #load(): ManagedCommunity[] {
+    try {
+      const raw = globalThis.localStorage.getItem(STORAGE_KEY);
+      const parsed = JSON.parse(raw || '[]');
+      const result = managedCommunityTy.array()(parsed);
+      return result instanceof type.errors ? [] : result;
+    } catch {
+      return [];
+    }
+  }
+
+  add(did: Did, label: string) {
+    // Don't add duplicates
+    if (this.communities.some((c) => c.did === did)) return;
+    this.communities.push({ did, label, addedAt: Date.now() });
+  }
+
+  remove(did: Did) {
+    const index = this.communities.findIndex((c) => c.did === did);
+    if (index !== -1) this.communities.splice(index, 1);
   }
 }
 
-function saveManagedCommunities(list: ManagedCommunity[]) {
-  localStorage.setItem(MANAGED_DIDS_KEY, JSON.stringify(list));
-}
+export const managedCommunities = new ManagedCommunities();
 
-export const managedCommunities = writable<ManagedCommunity[]>(loadManagedCommunities());
-
-export function addManagedCommunity(did: Did, label: string) {
-  managedCommunities.update((list) => {
-    // Don't add duplicates
-    if (list.some((c) => c.did === did)) return list;
-    const updated = [...list, { did, label, addedAt: Date.now() }];
-    saveManagedCommunities(updated);
-    return updated;
+// Auto-persist on every change
+$effect.root(() => {
+  $effect(() => {
+    globalThis.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify($state.snapshot(managedCommunities.communities)),
+    );
   });
-}
-
-export function removeManagedCommunity(did: Did) {
-  managedCommunities.update((list) => {
-    const updated = list.filter((c) => c.did !== did);
-    saveManagedCommunities(updated);
-    return updated;
-  });
-}
-
-// For better ergonomics we'll expose query/mutation functions directly
-// that components can use with TanStack Query's createQuery / createMutation
+});
