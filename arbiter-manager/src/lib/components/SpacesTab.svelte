@@ -372,7 +372,7 @@
         <div class="flex items-center justify-between mb-2">
           <h3 class="text-sm font-semibold text-base-700 dark:text-base-300 uppercase tracking-wider">Config</h3>
           <div class="flex items-center gap-2">
-            <label class="text-xs text-base-400" for="space-type-input">Type (NSID):</label>
+            <label class="text-xs text-base-400" for="space-type-input">Space Type:</label>
             <input
               id="space-type-input"
               bind:value={editingType}
@@ -455,7 +455,7 @@
     </div>
 
     <div class="flex flex-col gap-1">
-      <label class="text-xs font-medium text-base-600 dark:text-base-400" for="create-type">Space Type (NSID)</label>
+      <label class="text-xs font-medium text-base-600 dark:text-base-400" for="create-type">Space Type</label>
       <input
         id="create-type"
         bind:value={createType}
