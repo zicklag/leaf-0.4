@@ -118,13 +118,15 @@
     {/if}
 
     {#if noArbiterService}
-      <Box class="p-4 border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
+      <Box
+        class="p-4 border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 rounded-lg"
+      >
         <p class="text-sm font-medium text-amber-800 dark:text-amber-300">
           No arbiter service found
         </p>
         <p class="text-xs text-amber-700 dark:text-amber-400 mt-1">
-          This account does not have an <code class="font-mono">#arbiter</code> service endpoint on
-          its DID document. Only accounts with a Muni Town arbiter can be managed here.
+          This account does not have an <code class="font-mono">#arbiter</code> service endpoint on its
+          DID document. Only accounts with a Muni Town arbiter can be managed here.
         </p>
       </Box>
     {/if}
@@ -132,7 +134,9 @@
     {#if loading}
       <Box class="animate-pulse h-48" />
     {:else if error}
-      <Box class="p-4 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 rounded-lg">
+      <Box
+        class="p-4 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 rounded-lg"
+      >
         <p class="text-sm font-medium text-red-800 dark:text-red-300">Failed to load policy</p>
         <p class="text-xs text-red-700 dark:text-red-400 mt-1">{error}</p>
         <div class="mt-3">
@@ -156,7 +160,7 @@
       </div>
 
       <div class="h-125">
-        <PolicyEditor bind:value={policy} />
+        <PolicyEditor value={policy} onChange={(v) => policy = v} />
       </div>
 
       {#if saveError}

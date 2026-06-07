@@ -86,7 +86,7 @@ export const arbiter = {
         },
       },
     );
-    return res.body as Record<string, unknown>;
+    return res.body.config as Record<string, unknown>;
   },
 
   /**

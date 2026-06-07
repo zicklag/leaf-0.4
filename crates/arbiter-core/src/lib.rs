@@ -661,7 +661,9 @@ impl StateMachine {
                 self.arbiter.version += 1;
                 XrpcResponse {
                     status: 200,
-                    body: serde_json::json!({}),
+                    body: serde_json::json!({
+                        "$type": "town.muni.arbiter.server.v1.ok"
+                    }),
                 }
             }
 

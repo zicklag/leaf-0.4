@@ -274,7 +274,9 @@ namespace town.muni.arbiter.getArbiterConfig {
     /** The DID of the arbiter to fetch the config from */
     @required arbiterDid: did;
     resolverDepth?: town.muni.arbiter.defs.ResolverDepth,
-  ): OpenUnion;
+  ): {
+    @required config: OpenUnion
+  };
 }
 
 namespace town.muni.arbiter.createSpace {

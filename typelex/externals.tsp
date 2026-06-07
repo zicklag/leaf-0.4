@@ -236,6 +236,10 @@ namespace com.atproto.repo.strongRef {
 }
 
 @external
+namespace com.atproto.server.getServiceAuth {
+}
+
+@external
 namespace tools.ozone.report.defs {
   @token model ReasonAppeal { }
   @token model ReasonChildSafetyCSAM { }

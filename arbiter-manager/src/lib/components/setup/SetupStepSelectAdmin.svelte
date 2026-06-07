@@ -5,6 +5,7 @@
   import { PUBLIC_ARBITER_URL } from '$env/static/public';
   import { auth } from '$lib/auth.svelte';
   import * as town from '$lib/lexicons/town';
+  import * as com from '$lib/lexicons/com';
   import { isAtprotoDid } from '@atproto/oauth-client-browser';
   import { xrpc } from '@atproto/lex';
 
@@ -28,6 +29,14 @@
       if (!selectedAdmin.did) throw new Error('You must select an admin.');
       if (!isAtprotoDid(auth.did)) throw new Error('Not logged in with valid DID');
       if (!setupState.appPassword) throw new Error('Must provide AppPassword');
+      let token = (
+        await auth.client.xrpc(com.atproto.server.getServiceAuth, {
+          params: {
+            aud: auth.did,
+            lxm: 'town.muni.arbiter.createAppPasswordArbiter',
+          },
+        })
+      ).body.token;
 
       // Create the new arbiter!
       await xrpc(PUBLIC_ARBITER_URL, town.muni.arbiter.createAppPasswordArbiter, {
@@ -66,6 +75,7 @@
         },
         headers: {
           'atproto-proxy': `${auth.did}#arbiter`,
+          authorization: `Bearer ${token}`,
         },
       });
 
