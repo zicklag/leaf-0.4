@@ -1,16 +1,11 @@
 <script lang="ts">
   import { Button, Box } from '@foxui/core';
-  import { AtprotoHandlePopup, type Profile } from '@foxui/all';
-  import { managedCommunities } from '$lib/store.svelte';
-  import { goto } from '$app/navigation';
   import PolicyEditor from './PolicyEditor.svelte';
   import { arbiter } from '$lib/arbiter';
 
   let { arbiterDid }: { arbiterDid?: string } = $props();
 
   // ── State ───────────────────────────────────────────────────────────────
-  let selectedProfile = $state<Profile | undefined>();
-
   let policy = $state('');
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -84,29 +79,10 @@
       saving = false;
     }
   }
-
-  // ── Handle profile selection from the popup ─────────────────────────────
-  function onSelect(profile: Profile) {
-    selectedProfile = profile;
-    const did = profile.did;
-    if (!did || !did.startsWith('did:')) return;
-
-    // Add to managed communities
-    managedCommunities.add(did, profile.handle ?? did);
-    goto(`/dashboard/${encodeURIComponent(did)}`);
-  }
 </script>
 
 <div class="flex-1 overflow-auto">
-  <div class="p-4 space-y-4">
-    <!-- Community selector -->
-    <div class="flex flex-col gap-1.5">
-      <h3 class="text-sm font-semibold text-base-700 dark:text-base-300 uppercase tracking-wider">
-        Community
-      </h3>
-      <AtprotoHandlePopup onselected={onSelect} />
-    </div>
-
+  <div class="p-4 space-y-4 h-full flex flex-col">
     <!-- Loading / error states -->
     {#if checkingService}
       <Box class="flex items-center gap-3 p-4 text-sm text-base-500">
@@ -159,7 +135,7 @@
         </div>
       </div>
 
-      <div class="h-125">
+      <div class="basis-full">
         <PolicyEditor value={policy} onChange={(v) => policy = v} />
       </div>
 

@@ -21,7 +21,7 @@
     <h2
       class="text-xs font-semibold uppercase tracking-wider text-base-500 dark:text-base-500 px-2 py-1"
     >
-      Communities
+      Accounts
     </h2>
 
     {#if !managedCommunities.communities || managedCommunities.communities.length === 0}
