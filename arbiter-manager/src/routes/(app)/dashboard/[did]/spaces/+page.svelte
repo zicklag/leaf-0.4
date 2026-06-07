@@ -1,8 +1,8 @@
 <script lang="ts">
   import { page } from '$app/state';
-  import PolicyTab from '$lib/components/PolicyTab.svelte';
+  import SpacesTab from '$lib/components/SpacesTab.svelte';
 
   const did = $derived(page.params.did as string);
 </script>
 
-<PolicyTab arbiterDid={did} />
+<SpacesTab {did} />

@@ -11,7 +11,7 @@
     {#if managedCommunities.communities && managedCommunities.communities.length > 0}
       <h2 class="text-xl font-semibold text-base-900 dark:text-base-50">Select a Community</h2>
       <p class="text-sm text-base-600 dark:text-base-400">
-        Choose a community from the sidebar to view and manage its authorization settings.
+        Use the community selector at the top to search for and manage a community's authorization settings.
       </p>
     {:else}
       <h2 class="text-xl font-semibold text-base-900 dark:text-base-50">Get Started</h2>

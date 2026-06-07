@@ -7,7 +7,7 @@
 
   let {
     did: currentDid,
-  }: { did: string } = $props();
+  }: { did?: string } = $props();
 
   let communityProfile = $state<Profile | undefined>();
   let searchValue = $state('');
@@ -15,9 +15,11 @@
   // ── Resolve current DID to a profile ──────────────────────────────────
   $effect(() => {
     if (currentDid) resolveProfile();
+    else communityProfile = undefined;
   });
 
   async function resolveProfile() {
+    if (!currentDid) return;
     try {
       if (auth.client) {
         const resp = await auth.client.xrpc(app.bsky.actor.getProfile, {
@@ -53,7 +55,7 @@
 </script>
 
 <div class="flex items-center gap-2 w-full">
-  {#if communityProfile}
+  {#if currentDid && communityProfile}
     {#if communityProfile.avatar}
       <img
         src={communityProfile.avatar}

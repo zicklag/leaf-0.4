@@ -81,7 +81,7 @@
   }
 </script>
 
-<div class="flex-1 overflow-auto">
+<div class="flex-1 overflow-auto h-full">
   <div class="p-4 space-y-4 h-full flex flex-col">
     <!-- Loading / error states -->
     {#if checkingService}
