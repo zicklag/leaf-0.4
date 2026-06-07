@@ -13,6 +13,8 @@
   const recentAccounts = $derived(managedCommunities.communities);
   let showRecent = $state(false);
 
+  let refreshKey = $state(0);
+
   $effect(() => {
     if (!auth.session) {
       goto('/', { replaceState: true });
@@ -94,10 +96,32 @@
       </div>
 
       <CommunitySelector {did} />
+
+      <div class="ml-auto">
+        <button
+          class="flex items-center gap-1 text-xs text-base-500 hover:text-base-700 dark:hover:text-base-300 transition-colors px-2 py-1 rounded hover:bg-base-200 dark:hover:bg-base-800"
+          onclick={() => refreshKey++}
+          title="Refresh data"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path d="M1 4v6h6" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <main class="flex-1 overflow-hidden h-full">
-      {@render children()}
+      {#key refreshKey}
+        {@render children()}
+      {/key}
     </main>
   </div>
 {/if}

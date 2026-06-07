@@ -47,21 +47,21 @@
   });
 </script>
 
-<div class="flex flex-col h-full min-w-0 px-3">
+<div class="flex flex-col h-full min-w-0">
   {#if checking}
-    <Box class="flex items-center gap-3 p-4 m-4 text-sm text-base-500">
+    <Box class="flex items-center gap-3 p-4 mx-4 mt-4 text-sm text-base-500">
       <div
         class="animate-spin w-4 h-4 border-2 border-accent-500 border-t-transparent rounded-full"
       ></div>
       Checking arbiter service…
     </Box>
   {:else if checkError}
-    <Box class="m-4 p-4 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 rounded-lg">
+    <Box class="mx-4 mt-4 p-4 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 rounded-lg">
       <p class="text-sm font-medium text-red-800 dark:text-red-300">Failed to check arbiter service</p>
       <p class="text-xs text-red-700 dark:text-red-400 mt-1">{checkError}</p>
     </Box>
   {:else if !hasArbiter}
-    <Box class="mt-8  border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
+    <Box class="mx-4 mt-4 p-4 border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 rounded-lg">
       <p class="text-sm font-medium text-amber-800 dark:text-amber-300">
         No arbiter service found
       </p>
