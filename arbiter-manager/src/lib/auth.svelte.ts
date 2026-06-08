@@ -14,6 +14,7 @@ const SESSION_DID_KEY = 'session-did';
 const atprotoOauthScope = [
   'atproto',
   'identity:*',
+  "rpc:rpc:com.atproto.repo.putRecord?aud=*",
   'rpc:app.bsky.actor.getProfile?aud=*',
   'rpc:town.muni.arbiter.getArbiterConfig?aud=*',
   'rpc:town.muni.arbiter.setArbiterConfig?aud=*',

@@ -2,6 +2,7 @@
   import { Button, Box } from '@foxui/core';
   import PolicyEditor from './PolicyEditor.svelte';
   import { arbiter } from '$lib/arbiter';
+  import { ensureWasm, checkPolicy } from '$lib/wasm';
 
   let { arbiterDid }: { arbiterDid?: string } = $props();
 
@@ -13,6 +14,14 @@
   let saving = $state(false);
   let saveError = $state<string | null>(null);
   let saveSuccess = $state(false);
+
+  let validationError = $state<string | null>(null);
+  let wasmReady = $state(false);
+
+  // ── Initialise WASM on mount ────────────────────────────────────────────
+  $effect(() => {
+    ensureWasm().then(() => { wasmReady = true; });
+  });
 
   // ── Load policy when arbiterDid changes ─────────────────────────────────
   $effect(() => {
@@ -45,6 +54,16 @@
 
   async function savePolicy() {
     if (!arbiterDid) return;
+
+    // Validate policy locally before sending
+    validationError = null;
+    if (wasmReady) {
+      const err = checkPolicy(policy);
+      if (err) {
+        validationError = err;
+        return;
+      }
+    }
 
     saving = true;
     saveError = null;
@@ -84,6 +103,9 @@
           {#if saveSuccess}
             <span class="text-xs text-emerald-600 dark:text-emerald-400">Saved</span>
           {/if}
+          {#if validationError}
+            <span class="text-xs text-red-500">Policy has errors</span>
+          {/if}
           <Button size="sm" onclick={savePolicy} disabled={saving}>
             {saving ? 'Saving…' : 'Save Policy'}
           </Button>
@@ -96,6 +118,12 @@
 
       {#if saveError}
         <Box class="text-sm text-red-500 p-3">{saveError}</Box>
+      {/if}
+      {#if validationError}
+        <Box class="p-3 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 rounded-lg">
+          <p class="text-xs font-semibold text-red-700 dark:text-red-300 mb-1">Policy validation failed</p>
+          <pre class="text-xs text-red-600 dark:text-red-400 font-mono whitespace-pre-wrap">{validationError}</pre>
+        </Box>
       {/if}
     {:else if !arbiterDid}
       <Box class="p-6 text-center text-sm text-base-500 dark:text-base-500">
