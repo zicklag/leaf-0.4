@@ -342,7 +342,8 @@ impl StateMachine {
     // -------------------------------------------------------------------
 
     pub fn handle_event(&mut self, event: Event) -> Vec<IoAction> {
-        match event {
+        dbg!(&event);
+        let out = match event {
             Event::IncomingXrpc {
                 nsid,
                 method,
@@ -354,7 +355,8 @@ impl StateMachine {
                 status,
                 job_id,
             } => self.resume_pending_eval(job_id, status, body),
-        }
+        };
+        dbg!(out)
     }
 
     // -------------------------------------------------------------------
@@ -452,10 +454,12 @@ impl StateMachine {
             .get("status")
             .and_then(|v| v.as_u64())
             .unwrap_or(500) as u16;
-        let body = response.get("body").cloned().unwrap_or(serde_json::json!({
-            "$type": "town.muni.arbiter.server.v1.error",
-            "error": "ErrInvalidPolicyResponse: missing `body`"
-        }));
+        let body = response.get("body").cloned().unwrap_or_else(|| {
+            serde_json::json!({
+                "$type": "town.muni.arbiter.server.v1.error",
+                "error": "ErrInvalidPolicyResponse: missing `body`"
+            })
+        });
 
         vec![IoAction::SendXrpcResponse { body, status }]
     }

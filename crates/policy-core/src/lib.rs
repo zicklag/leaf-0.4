@@ -577,7 +577,9 @@ mod tests {
         };
 
         match &request {
-            HostRequest::XrpcRemote { did, nsid: path, .. } => {
+            HostRequest::XrpcRemote {
+                did, nsid: path, ..
+            } => {
                 assert_eq!(did, "did:plc:remote");
                 assert_eq!(path, "remote.query");
             }

@@ -165,8 +165,8 @@
 
     // Sync changes back
     editor.onDidChangeModelContent(() => {
-      const v = editor.getValue();
-      onChange?.(v);
+      value = editor.getValue();
+      onChange?.(value);
     });
   });
 

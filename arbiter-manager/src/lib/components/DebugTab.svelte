@@ -1,14 +1,16 @@
 <script lang="ts">
   import { Button, Box } from '@foxui/core';
   import MonacoEditor from './MonacoEditor.svelte';
+  import { TID } from '@atproto/common-web';
   import { arbiter } from '$lib/arbiter';
 
   let { did }: { did: string } = $props();
 
-  // ── State ──────────────────────────────────────────────────────────────
-  let collection = $state('');
-  let rkey = $state('');
-  let recordJson = $state('{\n  "$type": "app.bsky.feed.post",\n  "text": "Hello from arbiter debug!",\n  "createdAt": ""\n}');
+  let collection = $state('app.bsky.feed.post');
+  let rkey = $state(TID.next().str);
+  let recordJson = $state(
+    `{\n  "$type": "app.bsky.feed.post",\n  "text": "Hello from arbiter debug!",\n  "createdAt":"${new Date().toISOString()}"\n}`,
+  );
 
   let sending = $state(false);
   let result = $state<string | null>(null);
@@ -29,12 +31,7 @@
       }
 
       // Use current DID as repo if none provided
-      const res = await arbiter.putRecord(
-        did,
-        collection.trim(),
-        record,
-        rkey.trim() || undefined,
-      );
+      const res = await arbiter.putRecord(did, collection.trim(), record, rkey.trim() || undefined);
       result = JSON.stringify(res, null, 2);
     } catch (e) {
       error = arbiter.formatError(e);
@@ -50,15 +47,17 @@
       Debug: putRecord
     </h3>
     <p class="text-xs text-base-500">
-      Create a record on the arbiter's PDS via <code class="font-mono">com.atproto.repo.putRecord</code>,
-      proxied through the arbiter service.
+      Create a record on the arbiter's PDS via <code class="font-mono"
+        >com.atproto.repo.putRecord</code
+      >, proxied through the arbiter service.
     </p>
 
     <div class="flex flex-col gap-3">
-
       <div class="flex items-center gap-3">
         <div class="flex-1 flex flex-col gap-1">
-          <label class="text-xs font-medium text-base-600 dark:text-base-400" for="debug-collection">Collection (NSID)</label>
+          <label class="text-xs font-medium text-base-600 dark:text-base-400" for="debug-collection"
+            >Collection (NSID)</label
+          >
           <input
             id="debug-collection"
             bind:value={collection}
@@ -67,7 +66,9 @@
           />
         </div>
         <div class="flex-1 flex flex-col gap-1">
-          <label class="text-xs font-medium text-base-600 dark:text-base-400" for="debug-rkey">Record Key (optional)</label>
+          <label class="text-xs font-medium text-base-600 dark:text-base-400" for="debug-rkey"
+            >Record Key (optional)</label
+          >
           <input
             id="debug-rkey"
             bind:value={rkey}
@@ -91,16 +92,22 @@
       </div>
 
       {#if result}
-        <Box class="p-3 border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg">
+        <Box
+          class="p-3 border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg"
+        >
           <p class="text-xs font-semibold text-emerald-700 dark:text-emerald-300 mb-1">Success</p>
-          <pre class="text-xs text-emerald-600 dark:text-emerald-400 font-mono whitespace-pre-wrap">{result}</pre>
+          <pre
+            class="text-xs text-emerald-600 dark:text-emerald-400 font-mono whitespace-pre-wrap">{result}</pre>
         </Box>
       {/if}
 
       {#if error}
-        <Box class="p-3 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 rounded-lg">
+        <Box
+          class="p-3 border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 rounded-lg"
+        >
           <p class="text-xs font-semibold text-red-700 dark:text-red-300 mb-1">Error</p>
-          <pre class="text-xs text-red-600 dark:text-red-400 font-mono whitespace-pre-wrap">{error}</pre>
+          <pre
+            class="text-xs text-red-600 dark:text-red-400 font-mono whitespace-pre-wrap">{error}</pre>
         </Box>
       {/if}
     </div>

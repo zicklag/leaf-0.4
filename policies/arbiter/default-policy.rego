@@ -31,6 +31,9 @@ arbiter_xrpc_nsids := {
 	"town.muni.arbiter.removeSpaceMember",
 }
 
+# Default to 404
+default response := {"status": 404, "body": {"error": "XRPC endpoint not supported"}}
+
 # When a request is not allowed, the response is a permission denied error
 response := {"status": 403, "body": {"error": "ErrPermissionDenied"}} if not allow
 
@@ -39,6 +42,13 @@ response := xrpc_local(input.operation.method, input.operation.nsid, input.opera
 	allow
 	input.operation.nsid in arbiter_xrpc_nsids
 }
+# When a remote request is allowed, send it to the backend PDS
+else := xrpc_remote(
+	concat("#", [data.arbiter.did, "atproto_pds"]),
+	input.operation.method,
+	input.operation.nsid,
+	input.operation.params,
+) if allow
 
 # By default we do not allow a request
 default allow := false
