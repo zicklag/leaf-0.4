@@ -6,6 +6,7 @@
     "com.atproto.identity.requestPlcOperationSignature",
     "com.atproto.identity.signPlcOperation",
     "com.atproto.identity.submitPlcOperation",
+    "com.atproto.repo.putRecord",
     "com.atproto.server.getServiceAuth"
   ],
   "resolutions": {
@@ -96,6 +97,14 @@
     "com.atproto.moderation.defs": {
       "uri": "at://did:plc:6msi3pj7krzih5qxqtryxlzw/com.atproto.lexicon.schema/com.atproto.moderation.defs",
       "cid": "bafyreideawy4rlpgces2oebk5q4kpurbonhb5qtl4pes7dvxsc5osaiksy"
+    },
+    "com.atproto.repo.defs": {
+      "uri": "at://did:plc:6msi3pj7krzih5qxqtryxlzw/com.atproto.lexicon.schema/com.atproto.repo.defs",
+      "cid": "bafyreigmp5xfpkhnmwr3l5o626ued2gc2ouioykj2tpgqjqqajvbvm3wlm"
+    },
+    "com.atproto.repo.putRecord": {
+      "uri": "at://did:plc:6msi3pj7krzih5qxqtryxlzw/com.atproto.lexicon.schema/com.atproto.repo.putRecord",
+      "cid": "bafyreigevzo2cypxpaj5re2u35so36df4rkgx6oh4zpi4zwicfvzqfdqpa"
     },
     "com.atproto.repo.strongRef": {
       "uri": "at://did:plc:6msi3pj7krzih5qxqtryxlzw/com.atproto.lexicon.schema/com.atproto.repo.strongRef",

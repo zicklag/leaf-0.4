@@ -351,6 +351,39 @@ export const arbiter = {
   },
 
   /**
+   * Post a record to the arbiter's PDS via putRecord.
+   * The request is proxied through the arbiter service so the record
+   * ends up in the arbiter's associated PDS.
+   */
+  async putRecord(
+    did: string,
+    collection: string,
+    record: Record<string, unknown>,
+    rkey?: string,
+  ): Promise<{ uri: string; cid: string }> {
+    const token = await this.getServiceAuth(did, 'com.atproto.repo.putRecord');
+
+    const res = await xrpc(
+      PUBLIC_ARBITER_URL,
+      com.atproto.repo.putRecord,
+      {
+        body: {
+          repo: did as any,
+          collection: collection as any,
+          rkey: (rkey || undefined) as any,
+          record: record as any,
+          validate: true,
+        } as any,
+        headers: {
+          'atproto-proxy': `${did}#arbiter`,
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    );
+    return res.body as { uri: string; cid: string };
+  },
+
+  /**
    * Extract a user-friendly message from an XRPC error.
    */
   formatError(err: unknown): string {

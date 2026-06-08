@@ -31,6 +31,7 @@ const atprotoOauthScope = [
   'rpc:town.muni.arbiter.removeSpaceMember?aud=*',
   'rpc:town.muni.arbiter.resolveSpaceMembers?aud=*',
   'rpc:town.muni.arbiter.updateDidDoc?aud=*',
+  'rpc:com.atproto.repo.putRecord?aud=*',
 ].join(' ');
 
 export class Auth {

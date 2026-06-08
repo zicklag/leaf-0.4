@@ -43,6 +43,7 @@
     const path = page.url.pathname;
     if (path.endsWith('/spaces')) return 'Spaces';
     if (path.endsWith('/policy')) return 'Policy';
+    if (path.endsWith('/debug')) return 'Debug';
     return 'Spaces';
   });
 </script>
@@ -76,6 +77,7 @@
       items={[
         { name: 'Spaces', href: `/dashboard/${encodeURIComponent(did)}/spaces` },
         { name: 'Policy', href: `/dashboard/${encodeURIComponent(did)}/policy` },
+        { name: 'Debug', href: `/dashboard/${encodeURIComponent(did)}/debug` },
       ]}
       active={activeTab}
       class="px-4 pt-0"
